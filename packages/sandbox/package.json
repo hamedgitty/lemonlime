@@ -1,0 +1,18 @@
+{
+  "name": "@lemonlime/sandbox",
+  "version": "0.1.0",
+  "description": "SandboxProvider interface with Docker, Daytona and E2B implementations.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@daytonaio/sdk": "^0.230.0",
+    "@lemonlime/protocol": "workspace:*",
+    "e2b": "^2.63.0"
+  }
+}

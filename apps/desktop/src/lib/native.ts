@@ -1,0 +1,82 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import type { AgentKind } from "@lemonlime/protocol";
+
+/** Thin wrappers around the Rust commands in src-tauri/src/runner.rs. */
+
+export const inDesktopShell = (): boolean => isTauri();
+
+export interface LocalRunnerInfo {
+  port: number;
+  secret: string;
+}
+
+export interface StartLocalRunnerArgs {
+  threadId: string;
+  agent: AgentKind;
+  agentCommand?: string | undefined;
+  model?: string | undefined;
+  workdir: string;
+  baseBranch?: string | undefined;
+  /** Path to lemonlime-runner, or empty to look it up on PATH. */
+  runnerPath?: string | undefined;
+}
+
+function requireShell(): void {
+  if (!isTauri()) throw new Error("Local threads need the LemonLime desktop app. Start it with `pnpm tauri dev`.");
+}
+
+/** Starts (or returns the already running) runner for a local thread. */
+export async function startLocalRunner(args: StartLocalRunnerArgs): Promise<LocalRunnerInfo> {
+  requireShell();
+  return invoke<LocalRunnerInfo>("start_local_runner", {
+    threadId: args.threadId,
+    agent: args.agent,
+    agentCommand: args.agentCommand || null,
+    model: args.model || null,
+    workdir: args.workdir,
+    baseBranch: args.baseBranch || null,
+    runnerPath: args.runnerPath || null,
+  });
+}
+
+export async function stopLocalRunner(threadId: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("stop_local_runner", { threadId });
+}
+
+/** True while the runner process for this thread is alive. */
+export async function isLocalRunnerRunning(threadId: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  return invoke<boolean>("local_runner_running", { threadId });
+}
+
+/** Ids of every thread whose runner is alive. */
+export async function listLocalRunners(): Promise<string[]> {
+  if (!isTauri()) return [];
+  return invoke<string[]>("list_local_runners");
+}
+
+export interface RepoInfo {
+  /** Current branch, or null for a detached HEAD. */
+  branch: string | null;
+}
+
+/** Checks that a folder is a git repository and returns its current branch. */
+export async function inspectRepo(path: string): Promise<RepoInfo> {
+  requireShell();
+  return invoke<RepoInfo>("inspect_repo", { path });
+}
+
+/** Opens the system folder picker. Returns null if the user cancels. */
+export async function pickFolder(): Promise<string | null> {
+  requireShell();
+  const picked = await open({ directory: true, multiple: false, title: "Choose a repository" });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Asks a yes/no question with the native dialog (or the browser's when not in the shell). */
+export async function confirmAction(message: string): Promise<boolean> {
+  if (isTauri()) return ask(message, { title: "LemonLime", kind: "warning" });
+  return window.confirm(message);
+}

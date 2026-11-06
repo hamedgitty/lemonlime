@@ -36,17 +36,35 @@ export async function requireUser(ctx: AppContext, request?: Request): Promise<A
   return user;
 }
 
-/** Only same-site relative paths are allowed as a post-login destination. */
+const SAME_SITE = "http://lemonlime.invalid";
+
+/**
+ * Only same-site paths are allowed as a post-login destination; anything else becomes "/".
+ * Browsers strip tabs/newlines and treat backslashes as slashes, so "/\t/evil.com" or
+ * "/\\evil.com" would turn into "//evil.com". Those characters are rejected outright,
+ * and the result is re-parsed to make sure it stays on this site.
+ */
 export function safeNext(next: string | null | undefined): string {
-  return next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\") ? next : "/";
+  if (!next || !next.startsWith("/")) return "/";
+  if (/[\u0000-\u001f\u007f\\]/.test(next)) return "/";
+  try {
+    const url = new URL(next, SAME_SITE);
+    if (url.origin !== SAME_SITE) return "/";
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return "/";
+  }
+}
+
+/** The login URL that comes back to `returnTo` afterwards. */
+export function loginUrl(returnTo: string | null | undefined): string {
+  const next = safeNext(returnTo);
+  return next === "/" ? "/login" : `/login?next=${encodeURIComponent(next)}`;
 }
 
 /** For pages: the signed-in user, or a redirect to /login that comes back to `returnTo`. */
 export async function requirePageUser(ctx: AppContext, returnTo = "/"): Promise<AuthedUser> {
   const user = await getUser(ctx);
-  if (!user) {
-    const next = safeNext(returnTo);
-    redirect(next === "/" ? "/login" : `/login?next=${encodeURIComponent(next)}`);
-  }
+  if (!user) redirect(loginUrl(returnTo));
   return user;
 }

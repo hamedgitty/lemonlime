@@ -3,15 +3,18 @@ import type { ReactNode } from "react";
 import { renderSlot } from "@lemonlime/plugins";
 import { Logo } from "@/components/logo.tsx";
 import { resolveWorkspace } from "@/lib/access.ts";
-import { requirePageUser } from "@/lib/auth.ts";
+import { getUser } from "@/lib/auth.ts";
+import { SignInRedirect } from "@/components/sign-in-redirect.tsx";
 import { getAppContext } from "@/lib/env.ts";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   const ctx = await getAppContext();
-  // Signed-out visitors go to /login. Pages repeat this check with their own return path.
-  const user = await requirePageUser(ctx);
+  // Signed out: render nothing from the app. The page's own check (or this fallback,
+  // which knows the real address) sends them to /login?next=<this page>.
+  const user = await getUser(ctx);
+  if (!user) return <SignInRedirect />;
   const workspaceId = await resolveWorkspace(ctx.db, user.userId);
   const { billingUI } = ctx.plugin;
 

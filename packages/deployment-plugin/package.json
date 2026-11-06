@@ -1,0 +1,16 @@
+{
+  "name": "@lemonlime/deployment-plugin",
+  "version": "0.1.0",
+  "description": "The plugin bundled into a LemonLime deployment. This default provides no plugin; a deployment can replace this package with its own module.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@lemonlime/plugins": "workspace:*"
+  }
+}

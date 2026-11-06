@@ -33,6 +33,12 @@ describe("resolving plugins", () => {
     expect(p.usagePolicy).toBe(allowAllPolicy);
   });
 
+  it("builds factory plugins from the runtime env", () => {
+    const p = resolvePlugin(definePlugin(({ env }) => ({ name: `plugin-${String(env.REGION)}` })), { env: { REGION: "eu" } });
+    expect(p.name).toBe("plugin-eu");
+    expect(p.usagePolicy).toBe(allowAllPolicy);
+  });
+
   it("fails loudly when a configured plugin is broken", async () => {
     await expect(loadPlugin("broken", async () => ({}))).rejects.toThrow(/no default export/);
   });

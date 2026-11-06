@@ -1,0 +1,48 @@
+// Cloudflare Workers config for the LemonLime control plane.
+// See docs/self-hosting.md ("Cloudflare Workers + D1"). Secrets are set with
+// `wrangler secret put <NAME>`, never here.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "lemonlime-web",
+  // worker.ts wraps OpenNext's generated handler (.open-next/worker.js) and adds the cron sweep.
+  "main": "worker.ts",
+  "compatibility_date": "2026-11-06",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "services": [
+    {
+      // Self-reference used by OpenNext; must match "name".
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "lemonlime-web"
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "lemonlime",
+      // Replace with the id printed by `wrangler d1 create lemonlime`.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "../../packages/db/migrations"
+    }
+  ],
+  // Cloudflare Email Service, used for sign-in codes. The sender domain in
+  // LEMONLIME_EMAIL_FROM must be onboarded (`wrangler email sending enable <domain>`).
+  // Remove this block to send through Resend (RESEND_API_KEY) instead.
+  "send_email": [{ "name": "EMAIL" }],
+  // Pause idle sandboxes every minute (scheduled() in worker.ts).
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "observability": { "enabled": true },
+  // Non-secret settings. Override per deployment.
+  "vars": {
+    "LEMONLIME_PUBLIC_URL": "https://lemonlime-web.example.workers.dev",
+    "LEMONLIME_EMAIL_FROM": "LemonLime <sign-in@example.com>",
+    // docker only works on Node; use daytona or e2b on Workers.
+    "LEMONLIME_SANDBOX_PROVIDER": "daytona",
+    "LEMONLIME_SANDBOX_IMAGE": "lemonlime/sandbox:latest"
+  }
+}

@@ -1,18 +1,19 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { renderSlot } from "@lemonlime/plugins";
 import { Logo } from "@/components/logo.tsx";
-import { getUser, resolveWorkspace } from "@/lib/auth.ts";
-import { getPlugin } from "@/lib/plugin.ts";
+import { resolveWorkspace } from "@/lib/access.ts";
+import { requirePageUser } from "@/lib/auth.ts";
+import { getAppContext } from "@/lib/env.ts";
 
 export const dynamic = "force-dynamic";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
-  const user = await getUser();
-  if (!user) redirect("/login");
-  const workspaceId = await resolveWorkspace(user.userId);
-  const { billingUI } = await getPlugin();
+  const ctx = await getAppContext();
+  // Signed-out visitors go to /login. Pages repeat this check with their own return path.
+  const user = await requirePageUser(ctx);
+  const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const { billingUI } = ctx.plugin;
 
   return (
     <div className="flex min-h-dvh flex-col">

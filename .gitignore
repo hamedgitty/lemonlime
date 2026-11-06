@@ -18,6 +18,10 @@ coverage/
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
 
-# supabase local
-apps/web/supabase/.branches/
-apps/web/supabase/.temp/
+# Cloudflare builds and local state
+.open-next/
+.wrangler/
+.dev.vars
+
+# local SQLite databases
+apps/web/data/

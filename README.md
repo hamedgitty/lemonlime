@@ -22,7 +22,8 @@ computer or in isolated cloud sandboxes, each on its own git branch.
 | `packages/sandbox` | Sandbox providers: Docker, Daytona, E2B |
 | `packages/client` | WebSocket client with resume and reconnect |
 | `packages/plugins` | Extension hooks for deployments (defaults allow everything) |
-| `apps/web` | Control plane and dashboard (Next.js + Supabase) |
+| `packages/db` | Database schema and migrations (SQLite: Cloudflare D1 or a local file) |
+| `apps/web` | Control plane and dashboard (Next.js on Cloudflare Workers + D1, or any Node server) |
 | `apps/desktop` | Desktop app for macOS, Windows and Linux (Tauri) |
 
 ## Quick start: run an agent locally

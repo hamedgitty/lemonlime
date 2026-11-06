@@ -5,3 +5,5 @@ packages:
 allowBuilds:
   esbuild: true
   protobufjs: true
+  workerd: true
+  sharp: true

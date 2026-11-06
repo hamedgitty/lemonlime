@@ -34,8 +34,11 @@ packages/
               stores history, manages the thread's git branch
   sandbox/    SandboxProvider interface + Docker, Daytona and E2B implementations
   plugins/    UsagePolicy and BillingUI hook types with allow-all / render-nothing defaults
+  deployment-plugin/  The plugin bundled into the web app (default: none); deployments replace it at build time
+  db/         Drizzle schema (SQLite) + migrations; D1 on Workers, libSQL file on Node and in tests
 apps/
-  web/        Next.js control plane (auth, threads, provisioning, tokens, dashboard) on Supabase
+  web/        Next.js control plane (auth, threads, provisioning, tokens, dashboard) on
+              Cloudflare Workers + D1 (OpenNext) or plain Node + SQLite; Better Auth for sign-in
   desktop/    Tauri 2 + React + Tailwind desktop app
 skills/       Bundled agent skills
 docs/         Self-hosting and architecture docs
@@ -65,6 +68,10 @@ desktop / web ──(WebSocket, runner token)──▶ runner ──(stdio)─�
                         └──▶ SandboxProvider (docker | daytona | e2b)
 ```
 
+There is no row-level security: every user-facing query in `apps/web` goes
+through `apps/web/src/lib/access.ts`, which checks workspace membership. Keep it
+that way when adding routes.
+
 The control plane asks the configured `UsagePolicy` before starting or resuming
 a sandbox, and reports start/stop events to it. Self-hosted installs use the
 default policy, which always says yes.
@@ -76,6 +83,7 @@ pnpm install
 pnpm test          # vitest across all packages
 pnpm typecheck
 pnpm runner -- --help
-pnpm dev:web
+pnpm dev:web       # Node + local SQLite; sign-in codes print to the console
+pnpm --filter @lemonlime/web cf:preview   # the Workers build under wrangler dev
 pnpm dev:desktop   # needs Rust + the Tauri prerequisites
 ```

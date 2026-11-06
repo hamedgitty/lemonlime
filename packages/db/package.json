@@ -1,0 +1,24 @@
+{
+  "name": "@lemonlime/db",
+  "version": "0.1.0",
+  "description": "LemonLime control plane database: Drizzle schema (SQLite), migrations and clients for Cloudflare D1 and local SQLite.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./local": "./src/local.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "generate": "drizzle-kit generate && node scripts/embed-migrations.mjs"
+  },
+  "dependencies": {
+    "@lemonlime/protocol": "workspace:*",
+    "@libsql/client": "^0.18.0",
+    "drizzle-orm": "^0.45.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "drizzle-kit": "^0.31.11"
+  }
+}

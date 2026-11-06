@@ -1,13 +1,16 @@
 import Link from "next/link";
 import { AGENT_LABELS, StatusPill, repoName, timeAgo } from "@/components/status-pill.tsx";
-import { requireUser, resolveWorkspace } from "@/lib/auth.ts";
+import { resolveWorkspace } from "@/lib/access.ts";
+import { requirePageUser } from "@/lib/auth.ts";
+import { getAppContext } from "@/lib/env.ts";
 import { listThreads } from "@/lib/threads.ts";
 import { NewThreadForm } from "./new-thread-form.tsx";
 
 export default async function HomePage() {
-  const user = await requireUser();
-  const workspaceId = await resolveWorkspace(user.userId);
-  const threads = await listThreads(workspaceId);
+  const ctx = await getAppContext();
+  const user = await requirePageUser(ctx, "/");
+  const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const threads = await listThreads(ctx, user.userId, workspaceId);
   const now = Date.now();
 
   return (

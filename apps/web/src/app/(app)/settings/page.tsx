@@ -1,29 +1,19 @@
 import type { Metadata } from "next";
 import { renderSlot } from "@lemonlime/plugins";
-import { requireUser, resolveWorkspace } from "@/lib/auth.ts";
-import { getPlugin } from "@/lib/plugin.ts";
-import { supabaseAdmin } from "@/lib/supabase/admin.ts";
-import { TokensManager, type AccessTokenInfo } from "./tokens-manager.tsx";
+import { listAccessTokens, resolveWorkspace } from "@/lib/access.ts";
+import { requirePageUser } from "@/lib/auth.ts";
+import { getAppContext } from "@/lib/env.ts";
+import { TokensManager } from "./tokens-manager.tsx";
 
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
-  const user = await requireUser();
-  const workspaceId = await resolveWorkspace(user.userId);
-  const { billingUI } = await getPlugin();
-  const { data, error } = await supabaseAdmin()
-    .from("access_tokens")
-    .select("id, name, created_at, last_used_at")
-    .eq("user_id", user.userId)
-    .order("created_at", { ascending: false });
-  if (error) throw error;
-  const tokens: AccessTokenInfo[] = data.map(r => ({
-    id: r.id as string,
-    name: r.name as string,
-    createdAt: r.created_at as string,
-    lastUsedAt: (r.last_used_at as string | null) ?? null,
-  }));
-  const controlPlaneUrl = process.env.LEMONLIME_PUBLIC_URL ?? "";
+  const ctx = await getAppContext();
+  const user = await requirePageUser(ctx, "/settings");
+  const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const { billingUI } = ctx.plugin;
+  const tokens = await listAccessTokens(ctx.db, user.userId);
+  const controlPlaneUrl = ctx.vars.LEMONLIME_PUBLIC_URL ?? "";
 
   return (
     <main className="mx-auto max-w-3xl space-y-10 px-5 py-10">

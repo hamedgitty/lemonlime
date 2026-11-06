@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cream: #fffbea;
+  --color-ink: #17200e;
+  --color-lemon: #ffe135;
+  --color-lime: #a3e635;
+  --color-leaf: #3f7a16;
+  --color-paper: #ffffff;
+  --color-line: #e9e3c4;
+  --color-muted: #5d6651;
+
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    background: var(--color-cream);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    font-family: var(--font-sans);
+    min-height: 100dvh;
+  }
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  ::selection {
+    background: var(--color-lemon);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-leaf);
+    outline-offset: 2px;
+  }
+}
+
+/* Shared building blocks, usable like any utility class. */
+@utility btn {
+  @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-ink text-cream hover:bg-ink/85;
+}
+
+@utility btn-lemon {
+  @apply btn bg-lemon text-ink hover:bg-[#f5d41f];
+}
+
+@utility btn-ghost {
+  @apply btn border border-line bg-paper text-ink hover:bg-cream;
+}
+
+@utility btn-danger {
+  @apply btn border border-red-200 bg-paper text-red-700 hover:bg-red-50;
+}
+
+@utility field {
+  @apply h-10 w-full rounded-lg border border-line bg-paper px-3 text-sm text-ink placeholder:text-muted/70 focus:border-leaf focus:outline-none focus:ring-2 focus:ring-lime/40;
+}
+
+@utility label {
+  @apply mb-1.5 block text-sm font-medium text-ink;
+}
+
+@utility card {
+  @apply rounded-xl border border-line bg-paper;
+}

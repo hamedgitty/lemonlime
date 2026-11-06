@@ -1,0 +1,9 @@
+# Used by BuildKit for docker/sandbox.Dockerfile (build context: repository root).
+**/node_modules
+**/.next
+**/dist
+**/.lemonlime
+.git
+.env
+.env.*
+apps/

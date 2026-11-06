@@ -1,0 +1,28 @@
+{
+  "name": "@lemonlime/plugins",
+  "version": "0.1.0",
+  "description": "Extension hooks for LemonLime deployments. Defaults allow everything and render nothing.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@lemonlime/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "react": ">=18"
+  }
+}

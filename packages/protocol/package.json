@@ -1,0 +1,16 @@
+{
+  "name": "@lemonlime/protocol",
+  "version": "0.1.0",
+  "description": "Schemas and types shared by the LemonLime app, control plane and runner.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

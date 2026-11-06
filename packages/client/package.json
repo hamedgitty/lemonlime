@@ -1,0 +1,16 @@
+{
+  "name": "@lemonlime/client",
+  "version": "0.1.0",
+  "description": "Browser and Node client for a LemonLime runner: connect, resume, send, interrupt.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@lemonlime/protocol": "workspace:*"
+  }
+}

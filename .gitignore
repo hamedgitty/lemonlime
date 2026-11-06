@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.log
+.DS_Store
+
+# local data written by the runner
+.lemonlime/
+
+# env files (only .env.example is committed)
+.env
+.env.*
+!.env.example
+
+# tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# supabase local
+apps/web/supabase/.branches/
+apps/web/supabase/.temp/

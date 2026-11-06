@@ -1,0 +1,26 @@
+{
+  "name": "lemonlime",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Run AI coding agents on your computer or in isolated cloud sandboxes.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@11.28.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev:web": "pnpm --filter @lemonlime/web dev",
+    "dev:desktop": "pnpm --filter @lemonlime/desktop dev",
+    "runner": "pnpm --filter @lemonlime/runner start"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}

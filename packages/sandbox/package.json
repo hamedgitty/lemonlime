@@ -11,8 +11,6 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@daytonaio/sdk": "^0.230.0",
-    "@lemonlime/protocol": "workspace:*",
-    "e2b": "^2.63.0"
+    "@lemonlime/protocol": "workspace:*"
   }
 }

@@ -1,9 +1,24 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { SANDBOX_RESOURCES } from "@lemonlime/protocol";
 import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider, SandboxState } from "./types.ts";
 
-const run = promisify(execFile);
+type Run = (file: string, args: string[], opts: { maxBuffer: number }) => Promise<{ stdout: string; stderr: string }>;
+let runner: Promise<Run> | undefined;
+
+/**
+ * Loads `child_process` on first use, so importing this package never fails on
+ * runtimes without it (Cloudflare Workers). Docker itself needs Node.
+ */
+function loadRun(): Promise<Run> {
+  if ((globalThis as { navigator?: { userAgent?: string } }).navigator?.userAgent === "Cloudflare-Workers") {
+    return Promise.reject(
+      new Error("The docker sandbox provider needs Node.js next to a Docker daemon and cannot run on Cloudflare Workers. Use daytona or e2b there."),
+    );
+  }
+  runner ??= Promise.all([import("node:child_process"), import("node:util")]).then(
+    ([cp, util]) => util.promisify(cp.execFile) as unknown as Run,
+  );
+  return runner;
+}
 
 export interface DockerProviderOptions {
   /** Image with the runner and agent CLIs installed. */
@@ -30,6 +45,7 @@ export class DockerProvider implements SandboxProvider {
   }
 
   private async exec(args: string[]): Promise<string> {
+    const run = await loadRun();
     const { stdout } = await run(this.docker, args, { maxBuffer: 4 * 1024 * 1024 });
     return stdout.trim();
   }

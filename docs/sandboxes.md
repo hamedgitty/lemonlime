@@ -1,0 +1,94 @@
+# Sandbox providers
+
+`packages/sandbox` gives the control plane one interface, `SandboxProvider`, with
+three implementations: `docker`, `daytona` and `e2b`. Pick one with
+`LEMONLIME_SANDBOX_PROVIDER` (see `docs/self-hosting.md` for the full list of
+settings).
+
+```ts
+import { createSandboxProvider } from "@lemonlime/sandbox";
+
+// Node: pass process.env. Cloudflare Workers: pass the worker's `env` binding.
+const provider = createSandboxProvider(process.env);
+```
+
+`createSandboxProvider` always takes the environment as an argument and throws
+straight away, naming the variable, if a required setting is missing.
+
+## Where it runs
+
+The package only uses `fetch` and other web platform APIs, so the Daytona and
+E2B providers work both on Node 22 and on Cloudflare Workers (with
+`nodejs_compat`). There are no provider SDKs to install.
+
+The Docker provider shells out to the `docker` CLI, so it needs Node and a
+Docker daemon on the same machine. It loads `node:child_process` only when it is
+first used, so importing the package is safe anywhere; on Workers its methods
+throw an error saying to use `daytona` or `e2b` instead.
+
+## Lifecycle
+
+| | docker | daytona | e2b |
+| --- | --- | --- | --- |
+| create | `docker run -d … sh -c <runner>` | create sandbox, wait until `started`, start the runner in a session | create sandbox, start the runner through envd |
+| pause | `docker stop` | stop the sandbox and wait until `stopped` | pause (memory kept) |
+| resume | `docker start` (re-runs the runner) | start, wait until `started`, start the runner again | connect (resumes; the runner is still running) |
+| destroy | `docker rm -f` | delete | kill |
+
+Pausing or destroying a sandbox that is already paused or gone is not an error.
+If `create` fails after the provider made a sandbox (for example it never
+started, or the runner could not be launched), that sandbox is deleted again.
+
+## Daytona
+
+Settings: `DAYTONA_API_KEY` (required), `DAYTONA_API_URL` (default
+`https://app.daytona.io/api`), and optionally `DAYTONA_SNAPSHOT`.
+
+- Without `DAYTONA_SNAPSHOT`, each sandbox is built from
+  `LEMONLIME_SANDBOX_IMAGE` with the CPU, memory and disk of its size. The image
+  must be pullable by your Daytona organisation.
+- With `DAYTONA_SNAPSHOT`, sandboxes start from that snapshot (create it from the
+  same image). Resources then come from the snapshot.
+
+Requests, all with `Authorization: Bearer <DAYTONA_API_KEY>`:
+
+| Step | Request |
+| --- | --- |
+| create | `POST /sandbox` with `env`, `labels`, `public: true`, `autoStopInterval` (60 min safety net), `autoArchiveInterval` (24 h), and either `buildInfo.dockerfileContent: "FROM <image>"` + `cpu`/`memory`/`disk` or `snapshot` |
+| wait | `GET /sandbox/{id}` every second until `started` (2 minute limit; `error` or `build_failed` fail at once) |
+| runner | `POST <toolbox>/process/session` `{ sessionId: "lemonlime-runner" }`, then `POST <toolbox>/process/session/lemonlime-runner/exec` `{ command, runAsync: true }` |
+| runner URL | `GET /sandbox/{id}/ports/{port}/preview-url` |
+| pause | `POST /sandbox/{id}/stop`, then poll until `stopped` |
+| resume | `POST /sandbox/{id}/start`, poll, start the runner again |
+| destroy | `DELETE /sandbox/{id}` |
+
+`<toolbox>` is the sandbox's `toolboxProxyUrl` (or
+`GET /sandbox/{id}/toolbox-proxy-url`) followed by `/<sandbox id>`.
+
+## E2B
+
+Settings: `E2B_API_KEY` (required), `E2B_TEMPLATE_SMALL` and
+`E2B_TEMPLATE_LARGE` (templates built from `docker/sandbox.Dockerfile` with the
+CPU and memory of each size).
+
+Requests to `https://api.e2b.app`, all with `X-API-Key: <E2B_API_KEY>`:
+
+| Step | Request |
+| --- | --- |
+| create | `POST /v2/sandboxes` `{ templateID, metadata, envVars, timeout }` (timeout: 1 hour safety net) |
+| get | `GET /sandboxes/{id}` |
+| pause | `POST /sandboxes/{id}/pause` `{}` (keeps memory) |
+| resume | `POST /v2/sandboxes/{id}/connect` `{ timeout }` |
+| destroy | `DELETE /sandboxes/{id}` |
+
+The runner is started through envd, the process agent inside every E2B
+sandbox, at `https://49983-<id>.e2b.app/process.Process/Start`. This is a
+Connect server-streaming call using the JSON codec
+(`Content-Type: application/connect+json`, each message framed as one flag byte
+plus a 4-byte length). The request runs
+`/bin/bash -l -c <runner command>` with the runner's environment and the
+sandbox's `envdAccessToken` in `X-Access-Token`. The provider waits for the
+`start` event with the process id and then closes the stream; envd keeps the
+process running, the same as the E2B SDK's background commands.
+
+The runner URL is `https://<port>-<id>.e2b.app`.

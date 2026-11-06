@@ -1,12 +1,18 @@
-import { Daytona, type Sandbox } from "@daytonaio/sdk";
 import { SANDBOX_RESOURCES } from "@lemonlime/protocol";
+import { defaultFetch, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
 import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider, SandboxState } from "./types.ts";
 
 export interface DaytonaProviderOptions {
   apiKey: string;
+  /** Daytona API base URL. Defaults to https://app.daytona.io/api. */
   apiUrl?: string;
   /** Image with the runner and agent CLIs installed. */
   image: string;
+  /**
+   * Optional Daytona snapshot built from that image. When set, sandboxes start
+   * from the snapshot (faster) and take their resources from it.
+   */
+  snapshot?: string;
   /**
    * Provider-side safety net, in minutes. The control plane already pauses idle
    * threads after 5 minutes; this only catches sandboxes the control plane lost
@@ -15,82 +21,194 @@ export interface DaytonaProviderOptions {
   autoStopMinutes?: number;
   /** Archive stopped sandboxes after this many minutes, so their disk stops costing money. */
   autoArchiveMinutes?: number;
+  /** How long to wait for a sandbox to reach "started" on create or resume. Default 2 minutes. */
+  startTimeoutMs?: number;
+  /** How long to wait for a sandbox to stop on pause. Default 1 minute. */
+  stopTimeoutMs?: number;
+  /** Delay between state polls. Default 1 second. */
+  pollIntervalMs?: number;
+  /** Custom fetch, mainly for tests. */
+  fetch?: FetchLike;
 }
 
-const RUNNER_SESSION = "lemonlime-runner";
+/** The parts of Daytona's Sandbox DTO this provider reads. */
+interface DaytonaSandbox {
+  id: string;
+  state?: string;
+  errorReason?: string;
+  labels?: Record<string, string>;
+  toolboxProxyUrl?: string;
+}
 
-/** Runs each sandbox on Daytona. Billing is per second while running; stopped sandboxes only keep disk. */
+const DEFAULT_API_URL = "https://app.daytona.io/api";
+const RUNNER_SESSION = "lemonlime-runner";
+const RUNNER_PORT_LABEL = "lemonlime.runner-port";
+const FAILED_STATES = new Set(["error", "build_failed"]);
+
+/**
+ * Runs each sandbox on Daytona, talking to its REST API with plain `fetch`.
+ * Billing is per second while running; stopped sandboxes only keep disk.
+ */
 export class DaytonaProvider implements SandboxProvider {
   readonly name = "daytona";
-  private readonly client: Daytona;
+  private readonly apiUrl: string;
+  private readonly fetch: FetchLike;
 
   constructor(private readonly opts: DaytonaProviderOptions) {
-    this.client = new Daytona({ apiKey: opts.apiKey, ...(opts.apiUrl ? { apiUrl: opts.apiUrl } : {}) });
+    this.apiUrl = trimSlash(opts.apiUrl || DEFAULT_API_URL);
+    this.fetch = opts.fetch ?? defaultFetch;
   }
 
   async create(o: CreateSandboxOptions): Promise<SandboxInfo> {
     const res = SANDBOX_RESOURCES[o.size];
-    const sandbox = await this.client.create({
-      image: this.opts.image,
-      resources: { cpu: res.vcpu, memory: res.memoryGiB, disk: res.diskGiB },
-      envVars: o.runner.env,
+    const source = this.opts.snapshot
+      ? { snapshot: this.opts.snapshot }
+      : {
+          // What the Daytona SDK sends for `image: "<name>"`: a one-line Dockerfile.
+          buildInfo: { dockerfileContent: `FROM ${this.opts.image}\n` },
+          cpu: res.vcpu,
+          memory: res.memoryGiB,
+          disk: res.diskGiB,
+        };
+    let sandbox = await this.api<DaytonaSandbox>("POST", "/sandbox", {
+      ...source,
+      env: o.runner.env,
       labels: { "lemonlime.thread": o.threadId, ...o.labels },
       // The runner checks a signed token on every connection, so the port can be public.
       public: true,
       autoStopInterval: this.opts.autoStopMinutes ?? 60,
       autoArchiveInterval: this.opts.autoArchiveMinutes ?? 24 * 60,
     });
-    await this.startRunner(sandbox, o.runner);
-    return this.info(sandbox, o.runner.port);
+    try {
+      sandbox = await this.waitForStarted(sandbox);
+      await this.startRunner(sandbox, o.runner);
+      return await this.info(sandbox, o.runner.port);
+    } catch (err) {
+      // The caller never learns this id, so clean up rather than leave it running.
+      await this.destroy(sandbox.id).catch(() => undefined);
+      throw err;
+    }
   }
 
   async get(id: string): Promise<SandboxInfo | null> {
     try {
-      const sandbox = await this.client.get(id);
-      return await this.info(sandbox, null);
+      const sandbox = await this.fetchSandbox(id);
+      return await this.info(sandbox, Number(sandbox.labels?.[RUNNER_PORT_LABEL]) || null);
     } catch {
       return null;
     }
   }
 
   async pause(id: string): Promise<void> {
-    const sandbox = await this.client.get(id).catch(() => null);
+    const sandbox = await this.fetchSandbox(id).catch(() => null);
     if (!sandbox) return;
-    if (mapDaytonaState(String(sandbox.state ?? "")) === "running") await sandbox.stop();
+    if (mapDaytonaState(sandbox.state ?? "") !== "running") return;
+    await this.api("POST", `/sandbox/${enc(id)}/stop`);
+    await this.waitFor(id, ["stopped", "destroyed", "archived"], this.opts.stopTimeoutMs ?? 60_000, "stop");
   }
 
   async resume(id: string, runner: RunnerLaunch): Promise<SandboxInfo> {
-    const sandbox = await this.client.get(id);
-    if (mapDaytonaState(String(sandbox.state ?? "")) !== "running") await sandbox.start(120);
+    let sandbox = await this.fetchSandbox(id);
+    const state = (sandbox.state ?? "").toLowerCase();
+    if (state === "stopping" || state === "archiving") {
+      // Starting mid-transition is rejected, so let it settle first.
+      sandbox = await this.waitFor(id, ["stopped", "archived"], this.opts.stopTimeoutMs ?? 60_000, "stop");
+    }
+    if (mapDaytonaState(sandbox.state ?? "") !== "running") {
+      if (mapDaytonaState(sandbox.state ?? "") !== "starting") {
+        sandbox = await this.api<DaytonaSandbox>("POST", `/sandbox/${enc(id)}/start`);
+      }
+      sandbox = await this.waitForStarted(sandbox);
+    }
     // Stopping a Daytona sandbox ends its processes, so start the runner again.
     await this.startRunner(sandbox, runner);
     return this.info(sandbox, runner.port);
   }
 
   async destroy(id: string): Promise<void> {
-    const sandbox = await this.client.get(id).catch(() => null);
-    if (sandbox) await sandbox.delete();
+    try {
+      await this.api("DELETE", `/sandbox/${enc(id)}`);
+    } catch (err) {
+      if (!isStatus(err, 404)) throw err;
+    }
   }
 
-  private async startRunner(sandbox: Sandbox, runner: RunnerLaunch): Promise<void> {
-    await sandbox.process.createSession(RUNNER_SESSION).catch(() => undefined);
-    await sandbox.process.executeSessionCommand(RUNNER_SESSION, { command: runner.command, runAsync: true });
+  private async startRunner(sandbox: DaytonaSandbox, runner: RunnerLaunch): Promise<void> {
+    const base = await this.toolboxUrl(sandbox);
+    // The session survives between calls; creating it again just fails, which is fine.
+    await this.request("POST", `${base}/process/session`, { sessionId: RUNNER_SESSION }).catch(() => undefined);
+    await this.request("POST", `${base}/process/session/${enc(RUNNER_SESSION)}/exec`, {
+      command: runner.command,
+      runAsync: true,
+    });
   }
 
-  private async info(sandbox: Sandbox, port: number | null): Promise<SandboxInfo> {
-    await sandbox.refreshData().catch(() => undefined);
-    const state = mapDaytonaState(String(sandbox.state ?? ""));
+  /** Toolbox API for one sandbox: `<toolboxProxyUrl>/<sandbox id>`, as the SDK builds it. */
+  private async toolboxUrl(sandbox: DaytonaSandbox): Promise<string> {
+    let proxy = sandbox.toolboxProxyUrl;
+    if (!proxy) proxy = (await this.api<{ url: string }>("GET", `/sandbox/${enc(sandbox.id)}/toolbox-proxy-url`)).url;
+    return `${trimSlash(proxy)}/${sandbox.id}`;
+  }
+
+  private async info(sandbox: DaytonaSandbox, port: number | null): Promise<SandboxInfo> {
+    const state = mapDaytonaState(sandbox.state ?? "");
     let runnerUrl: string | null = null;
-    if (state === "running" && port) runnerUrl = (await sandbox.getPreviewLink(port)).url;
+    if (state === "running" && port) {
+      runnerUrl = (await this.api<{ url: string }>("GET", `/sandbox/${enc(sandbox.id)}/ports/${port}/preview-url`)).url;
+    }
     return { id: sandbox.id, provider: this.name, state, runnerUrl };
   }
+
+  private fetchSandbox(id: string): Promise<DaytonaSandbox> {
+    return this.api<DaytonaSandbox>("GET", `/sandbox/${enc(id)}`);
+  }
+
+  private async waitForStarted(sandbox: DaytonaSandbox): Promise<DaytonaSandbox> {
+    if ((sandbox.state ?? "").toLowerCase() === "started") return sandbox;
+    return this.waitFor(sandbox.id, ["started"], this.opts.startTimeoutMs ?? 120_000, "start");
+  }
+
+  /** Polls the sandbox until it reaches one of `targets`, fails, or the timeout passes. */
+  private async waitFor(id: string, targets: string[], timeoutMs: number, action: string): Promise<DaytonaSandbox> {
+    const deadline = Date.now() + timeoutMs;
+    const interval = this.opts.pollIntervalMs ?? 1000;
+    let last = "";
+    for (;;) {
+      const sandbox = await this.fetchSandbox(id);
+      last = (sandbox.state ?? "").toLowerCase();
+      if (targets.includes(last)) return sandbox;
+      if (FAILED_STATES.has(last)) {
+        throw new Error(`Daytona sandbox ${id} failed to ${action} (state ${last}${sandbox.errorReason ? `: ${sandbox.errorReason}` : ""})`);
+      }
+      if (Date.now() + interval > deadline) {
+        throw new Error(`Daytona sandbox ${id} did not ${action} within ${Math.round(timeoutMs / 1000)}s (last state ${last || "unknown"})`);
+      }
+      await sleep(interval);
+    }
+  }
+
+  private api<T = unknown>(method: "GET" | "POST" | "DELETE", path: string, body?: unknown): Promise<T> {
+    return this.request<T>(method, `${this.apiUrl}${path}`, body);
+  }
+
+  private request<T = unknown>(method: "GET" | "POST" | "DELETE", url: string, body?: unknown): Promise<T> {
+    return requestJson<T>(this.fetch, "Daytona", {
+      method,
+      url,
+      headers: { Authorization: `Bearer ${this.opts.apiKey}` },
+      body,
+    });
+  }
 }
+
+const enc = encodeURIComponent;
 
 export function mapDaytonaState(state: string): SandboxState {
   switch (state.toLowerCase()) {
     case "creating":
     case "starting":
     case "restoring":
+    case "resuming":
     case "pulling_snapshot":
     case "building_snapshot":
     case "pending_build":
@@ -101,6 +219,7 @@ export function mapDaytonaState(state: string): SandboxState {
     case "stopped":
     case "archived":
     case "archiving":
+    case "pausing":
     case "paused":
       return "paused";
     case "destroying":

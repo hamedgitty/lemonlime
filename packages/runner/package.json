@@ -1,0 +1,26 @@
+{
+  "name": "@lemonlime/runner",
+  "version": "0.1.0",
+  "description": "Daemon that runs next to one coding agent, streams its events and keeps its history.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "lemonlime-runner": "./bin/lemonlime-runner.js"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@lemonlime/protocol": "workspace:*",
+    "tsx": "^4.23.15",
+    "ws": "^8.22.1"
+  },
+  "devDependencies": {
+    "@lemonlime/client": "workspace:*",
+    "@types/ws": "^8.18.2"
+  }
+}

@@ -1,0 +1,193 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import WebSocket from "ws";
+import { RunnerClient } from "@lemonlime/client";
+import { branchForThread, signToken, type Thread, type ThreadEvent } from "@lemonlime/protocol";
+import { acpAdapter, startServer, ThreadRunner, type AgentAdapter, type RunningServer } from "../src/index.ts";
+
+const SECRET = "thread-secret-for-tests-0123456789";
+const here = dirname(fileURLToPath(import.meta.url));
+const cleanups: (() => Promise<void> | void)[] = [];
+afterEach(async () => {
+  for (const c of cleanups.splice(0).reverse()) await c();
+});
+
+function tempRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "lemonlime-runner-"));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const g = (...a: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: dir });
+  g("init", "-q", "-b", "main");
+  writeFileSync(join(dir, "README.md"), "# demo\n");
+  g("add", "-A");
+  g("commit", "-q", "-m", "init");
+  return dir;
+}
+
+function makeThread(id: string): Thread {
+  const now = new Date().toISOString();
+  return {
+    id,
+    title: "",
+    agent: { kind: "claude-code" },
+    repo: { url: "local", baseBranch: "main" },
+    branch: branchForThread(id),
+    mode: "local",
+    status: "provisioning",
+    sandboxSize: "small",
+    latestSeq: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/** A pretend agent that answers and edits a file, without any real CLI. */
+const fakeAdapter: AgentAdapter = {
+  kind: "claude-code",
+  createSession(opts) {
+    return {
+      async runTurn(ctx) {
+        ctx.emit({ type: "tool_call", callId: "c1", name: "write_file", input: { path: "notes.md" } });
+        writeFileSync(join(opts.cwd, "notes.md"), `${ctx.prompt}\n`);
+        ctx.emit({ type: "tool_result", callId: "c1", output: "ok" });
+        ctx.emit({ type: "agent_message", text: `Wrote notes for: ${ctx.prompt}` });
+      },
+      saveState: () => ({}),
+      dispose: async () => {},
+    };
+  },
+};
+
+async function boot(adapter: AgentAdapter, id = "test-thread-1"): Promise<{ runner: ThreadRunner; server: RunningServer; dir: string }> {
+  const dir = tempRepo();
+  const runner = new ThreadRunner({ thread: makeThread(id), workdir: dir, dataDir: join(dir, ".lemonlime"), adapter, session: { autonomy: "edits" } });
+  await runner.init();
+  const server = await startServer(runner, { host: "127.0.0.1", port: 0, threadSecret: SECRET, version: "test" });
+  cleanups.push(async () => {
+    await runner.close();
+    await server.close();
+  });
+  return { runner, server, dir };
+}
+
+const token = (threadId: string, secret = SECRET, scope: "client" | "runner" = "client") =>
+  signToken({ threadId, scope, exp: Math.floor(Date.now() / 1000) + 60 }, secret);
+
+function connect(port: number, tok: Promise<string> | string, resumeFrom = 0) {
+  const events: ThreadEvent[] = [];
+  const errors: string[] = [];
+  const states: string[] = [];
+  const client = new RunnerClient({
+    url: `ws://127.0.0.1:${port}/ws`,
+    token: async () => tok,
+    resumeFrom,
+    WebSocketImpl: WebSocket as unknown as typeof globalThis.WebSocket,
+    onEvent: e => events.push(e),
+    onError: m => errors.push(m),
+    onState: s => states.push(s),
+    maxBackoffMs: 200,
+  });
+  client.connect();
+  cleanups.push(() => client.close());
+  return { client, events, errors, states };
+}
+
+async function until(check: () => boolean, ms = 8000): Promise<void> {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > ms) throw new Error("timed out waiting");
+    await new Promise(r => setTimeout(r, 20));
+  }
+}
+
+describe("runner end to end", () => {
+  it("streams a turn, records the diff and commits on the thread branch", async () => {
+    const { runner, server, dir } = await boot(fakeAdapter);
+    const c = connect(server.port, token(runner.thread.id));
+    await until(() => c.states.includes("live"));
+    c.client.send("Write the release notes", "m1");
+    await until(() => c.events.some(e => e.type === "status_change" && e.to === "idle" && e.seq > 2));
+
+    const types = c.events.map(e => e.type);
+    expect(types).toEqual(["status_change", "user_message", "status_change", "tool_call", "tool_result", "agent_message", "file_diff", "status_change"]);
+    expect(c.events.map(e => e.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    const diff = c.events.find(e => e.type === "file_diff");
+    expect(diff).toMatchObject({ path: "notes.md", change: "added" });
+
+    const log = execFileSync("git", ["log", "-1", "--format=%D|%s"], { cwd: dir }).toString().trim();
+    expect(log).toContain(`HEAD -> ${branchForThread(runner.thread.id)}`);
+    expect(log).toContain("Write the release notes");
+  });
+
+  it("lets a client resume from any seq without gaps or duplicates", async () => {
+    const { runner, server } = await boot(fakeAdapter, "test-thread-2");
+    runner.sendMessage("first");
+    await runner.settled();
+    const total = runner.store.latestSeq;
+
+    const c = connect(server.port, token(runner.thread.id), 3);
+    await until(() => c.states.includes("live"));
+    expect(c.events.map(e => e.seq)).toEqual(Array.from({ length: total - 3 }, (_, i) => i + 4));
+  });
+
+  it("rejects tokens for another thread or signed with another secret", async () => {
+    const { runner, server } = await boot(fakeAdapter, "test-thread-3");
+    const wrongThread = connect(server.port, token("someone-else"));
+    const wrongSecret = connect(server.port, token(runner.thread.id, "a-different-secret-entirely"));
+    const runnerScope = connect(server.port, token(runner.thread.id, SECRET, "runner"));
+    await until(() => wrongThread.errors.length > 0 && wrongSecret.errors.length > 0 && runnerScope.errors.length > 0);
+    expect(wrongThread.events).toEqual([]);
+    expect(wrongSecret.errors[0]).toMatch(/signature/);
+    expect(runnerScope.events).toEqual([]);
+  });
+
+  it("refuses a second message while busy and can be interrupted", async () => {
+    let release!: () => void;
+    const slow: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => ({
+        runTurn: ctx =>
+          new Promise<void>(resolve => {
+            release = resolve;
+            ctx.signal.addEventListener("abort", () => resolve());
+          }),
+        saveState: () => ({}),
+        dispose: async () => {},
+      }),
+    };
+    const { runner } = await boot(slow, "test-thread-4");
+    runner.sendMessage("long task");
+    expect(() => runner.sendMessage("another")).toThrow(/still working/);
+    runner.interrupt();
+    await runner.settled();
+    const last = runner.store.since(0).at(-1)!;
+    expect(last).toMatchObject({ type: "status_change", to: "idle", reason: "interrupted" });
+    void release;
+  });
+
+  it("drives an ACP agent over stdio, including permission requests", async () => {
+    const adapter = acpAdapter("acp", ["node", join(here, "fixtures", "fake-acp-agent.mjs")]);
+    const { runner } = await boot(adapter, "test-thread-5");
+    runner.sendMessage("hello there");
+    await runner.settled();
+    const events = runner.store.since(0);
+    const text = events.filter(e => e.type === "agent_message").map(e => (e as { text: string }).text).join("");
+    expect(text).toBe("You said: hello there");
+    expect(events.find(e => e.type === "tool_call")).toMatchObject({ name: "Run tests", input: { command: "npm test" } });
+    // Edits autonomy: "execute" tools are declined.
+    expect(events.find(e => e.type === "tool_result")).toMatchObject({ output: "permission=deny", isError: false });
+  });
+
+  it("reports a missing agent CLI as an error instead of crashing", async () => {
+    const adapter = acpAdapter("acp", ["definitely-not-a-real-agent-binary"]);
+    const { runner } = await boot(adapter, "test-thread-6");
+    runner.sendMessage("hi");
+    await runner.settled();
+    const err = runner.store.since(0).find(e => e.type === "error");
+    expect(err).toMatchObject({ code: "agent_not_found", fatal: false });
+    expect(runner.thread.status).toBe("idle");
+  });
+});

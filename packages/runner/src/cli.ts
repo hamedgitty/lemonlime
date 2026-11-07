@@ -160,6 +160,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     git: !values["no-git"],
     ...(values.repo ? { repoUrl: values.repo } : {}),
     ...(sourceRepo ? { sourceRepo } : {}),
+    checkAgentVersion: true,
   });
 
   const log = (m: string) => process.stderr.write(`[runner ${id}] ${m}\n`);

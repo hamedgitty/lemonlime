@@ -40,9 +40,19 @@ Check for names, emails, tokens and home paths before committing a new recording
 
 ## Re-recording after a CLI upgrade
 
-Run the agent through `ThreadRunner` with the agent command wrapped in a small
-script that logs every stdin/stdout line in the format above. Clean the log as
-described, replace the fixture, update the table, and fix the adapter until
-`pnpm test` passes. When you run an agent from inside another agent's session, clear
-that session's environment variables first (for Claude Code, `CLAUDE*` and
-`ANTHROPIC_*`), or the nested CLI will not use your normal sign-in.
+The tested versions live in `TESTED_AGENTS` (`src/agents/versions.ts`). The sandbox
+image installs exactly those, and `test/versions.test.ts` fails if the fixtures, the
+Dockerfile or this README disagree with it. To move an agent to a new version:
+
+1. Update the CLI on your machine and make sure it is signed in.
+2. Record the standard session: `pnpm --filter @lemonlime/runner record codex`
+   (or `claude-code`, `opencode`). It runs the two prompts through the real runner,
+   cleans the recording and writes `<agent>/fix-bug.jsonl`. For failure cases, pass a
+   name and point the CLI at an empty config folder, e.g.
+   `LEMONLIME_RECORD_ENV='{"CODEX_HOME":"/tmp/empty"}' pnpm --filter @lemonlime/runner record codex not-logged-in`.
+3. Read the new file before committing: it will be public.
+4. Bump the version in `TESTED_AGENTS`, the sandbox Dockerfile and the table above.
+5. Run `pnpm test` and fix the adapter until it passes.
+
+The runner checks the installed CLI's version when a thread starts. If it is older
+than the tested one, the thread shows a note with the command that updates it.

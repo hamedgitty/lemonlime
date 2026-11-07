@@ -7,6 +7,7 @@ import type { AgentAdapter } from "./types.ts";
 export * from "./types.ts";
 export { lineSplitter, MAX_LINE_BYTES } from "./lines.ts";
 export { runLineProcess } from "./process.ts";
+export { compareVersions, detectVersion, parseVersion, TESTED_AGENTS, versionNotice, type TestedAgent } from "./versions.ts";
 export { parseClaudeLine } from "./claude-code.ts";
 export { parseCodexLine } from "./codex.ts";
 export { AcpTranslator, answerAgentRequest, acpAdapter } from "./acp.ts";

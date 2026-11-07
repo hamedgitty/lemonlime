@@ -13,6 +13,11 @@
 FROM node:22-bookworm-slim
 
 ARG PNPM_VERSION=11.28.2
+# Agent CLI versions LemonLime is tested with. Keep in step with TESTED_AGENTS in
+# packages/runner/src/agents/versions.ts (a test checks this).
+ARG CLAUDE_CODE_VERSION=2.1.302
+ARG CODEX_VERSION=0.167.0
+ARG OPENCODE_VERSION=1.18.18
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -21,9 +26,9 @@ RUN apt-get update \
 
 # Agent CLIs. Users sign in with their own model accounts; nothing is baked in.
 RUN npm install -g --no-fund --no-audit \
-      @anthropic-ai/claude-code \
-      @openai/codex \
-      opencode-ai \
+      "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+      "@openai/codex@${CODEX_VERSION}" \
+      "opencode-ai@${OPENCODE_VERSION}" \
  && npm cache clean --force
 
 RUN npm install -g --no-fund --no-audit "pnpm@${PNPM_VERSION}" && npm cache clean --force

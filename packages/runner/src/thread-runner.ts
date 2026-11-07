@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
-import type { AgentAdapter, AgentSession, SessionOptions } from "./agents/index.ts";
+import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { EventStore } from "./event-store.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
 
@@ -26,6 +26,8 @@ export interface ThreadRunnerOptions {
   quietNoticeMs?: number;
   /** Stop a turn that runs longer than this. Default 4 hours. */
   turnTimeoutMs?: number;
+  /** Check the agent CLI's version at start and note it if older than the tested one. */
+  checkAgentVersion?: boolean;
 }
 
 const DEFAULT_QUIET_MS = 15 * 60_000;
@@ -152,6 +154,20 @@ export class ThreadRunner {
     }
     if (this.queue.length) this.publishQueue();
     this.startNext();
+    if (this.opts.checkAgentVersion) void this.checkVersion();
+  }
+
+  /** The agent CLI's version, once known (null if it couldn't be found out). */
+  agentVersion: string | null = null;
+
+  private async checkVersion(): Promise<void> {
+    const kind = this.opts.adapter.kind;
+    const tested = (TESTED_AGENTS as Record<string, { binary: string } | undefined>)[kind];
+    if (!tested) return;
+    const binary = this.opts.session.command?.[0] ?? tested.binary;
+    this.agentVersion = await detectVersion(binary);
+    const note = versionNotice(kind, this.agentVersion);
+    if (note && !this.closing) this.store.append({ type: "notice", code: "agent_older_than_tested", message: note });
   }
 
   /**

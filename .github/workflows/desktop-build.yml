@@ -2,7 +2,12 @@ name: Desktop build check
 
 # Builds the desktop app, unsigned, on every platform the release builds for, and keeps
 # the installers as workflow artifacts for a week. Run it by hand to check the Windows
-# and Linux builds (or try them on a machine) without tagging a release.
+# and Linux builds (or try them on a machine) without tagging a release. On Windows it
+# also installs the app and starts it, as a smoke test.
+#
+# With the update-signing key in the repository's secrets (TAURI_SIGNING_PRIVATE_KEY and
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD, see release.yml) it also makes the signed update
+# files a release ships, so signing is known to work before tagging.
 
 on:
   workflow_dispatch:
@@ -44,9 +49,40 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lemonlime/runner build:sea
-      # No signing keys here, so no update files: those are only made for releases.
-      - run: pnpm --filter @lemonlime/desktop tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      - name: Build
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          # Update files need the signing key; without it, build the installers only.
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            pnpm --filter @lemonlime/desktop tauri build ${{ matrix.args }}
+            count=$(find apps/desktop/src-tauri/target -path '*/release/bundle/*' -name '*.sig' | wc -l)
+            echo "Signed update files: $count"
+            [ "$count" -gt 0 ]
+          else
+            echo "No update-signing key in the repository's secrets: skipping update files."
+            pnpm --filter @lemonlime/desktop tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
+      - name: Install the app and start it (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem -Recurse -Path apps/desktop/src-tauri/target/release/bundle/msi -Filter *.msi | Select-Object -First 1
+          $install = Start-Process msiexec.exe -ArgumentList "/i `"$($msi.FullName)`" /qn /l*v install.log" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { Get-Content install.log -Tail 40; throw "The installer failed with exit code $($install.ExitCode)" }
+          $dir = @("$env:ProgramFiles\LemonLime", "$env:LOCALAPPDATA\LemonLime", "$env:LOCALAPPDATA\Programs\LemonLime") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $dir) { throw "Installed, but LemonLime's folder wasn't found" }
+          Get-ChildItem $dir | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          $runner = Get-ChildItem $dir -Filter "lemonlime-runner*.exe" | Select-Object -First 1
+          if (-not $runner) { throw "The bundled runner is missing" }
+          & $runner.FullName --help | Select-Object -First 1
+          $app = Start-Process (Join-Path $dir "lemonlime-desktop.exe") -PassThru
+          Start-Sleep -Seconds 20
+          if ($app.HasExited) { throw "The app quit within 20 seconds (exit code $($app.ExitCode))" }
+          Write-Host "LemonLime is still running after 20 seconds."
+          Stop-Process -Id $app.Id
       - uses: actions/upload-artifact@v4
         with:
           name: lemonlime-${{ matrix.name }}
@@ -58,4 +94,5 @@ jobs:
             apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
             apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
             apps/desktop/src-tauri/target/**/release/bundle/**/*.rpm
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.sig
           if-no-files-found: error

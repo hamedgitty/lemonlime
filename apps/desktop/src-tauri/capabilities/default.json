@@ -2,16 +2,32 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for the main LemonLime window.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "dialog:allow-open",
     "dialog:allow-ask",
     "dialog:allow-message",
     "opener:default",
     {
       "identifier": "http:default",
-      "allow": [{ "url": "http://*" }, { "url": "http://*:*" }, { "url": "https://*" }, { "url": "https://*:*" }]
+      "allow": [
+        {
+          "url": "http://*"
+        },
+        {
+          "url": "http://*:*"
+        },
+        {
+          "url": "https://*"
+        },
+        {
+          "url": "https://*:*"
+        }
+      ]
     }
   ]
 }

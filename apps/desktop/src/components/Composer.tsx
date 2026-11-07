@@ -1,35 +1,74 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, Square } from "lucide-react";
-import { Button, cx } from "./ui.tsx";
+import { Tip } from "./primitives.tsx";
+import { cx } from "./ui.tsx";
 
-export function Composer({
-  onSend,
-  onInterrupt,
-  working,
-  disabled,
-  disabledReason,
-}: {
-  onSend: (text: string) => void;
-  onInterrupt: () => void;
-  /** The agent is in the middle of a turn: show the interrupt button. */
-  working: boolean;
-  disabled: boolean;
-  disabledReason?: string | undefined;
-}) {
+export interface ComposerHandle {
+  /** Put text in the box (e.g. a one-click prompt) and focus it. */
+  fill(text: string): void;
+  focus(): void;
+}
+
+/**
+ * The message card: a growing text box with a toolbar inside it. `tools` sits bottom-left
+ * (agent and model pickers); the round send button turns lime once there's something
+ * to send. Used on the home screen and docked under a thread.
+ */
+export const Composer = forwardRef<
+  ComposerHandle,
+  {
+    onSend: (text: string) => void;
+    onInterrupt?: () => void;
+    /** The agent is in the middle of a turn: show the stop button. */
+    working?: boolean;
+    disabled?: boolean;
+    disabledReason?: string | undefined;
+    placeholder?: string;
+    tools?: ReactNode;
+    /** Keep the text after sending (e.g. while a thread is being created). */
+    busy?: boolean;
+    autoFocus?: boolean;
+  }
+>(function Composer({ onSend, onInterrupt, working = false, disabled = false, disabledReason, placeholder, tools, busy = false, autoFocus }, handle) {
   const [text, setText] = useState("");
   const ref = useRef<HTMLTextAreaElement>(null);
 
-  // Grow with the content up to a limit.
+  useImperativeHandle(handle, () => ({
+    fill(t: string) {
+      setText(t);
+      requestAnimationFrame(() => {
+        ref.current?.focus();
+        ref.current?.setSelectionRange(t.length, t.length);
+      });
+    },
+    focus: () => ref.current?.focus(),
+  }));
+
+  // Grow with the content up to a limit. Measure again when the width changes (the first
+  // layout can happen before the column has its final width, which wraps the placeholder).
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+    };
+    fit();
+    let width = el.offsetWidth;
+    const ro = new ResizeObserver(() => {
+      if (el.offsetWidth !== width) {
+        width = el.offsetWidth;
+        fit();
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [text]);
 
+  const canSend = !disabled && !busy && text.trim().length > 0;
   const submit = () => {
-    if (disabled || !text.trim()) return;
-    onSend(text);
+    if (!canSend) return;
+    onSend(text.trim());
     setText("");
     ref.current?.focus();
   };
@@ -39,61 +78,97 @@ export function Composer({
       e.preventDefault();
       submit();
     }
-    if (e.key === "Escape" && working) {
+    if (e.key === "Escape" && working && onInterrupt) {
       e.preventDefault();
       onInterrupt();
     }
   };
 
-  const canSend = !disabled && text.trim().length > 0;
-
   return (
-    <div className="border-t border-line bg-cream/80 px-6 pt-3 pb-4 backdrop-blur">
-      <div className="mx-auto max-w-[860px]">
-        <div
+    <div
+      className={cx(
+        "rounded-xl border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",
+        "focus-within:border-line-strong focus-within:shadow-[0_1px_2px_rgb(23_32_14/0.04),0_6px_20px_rgb(23_32_14/0.07)]",
+      )}
+    >
+      <label htmlFor="composer" className="sr-only">
+        Message the agent
+      </label>
+      <textarea
+        id="composer"
+        ref={ref}
+        rows={2}
+        value={text}
+        autoFocus={autoFocus}
+        onChange={e => setText(e.target.value)}
+        onKeyDown={onKeyDown}
+        disabled={disabled}
+        placeholder={
+          disabled ? (disabledReason ?? "Not connected") : (placeholder ?? (working ? "Add to the conversation…" : "Ask the agent to build anything…"))
+        }
+        className="block max-h-[260px] min-h-[56px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed"
+      />
+      <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-0.5">{tools}</div>
+        {working && onInterrupt && (
+          <Tip
+            label={
+              <>
+                Stop the agent <span className="font-normal opacity-75">Esc</span>
+              </>
+            }
+          >
+            <button
+              type="button"
+              onClick={onInterrupt}
+              aria-label="Stop the agent"
+              className="inline-flex size-[34px] items-center justify-center rounded-full border border-line-strong bg-paper text-ink hover:bg-cream"
+            >
+              <Square aria-hidden="true" className="size-3 fill-current" />
+            </button>
+          </Tip>
+        )}
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!canSend}
+          aria-label="Send message"
+          title="Send (Enter)"
           className={cx(
-            "flex items-end gap-2 rounded-2xl border bg-white p-2 pl-4 shadow-panel transition-[border-color,box-shadow] duration-150",
-            "border-control focus-within:border-leaf focus-within:shadow-[0_0_0_1px_var(--color-leaf)]",
+            "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full transition-colors duration-150",
+            canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
           )}
         >
-          <label htmlFor="composer" className="sr-only">
-            Message the agent
-          </label>
-          <textarea
-            id="composer"
-            ref={ref}
-            rows={1}
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={disabled ? (disabledReason ?? "Not connected") : working ? "Add to the conversation…" : "Ask the agent to do something…"}
-            aria-describedby="composer-hint"
-            className="max-h-60 min-h-[36px] flex-1 resize-none bg-transparent py-1.5 text-[14.5px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none"
-          />
-          {working && (
-            <Button variant="secondary" size="md" onClick={onInterrupt} aria-label="Interrupt the agent" title="Interrupt (Esc)">
-              <Square aria-hidden="true" className="size-3.5 fill-current" />
-              Stop
-            </Button>
-          )}
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!canSend}
-            aria-label="Send message"
-            title="Send (Enter)"
-            className={cx(
-              "inline-flex size-9.5 shrink-0 items-center justify-center rounded-xl border transition-colors",
-              canSend ? "border-[#e9c900] bg-lemon text-ink hover:bg-[#ffe84f]" : "border-line bg-cream-deep text-ink-faint",
-            )}
-          >
-            <ArrowUp aria-hidden="true" className="size-4.5" strokeWidth={2.4} />
-          </button>
-        </div>
-        <p id="composer-hint" className="mt-1.5 pl-1 text-xs text-ink-faint">
-          Enter to send, Shift+Enter for a new line{working ? ", Esc to stop the agent" : ""}
-        </p>
+          <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />
+        </button>
       </div>
     </div>
   );
-}
+});
+
+/** A quiet pill in the composer toolbar or under it: icon, label, chevron. */
+export const PickerButton = forwardRef<
+  HTMLButtonElement,
+  { icon?: ReactNode; children: ReactNode; chevron?: boolean; tone?: "plain" | "muted" } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function PickerButton({ icon, children, chevron = true, tone = "plain", className, ...rest }, ref) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      {...rest}
+      className={cx(
+        "inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-2 text-[14px] font-medium transition-colors duration-100 hover:bg-cream-deep data-[popup-open]:bg-cream-deep [&_svg]:size-4 [&_svg]:shrink-0",
+        tone === "muted" ? "text-ink-soft" : "text-ink",
+        className,
+      )}
+    >
+      {icon}
+      <span className="min-w-0 truncate">{children}</span>
+      {chevron && (
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="!size-3.5 text-ink-faint">
+          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )}
+    </button>
+  );
+});

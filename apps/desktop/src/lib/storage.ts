@@ -113,3 +113,39 @@ export function forgetEvents(threadId: string): void {
     /* ignore */
   }
 }
+
+// ── UI preferences (per computer) ─────────────────────────────
+
+const KEY_UI = "lemonlime:ui";
+
+export const NAV_ITEMS = ["new", "search"] as const;
+export type NavItem = (typeof NAV_ITEMS)[number];
+
+export const UiPrefs = z.object({
+  /** Sidebar nav items in order; those in `hiddenNav` are not shown. */
+  navOrder: z.array(z.enum(NAV_ITEMS)).default([...NAV_ITEMS]),
+  hiddenNav: z.array(z.enum(NAV_ITEMS)).default(["search"]),
+  organize: z.enum(["project", "place", "agent"]).default("project"),
+  sort: z.enum(["recent", "name"]).default("recent"),
+  pinned: z.array(z.string()).default([]),
+  sidebarCollapsed: z.boolean().default(false),
+  /** Projects (repository folders) used for local threads, most recent first. */
+  recentProjects: z.array(z.string()).default([]),
+  /** Last agent and place chosen in the composer. */
+  lastAgent: z.enum(["claude-code", "codex", "opencode", "acp"]).default("claude-code"),
+  lastPlace: z.enum(["local", "cloud"]).default("local"),
+  rightPanel: z.boolean().default(false),
+});
+export type UiPrefs = z.infer<typeof UiPrefs>;
+
+export function loadUiPrefs(): UiPrefs {
+  const r = UiPrefs.safeParse(read(KEY_UI) ?? {});
+  if (!r.success) return UiPrefs.parse({});
+  // Keep every nav item exactly once, even after an update adds new ones.
+  const order = [...new Set([...r.data.navOrder, ...NAV_ITEMS])].filter(i => (NAV_ITEMS as readonly string[]).includes(i));
+  return { ...r.data, navOrder: order as NavItem[] };
+}
+
+export function saveUiPrefs(p: UiPrefs): void {
+  write(KEY_UI, p);
+}

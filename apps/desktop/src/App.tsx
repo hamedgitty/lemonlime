@@ -1,33 +1,70 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Cloud, Laptop, Plus } from "lucide-react";
+import { PanelLeft } from "lucide-react";
 import { branchForThread, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { AppSidebar } from "./components/AppSidebar.tsx";
+import { Home } from "./components/Home.tsx";
+import { TipProvider } from "./components/primitives.tsx";
+import { SettingsSidebar, SettingsView, type SettingsPage } from "./components/SettingsView.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
-import { SettingsView } from "./components/SettingsView.tsx";
-import { DeniedError, NewThreadDialog, type NewThreadInput } from "./components/NewThreadDialog.tsx";
-import { Button, LogoMark, cx, openExternal } from "./components/ui.tsx";
-import { forgetEvents, loadLocalThreads, loadSettings, saveLocalThreads, saveSettings, type LocalThreadMeta, type Settings } from "./lib/storage.ts";
+import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
-import { inDesktopShell, listLocalRunners, removeLocalThread, stopLocalRunner } from "./lib/native.ts";
-import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
+import { inDesktopShell, listLocalRunners, removeLocalThread, stopLocalRunner } from "./lib/native.ts";
+import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
+import {
+  forgetEvents,
+  loadLocalThreads,
+  loadSettings,
+  loadUiPrefs,
+  saveLocalThreads,
+  saveSettings,
+  saveUiPrefs,
+  type LocalThreadMeta,
+  type Settings,
+  type UiPrefs,
+} from "./lib/storage.ts";
+import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 
 type Selection = { mode: "local" | "cloud"; id: string };
-type View = "home" | "thread" | "settings";
+/** Where the app is. Back and forward move through these. */
+type Place = { view: "home" } | { view: "thread"; selection: Selection } | { view: "settings"; page: SettingsPage };
 
 const CLOUD_REFRESH_MS = 15_000;
 const RUNNER_POLL_MS = 5_000;
 
+/** The macOS app window draws its traffic lights over the sidebar. */
+const MAC_CHROME = inDesktopShell() && /Mac/.test(navigator.userAgent);
+
 export function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [prefs, setPrefs] = useState<UiPrefs>(loadUiPrefs);
   const [localThreads, setLocalThreads] = useState<LocalThreadMeta[]>(loadLocalThreads);
   const [cloudThreads, setCloudThreads] = useState<Thread[]>([]);
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [running, setRunning] = useState<Set<string>>(new Set());
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [view, setView] = useState<View>("home");
-  const [newOpen, setNewOpen] = useState(false);
+  const [history, setHistory] = useState<{ stack: Place[]; at: number }>({ stack: [{ view: "home" }], at: 0 });
+  const [searchOpen, setSearchOpen] = useState(false);
+  const place = history.stack[history.at]!;
+
+  const go = useCallback((next: Place) => {
+    setHistory(h => {
+      const cur = h.stack[h.at];
+      if (cur && JSON.stringify(cur) === JSON.stringify(next)) return h;
+      const stack = [...h.stack.slice(0, h.at + 1), next].slice(-50);
+      return { stack, at: stack.length - 1 };
+    });
+  }, []);
+  const back = history.at > 0 ? () => setHistory(h => ({ ...h, at: h.at - 1 })) : null;
+  const forward = history.at < history.stack.length - 1 ? () => setHistory(h => ({ ...h, at: h.at + 1 })) : null;
+
+  const onPrefs = useCallback((patch: Partial<UiPrefs>) => {
+    setPrefs(p => {
+      const next = { ...p, ...patch };
+      saveUiPrefs(next);
+      return next;
+    });
+  }, []);
 
   const cloudConfigured = isCloudConfigured(settings);
   const cloudApi = useMemo(
@@ -75,7 +112,7 @@ export function App() {
     return () => clearInterval(t);
   }, [cloudApi, refreshCloud]);
 
-  // The deployment's usage banner (e.g. running low on cloud hours), refreshed with the thread list.
+  // The deployment's usage banner (e.g. running low on cloud hours).
   const [usage, setUsage] = useState<Awaited<ReturnType<CloudApi["usageNotice"]>>>(null);
   useEffect(() => {
     if (!cloudApi) {
@@ -130,10 +167,9 @@ export function App() {
       void stop.catch(err => console.warn("Could not clean up the thread", err)).finally(refreshRunners);
       forgetEvents(id);
       setLocalThreads(list => list.filter(m => m.id !== id));
-      setSelection(s => (s?.id === id ? null : s));
-      setView(v => (v === "thread" ? "home" : v));
+      go({ view: "home" });
     },
-    [refreshRunners, localThreads, settings.runnerPath],
+    [refreshRunners, localThreads, settings.runnerPath, go],
   );
 
   // ── Creating threads ─────────────────────────────────────
@@ -161,13 +197,11 @@ export function App() {
         updatedAt: now,
       };
       setLocalThreads(list => [meta, ...list]);
-      setSelection({ mode: "local", id });
-      setView("thread");
-      setNewOpen(false);
+      go({ view: "thread", selection: { mode: "local", id } });
       return;
     }
 
-    if (!cloudApi) throw new Error("Connect a control plane in Settings first.");
+    if (!cloudApi) throw new Error("Connect a cloud account in Settings first.");
     try {
       const created = await cloudApi.createThread({
         ...(input.title || input.prompt ? { title: input.title || titleFromPrompt(input.prompt ?? "") } : {}),
@@ -178,9 +212,7 @@ export function App() {
         ...(input.prompt ? { prompt: input.prompt } : {}),
       });
       setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
-      setSelection({ mode: "cloud", id: created.thread.id });
-      setView("thread");
-      setNewOpen(false);
+      go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
     } catch (err) {
       if (err instanceof CloudError && err.denial) throw new DeniedError(err.denial);
       throw err;
@@ -192,25 +224,47 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       if (!mod || e.altKey) return;
-      if (e.key.toLowerCase() === "n") {
+      const k = e.key.toLowerCase();
+      if (k === "n") {
         e.preventDefault();
-        setNewOpen(true);
-      } else if (e.key === ",") {
+        go({ view: "home" });
+      } else if (k === ",") {
         e.preventDefault();
-        setView("settings");
+        go({ view: "settings", page: "account" });
+      } else if (k === "k") {
+        e.preventDefault();
+        onPrefs({ sidebarCollapsed: false });
+        setSearchOpen(true);
+      } else if (k === "\\") {
+        e.preventDefault();
+        setPrefs(p => {
+          const next = { ...p, sidebarCollapsed: !p.sidebarCollapsed };
+          saveUiPrefs(next);
+          return next;
+        });
+      } else if (k === "[") {
+        e.preventDefault();
+        setHistory(h => (h.at > 0 ? { ...h, at: h.at - 1 } : h));
+      } else if (k === "]") {
+        e.preventDefault();
+        setHistory(h => (h.at < h.stack.length - 1 ? { ...h, at: h.at + 1 } : h));
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [go, onPrefs]);
 
   // ── Derived lists ────────────────────────────────────────
-  const localSummaries = useMemo(
-    () => sortByActivity(localThreads.map(meta => summarize({ mode: "local", meta }, running.has(meta.id)))),
-    [localThreads, running],
+  const summaries = useMemo(
+    () =>
+      sortByActivity([
+        ...localThreads.map(meta => summarize({ mode: "local", meta }, running.has(meta.id))),
+        ...cloudThreads.map(thread => summarize({ mode: "cloud", thread }, true)),
+      ]),
+    [localThreads, cloudThreads, running],
   );
-  const cloudSummaries = useMemo(() => sortByActivity(cloudThreads.map(thread => summarize({ mode: "cloud", thread }, true))), [cloudThreads]);
 
+  const selection = place.view === "thread" ? place.selection : null;
   const selectedEntry: ThreadEntry | null = useMemo(() => {
     if (!selection) return null;
     if (selection.mode === "local") {
@@ -221,120 +275,109 @@ export function App() {
     return thread ? { mode: "cloud", thread } : null;
   }, [selection, localThreads, cloudThreads]);
 
-  const select = (t: ThreadSummary) => {
-    setSelection({ mode: t.mode, id: t.id });
-    setView("thread");
-  };
-
   const saveAll = (s: Settings) => {
     saveSettings(s);
     setSettings(s);
   };
 
-  return (
-    <div className="flex h-full overflow-hidden">
-      <Sidebar
-        local={localSummaries}
-        cloud={cloudSummaries}
+  const sidebar =
+    place.view === "settings" ? (
+      <SettingsSidebar
+        page={place.page}
+        onPage={page => go({ view: "settings", page })}
+        onBack={() => go(selection ? { view: "thread", selection } : { view: "home" })}
+      />
+    ) : prefs.sidebarCollapsed ? null : (
+      <AppSidebar
+        threads={summaries}
         cloudConfigured={cloudConfigured}
         cloudLoading={cloudLoading}
         cloudError={cloudError}
-        selectedId={view === "thread" ? (selection?.id ?? null) : null}
-        settingsOpen={view === "settings"}
-        onSelect={select}
-        onNew={() => setNewOpen(true)}
-        onSettings={() => setView("settings")}
-        onRefreshCloud={refreshCloud}
+        selectedId={selection?.id ?? null}
+        prefs={prefs}
+        onPrefs={onPrefs}
+        onSelect={(t: ThreadSummary) => go({ view: "thread", selection: { mode: t.mode, id: t.id } })}
+        onNew={() => go({ view: "home" })}
+        onSettings={page => go({ view: "settings", page: (page as SettingsPage) ?? "account" })}
+        onBack={back}
+        onForward={forward}
+        macChrome={MAC_CHROME}
+        searchOpen={searchOpen}
+        onSearchOpen={setSearchOpen}
       />
+    );
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {usage && (
-          <div
-            role={usage.level === "info" ? "status" : "alert"}
-            className={cx(
-              "flex items-center gap-3 border-b px-5 py-2 text-[13.5px]",
-              usage.level === "blocked"
-                ? "border-danger/25 bg-danger-soft"
-                : usage.level === "warning"
-                  ? "border-[#f0d95c] bg-lemon-soft"
-                  : "border-line bg-cream-deep/60",
-            )}
-          >
-            <p className="min-w-0 flex-1 text-ink">{usage.message}</p>
-            {usage.actionUrl && (
-              <Button size="sm" variant="primary" onClick={() => void openExternal(usage.actionUrl!)}>
-                {usage.actionLabel ?? "Continue"}
-              </Button>
-            )}
-          </div>
-        )}
-        <div className="flex min-h-0 flex-1">
-          {view === "settings" ? (
-            <SettingsView settings={settings} onSave={saveAll} />
-          ) : view === "thread" && selectedEntry ? (
-            <ThreadView
-              key={`${selectedEntry.mode}:${selection?.id}`}
-              entry={selectedEntry}
-              runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
-              runnerPath={settings.runnerPath}
-              cloudApi={cloudApi}
-              onLocalProgress={onLocalProgress}
-              onLocalStatus={onLocalStatus}
-              onLocalPromptSent={onLocalPromptSent}
-              onStopLocal={onStopLocal}
-              onRemoveLocal={onRemoveLocal}
-              onCloudRefresh={refreshCloud}
-              onRunnersChanged={refreshRunners}
-            />
-          ) : (
-            <Home onNew={() => setNewOpen(true)} hasThreads={localThreads.length + cloudThreads.length > 0} />
-          )}
-        </div>
-      </div>
-
-      {newOpen && <NewThreadDialog cloudAvailable={cloudConfigured} onCancel={() => setNewOpen(false)} onCreate={createThread} />}
-    </div>
-  );
-}
-
-function Home({ onNew, hasThreads }: { onNew: () => void; hasThreads: boolean }) {
-  const shell = inDesktopShell();
-  const mod = navigator.userAgent.includes("Mac") ? "Cmd" : "Ctrl";
   return (
-    <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-10">
-      <div className="flex max-w-[520px] flex-col items-center text-center">
-        <LogoMark size={56} />
-        <h1 className="mt-6 text-[34px] leading-tight font-semibold text-ink">Your coding agents keep working after you close your laptop.</h1>
-        <p className="mt-3 text-[15px] text-ink-soft">
-          Start a thread with Claude Code, Codex, OpenCode or any ACP agent. Each thread works on its own branch, with your own model accounts.
-        </p>
-        <div className="mt-7 flex items-center gap-3">
-          <Button variant="primary" onClick={onNew}>
-            <Plus aria-hidden="true" className="size-4" strokeWidth={2.4} />
-            New thread
-          </Button>
-          <span className="text-[13px] text-ink-faint">or press {mod}+N</span>
-        </div>
-        <div className="mt-10 grid w-full grid-cols-2 gap-3 text-left">
-          <div className="rounded-2xl border border-line bg-white p-4 shadow-panel">
-            <Laptop aria-hidden="true" className="size-5 text-leaf" />
-            <p className="mt-2 font-medium text-ink">On this computer</p>
-            <p className="mt-0.5 text-[13px] text-ink-soft">The agent runs in a repository folder you pick, next to your tools.</p>
+    <TipProvider>
+      <div className="flex h-full overflow-hidden">
+        {sidebar}
+        <div className="relative flex min-w-0 flex-1 flex-col">
+          {prefs.sidebarCollapsed && place.view !== "settings" && (
+            <button
+              type="button"
+              aria-label="Show sidebar"
+              title="Show sidebar (⌘\)"
+              onClick={() => onPrefs({ sidebarCollapsed: false })}
+              className={cx(
+                "absolute top-3 z-10 inline-flex size-8 items-center justify-center rounded-full border border-line bg-cream text-ink-soft hover:text-ink",
+                MAC_CHROME ? "left-[84px]" : "left-3",
+              )}
+            >
+              <PanelLeft aria-hidden="true" className="size-4" />
+            </button>
+          )}
+          {usage && (
+            <div
+              role={usage.level === "info" ? "status" : "alert"}
+              className={cx(
+                "flex items-center gap-3 border-b px-6 py-2.5 text-[14px]",
+                usage.level === "blocked"
+                  ? "border-danger/25 bg-danger-soft"
+                  : usage.level === "warning"
+                    ? "border-[#f0d95c] bg-lemon-soft"
+                    : "border-line bg-cream-deep",
+              )}
+            >
+              <p className="min-w-0 flex-1 text-ink">{usage.message}</p>
+              {usage.actionUrl && (
+                <Button size="sm" variant="primary" onClick={() => void openExternal(usage.actionUrl!)}>
+                  {usage.actionLabel ?? "Continue"}
+                </Button>
+              )}
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1">
+            {place.view === "settings" ? (
+              <SettingsView page={place.page} settings={settings} onSave={saveAll} prefs={prefs} onPrefs={onPrefs} />
+            ) : place.view === "thread" && selectedEntry ? (
+              <ThreadView
+                key={`${selectedEntry.mode}:${selection?.id}`}
+                entry={selectedEntry}
+                runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
+                runnerPath={settings.runnerPath}
+                cloudApi={cloudApi}
+                onLocalProgress={onLocalProgress}
+                onLocalStatus={onLocalStatus}
+                onLocalPromptSent={onLocalPromptSent}
+                onStopLocal={onStopLocal}
+                onRemoveLocal={onRemoveLocal}
+                onCloudRefresh={refreshCloud}
+                onRunnersChanged={refreshRunners}
+              />
+            ) : (
+              <Home
+                cloudAvailable={cloudConfigured}
+                threadCount={summaries.length}
+                prefs={prefs}
+                onPrefs={onPrefs}
+                onCreate={createThread}
+                onConnectCloud={() => go({ view: "settings", page: "account" })}
+              />
+            )}
           </div>
-          <div className="rounded-2xl border border-line bg-white p-4 shadow-panel">
-            <Cloud aria-hidden="true" className="size-5 text-leaf" />
-            <p className="mt-2 font-medium text-ink">In the cloud</p>
-            <p className="mt-0.5 text-[13px] text-ink-soft">An isolated sandbox that pauses itself when the agent is idle.</p>
-          </div>
         </div>
-        {!shell && (
-          <p className="mt-6 rounded-lg bg-lemon-soft px-3 py-2 text-[13px] text-ink">
-            You are viewing the app in a browser. Run <span className="font-mono text-[12.5px]">pnpm tauri dev</span> for local threads.
-          </p>
-        )}
-        {hasThreads && <p className="mt-6 text-[13px] text-ink-faint">Pick a thread on the left to continue.</p>}
       </div>
-    </main>
+    </TipProvider>
   );
 }
 

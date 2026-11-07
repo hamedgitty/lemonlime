@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cloud, ExternalLink, GitBranch, Laptop, Pause, Play, Power, RotateCw, Trash2 } from "lucide-react";
+import { Bot, Cloud, Ellipsis, ExternalLink, FileDiff, GitBranch, Laptop, PanelRight, Pause, Play, Power, RotateCw, Trash2, X } from "lucide-react";
 import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
@@ -10,6 +10,8 @@ import { CloudError, type CloudApi } from "../lib/cloud.ts";
 import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Composer } from "./Composer.tsx";
+import { DiffView } from "./DiffView.tsx";
+import { Menu, MenuItem, Tip } from "./primitives.tsx";
 import { Button, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface ThreadViewProps {
@@ -132,110 +134,215 @@ function ThreadSessionView({
   };
 
   const errorText = actionError ?? session.error;
+  const [panelOpen, setPanelOpen] = useState(false);
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col" aria-label={`Thread ${summary.title}`}>
-      <header className="flex items-start gap-4 border-b border-line bg-white/70 px-6 py-3.5 backdrop-blur">
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[19px] font-semibold text-ink">{summary.title}</h1>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-ink-soft">
-            <span className="inline-flex items-center gap-1.5">
-              {summary.mode === "local" ? <Laptop aria-hidden="true" className="size-3.5" /> : <Cloud aria-hidden="true" className="size-3.5" />}
-              {summary.mode === "local" ? "This computer" : "Cloud"}
-            </span>
-            <span>
-              {AGENT_LABELS[summary.agent.kind]}
-              {summary.agent.model ? ` · ${summary.agent.model}` : ""}
-            </span>
-            <span className="truncate" title={summary.repo}>
-              {repoName(summary.repo)}
-            </span>
-            <span className="inline-flex items-center gap-1 rounded-md bg-cream-deep px-1.5 py-0.5 font-mono text-[12px] text-ink">
-              <GitBranch aria-hidden="true" className="size-3 text-leaf" />
-              {summary.branch}
+    <div className="flex min-w-0 flex-1">
+      <section className="flex min-w-0 flex-1 flex-col" aria-label={`Thread ${summary.title}`}>
+        <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+          <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2.5">
+            <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
+            <span className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex" title={summary.repo}>
+              {summary.mode === "local" ? (
+                <Laptop aria-hidden="true" className="size-3.5 shrink-0" />
+              ) : (
+                <Cloud aria-hidden="true" className="size-3.5 shrink-0" />
+              )}
+              <span className="truncate">{repoName(summary.repo)}</span>
             </span>
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 pt-0.5">
           <ConnectionBadge state={session.state} status={liveStatus} />
           {entry.mode === "local" ? (
-            <>
-              {session.state === "offline" || session.state === "error" ? (
-                <Button size="sm" onClick={session.restart} disabled={busy}>
-                  <Play aria-hidden="true" className="size-3.5" />
-                  Start runner
-                </Button>
-              ) : (
-                <Button size="sm" onClick={stopLocal} disabled={busy || session.state === "starting"}>
-                  <Power aria-hidden="true" className="size-3.5" />
-                  Stop runner
-                </Button>
-              )}
-              <Button size="sm" variant="ghost" onClick={removeLocal} aria-label="Remove thread" title="Remove thread">
-                <Trash2 aria-hidden="true" className="size-3.5" />
+            session.state === "offline" || session.state === "error" ? (
+              <Button size="sm" variant="ghost" onClick={session.restart} disabled={busy}>
+                <Play aria-hidden="true" className="size-3.5" />
+                Start
               </Button>
-            </>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={stopLocal} disabled={busy || session.state === "starting"}>
+                <Power aria-hidden="true" className="size-3.5" />
+                Stop
+              </Button>
+            )
           ) : cloudStatus === "paused" || cloudStatus === "stopped" ? (
-            <Button size="sm" onClick={resumeCloud} disabled={busy}>
+            <Button size="sm" variant="ghost" onClick={resumeCloud} disabled={busy}>
               <Play aria-hidden="true" className="size-3.5" />
               Resume
             </Button>
           ) : (
-            <Button size="sm" onClick={pauseCloud} disabled={busy || cloudStatus === "provisioning" || cloudStatus === "failed"}>
+            <Button size="sm" variant="ghost" onClick={pauseCloud} disabled={busy || cloudStatus === "provisioning" || cloudStatus === "failed"}>
               <Pause aria-hidden="true" className="size-3.5" />
               Pause
             </Button>
           )}
-        </div>
-      </header>
-
-      {denial && (
-        <div className="flex items-center gap-3 border-b border-[#f0d95c] bg-lemon-soft px-6 py-2.5 text-[13.5px] text-ink" role="alert">
-          <p className="min-w-0 flex-1">{denial.reason}</p>
-          {denial.actionUrl && (
-            <Button size="sm" variant="secondary" onClick={() => void openExternal(denial.actionUrl!)}>
-              {denial.actionLabel || "Learn more"}
-              <ExternalLink aria-hidden="true" className="size-3.5" />
-            </Button>
+          {entry.mode === "local" && (
+            <Menu
+              align="end"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="Thread options"
+                  className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep data-[popup-open]:bg-cream-deep"
+                >
+                  <Ellipsis aria-hidden="true" className="size-4" />
+                </button>
+              }
+            >
+              <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
+                Remove thread
+              </MenuItem>
+            </Menu>
           )}
+          <Tip label={panelOpen ? "Hide changes" : "Show changes"} side="bottom">
+            <button
+              type="button"
+              aria-label={panelOpen ? "Hide changes" : "Show changes"}
+              aria-pressed={panelOpen}
+              onClick={() => setPanelOpen(o => !o)}
+              className={cx(
+                "inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep",
+                panelOpen && "bg-cream-deep text-ink",
+              )}
+            >
+              <PanelRight aria-hidden="true" className="size-4" />
+            </button>
+          </Tip>
+        </header>
+
+        {denial && (
+          <div className="flex items-center gap-3 border-b border-[#f0d95c] bg-lemon-soft px-6 py-2.5 text-[13.5px] text-ink" role="alert">
+            <p className="min-w-0 flex-1">{denial.reason}</p>
+            {denial.actionUrl && (
+              <Button size="sm" variant="secondary" onClick={() => void openExternal(denial.actionUrl!)}>
+                {denial.actionLabel || "Learn more"}
+                <ExternalLink aria-hidden="true" className="size-3.5" />
+              </Button>
+            )}
+          </div>
+        )}
+
+        {errorText && (
+          <div className="flex items-center gap-3 border-b border-danger/20 bg-danger-soft px-6 py-2.5 text-[13.5px]" role="alert">
+            <p className="min-w-0 flex-1 text-ink">{errorText}</p>
+            {(session.state === "error" || session.state === "offline") && (
+              <Button size="sm" variant="secondary" onClick={session.restart}>
+                <RotateCw aria-hidden="true" className="size-3.5" />
+                Try again
+              </Button>
+            )}
+          </div>
+        )}
+
+        <Timeline
+          items={items}
+          working={working && items[items.length - 1]?.kind !== "agent"}
+          empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
+          onApprove={session.approve}
+        />
+
+        <div className="shrink-0 px-6 pt-2 pb-5">
+          <div className="mx-auto max-w-[760px]">
+            <Composer
+              onSend={session.send}
+              onInterrupt={session.interrupt}
+              working={working}
+              disabled={composerDisabled}
+              tools={
+                <span className="flex min-w-0 items-center gap-3 px-2 text-[13.5px] text-ink-soft">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Bot aria-hidden="true" className="size-4" />
+                    {AGENT_LABELS[summary.agent.kind]}
+                    {summary.agent.model ? <span className="text-ink-faint">{summary.agent.model}</span> : null}
+                  </span>
+                  <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[12.5px]">
+                    <GitBranch aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />
+                    <span className="truncate">{summary.branch}</span>
+                  </span>
+                </span>
+              }
+              disabledReason={
+                session.state === "starting"
+                  ? summary.mode === "local"
+                    ? "Starting the runner…"
+                    : "Connecting…"
+                  : summary.mode === "cloud" && cloudStatus === "paused"
+                    ? "This sandbox is paused. Send a message to wake it."
+                    : "Not connected"
+              }
+            />
+          </div>
         </div>
-      )}
+      </section>
+      {panelOpen && <ChangesPanel events={session.events} onClose={() => setPanelOpen(false)} />}
+    </div>
+  );
+}
 
-      {errorText && (
-        <div className="flex items-center gap-3 border-b border-danger/20 bg-danger-soft px-6 py-2.5 text-[13.5px]" role="alert">
-          <p className="min-w-0 flex-1 text-ink">{errorText}</p>
-          {(session.state === "error" || session.state === "offline") && (
-            <Button size="sm" variant="secondary" onClick={session.restart}>
-              <RotateCw aria-hidden="true" className="size-3.5" />
-              Try again
-            </Button>
-          )}
-        </div>
-      )}
-
-      <Timeline
-        items={items}
-        working={working && items[items.length - 1]?.kind !== "agent"}
-        empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
-        onApprove={session.approve}
-      />
-
-      <Composer
-        onSend={session.send}
-        onInterrupt={session.interrupt}
-        working={working}
-        disabled={composerDisabled}
-        disabledReason={
-          session.state === "starting"
-            ? summary.mode === "local"
-              ? "Starting the runner…"
-              : "Connecting…"
-            : summary.mode === "cloud" && cloudStatus === "paused"
-              ? "This sandbox is paused. Send a message to wake it."
-              : "Not connected"
-        }
-      />
-    </section>
+/** The right panel: every file the agent changed in this thread, latest diff first. */
+function ChangesPanel({ events, onClose }: { events: ReturnType<typeof useThreadSession>["events"]; onClose: () => void }) {
+  const files = useMemo(() => {
+    const latest = new Map<string, Extract<(typeof events)[number], { type: "file_diff" }>>();
+    for (const e of events) if (e.type === "file_diff") latest.set(e.path, e);
+    return [...latest.values()].reverse();
+  }, [events]);
+  const [open, setOpen] = useState<string | null>(null);
+  const shown = files.find(f => f.path === open);
+  return (
+    <aside aria-label="Changes" className="flex w-[380px] shrink-0 flex-col border-l border-line bg-cream">
+      <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3">
+        <span className="inline-flex h-[30px] items-center gap-2 rounded-lg bg-cream-deep px-2.5 text-[14px] font-medium">
+          <FileDiff aria-hidden="true" className="size-3.5" />
+          Changes
+          {files.length > 0 && <span className="text-ink-faint tabular-nums">{files.length}</span>}
+        </span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          aria-label="Close panel"
+          onClick={onClose}
+          className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep"
+        >
+          <X aria-hidden="true" className="size-4" />
+        </button>
+      </div>
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-2">
+        {files.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
+            Files the agent changes show up here after each turn.
+          </p>
+        ) : shown ? (
+          <div>
+            <button
+              type="button"
+              onClick={() => setOpen(null)}
+              className="mb-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13.5px] text-ink-soft hover:bg-cream-deep"
+            >
+              ← All files
+            </button>
+            <DiffView path={shown.path} change={shown.change} diff={shown.diff} truncated={shown.truncated} />
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-px">
+            {files.map(f => (
+              <li key={f.path}>
+                <button
+                  type="button"
+                  onClick={() => setOpen(f.path)}
+                  className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left hover:bg-cream-deep"
+                >
+                  <span
+                    className={cx("size-1.5 shrink-0 rounded-full", f.change === "added" ? "bg-lime-2" : f.change === "deleted" ? "bg-danger" : "bg-lemon-2")}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{f.path}</span>
+                  <span className="shrink-0 text-[12.5px] text-ink-faint">{f.change}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </aside>
   );
 }
 

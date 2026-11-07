@@ -11,6 +11,7 @@ import { secretsFromEnv } from "./redact.ts";
 import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
 import type { AgentCredential } from "./login.ts";
 import { startHeartbeat } from "./heartbeat.ts";
+import { formatGb, MemoryGuard } from "./memory-guard.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { RUNNER_VERSION } from "./version.ts";
@@ -41,6 +42,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable).
                            Skills in ~/.lemonlime/skills are always copied too.
   --no-bundled-skills      Don't copy LemonLime's own skills into the thread
+  --memory-limit-mb <n>    Local threads: stop the agent when what it started uses more
+                           than this much memory (default: half the computer's)
   --no-git                 Don't manage a branch or commit changes
   -h, --help               Show this help
 
@@ -120,6 +123,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       "no-git": { type: "boolean", default: false },
       skills: { type: "string", multiple: true },
       "no-bundled-skills": { type: "boolean", default: false },
+      "memory-limit-mb": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
@@ -209,7 +213,32 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   // Machine-readable line for parent processes (e.g. the desktop app) that asked for port 0.
   process.stdout.write(JSON.stringify({ event: "ready", port: server.port }) + "\n");
 
+  // Local threads share the user's computer; cloud sandboxes have their own hard limit.
+  const memoryGuard = sourceRepo
+    ? new MemoryGuard({
+        ...(values["memory-limit-mb"] ? { limitBytes: Number(values["memory-limit-mb"]) * 1024 * 1024 } : {}),
+        onOver: ({ usedBytes, limitBytes, biggest }) => {
+          runner.interrupt();
+          runner.store.append({
+            type: "notice",
+            code: "memory_limit",
+            message: `Stopped the agent: the programs it started were using ${formatGb(usedBytes)} of memory, more than ${formatGb(limitBytes)} (half this computer's)${biggest ? `, mostly ${biggest.name}` : ""}. Ask it to try a lighter approach, or send a message to carry on.`,
+          });
+          log(`memory limit: ${formatGb(usedBytes)} used, limit ${formatGb(limitBytes)}`);
+        },
+        onKilled: p => {
+          runner.store.append({
+            type: "notice",
+            code: "memory_limit_killed",
+            message: `${p.name} was still using ${formatGb(p.rss)} after the agent stopped, so it was closed.`,
+          });
+          log(`memory limit: stopped ${p.name} (${p.pid})`);
+        },
+      }).start()
+    : null;
+
   const shutdown = async (code = 0) => {
+    memoryGuard?.stop();
     // Drain on the way out: one last history upload, bounded so a stop is never held up long.
     if (heartbeat) await Promise.race([heartbeat.beat(), new Promise(r => setTimeout(r, 5000))]);
     heartbeat?.stop();

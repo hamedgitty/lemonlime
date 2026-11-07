@@ -74,6 +74,14 @@ Environment:
   restart it commits whatever the agent left behind, records an error with code
   `turn_outcome_unknown`, then carries on with the queue.
 
+## Memory on your computer
+
+Local threads share your computer, so the runner watches the memory used by everything
+the agent starts (the agent, builds, dev servers). Past half the computer's memory it
+stops the agent's turn and says why in the thread; if the programs left behind are still
+over at the next check, it closes the biggest one. `--memory-limit-mb` sets a different
+limit. Cloud sandboxes have their own fixed memory instead.
+
 ## Skills
 
 Every thread gets LemonLime's bundled skills (`packages/runner/skills`), copied to where

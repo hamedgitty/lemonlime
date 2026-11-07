@@ -15,3 +15,4 @@ export { isSingleExecutable, selfCommand } from "./self.ts";
 export { runApprovalMcp } from "./approval-mcp.ts";
 export { BUNDLED_SKILLS_DIR, installSkills, listSkills, skillsDirFor } from "./skills.ts";
 export * from "./agents/index.ts";
+export { MemoryGuard, descendants, listProcesses, type Proc } from "./memory-guard.ts";

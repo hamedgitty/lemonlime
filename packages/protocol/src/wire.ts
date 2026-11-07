@@ -51,6 +51,11 @@ export const ClientEditQueue = z.object({
 });
 export type ClientEditQueue = z.infer<typeof ClientEditQueue>;
 
+/** Go back to the user message at `toSeq` (see RewindEvent); optionally put files back too. */
+export const ClientRewind = z.object({ type: z.literal("rewind"), toSeq: z.number().int().positive(), restoreFiles: z.boolean().default(false) });
+/** Ask the agent to shrink its conversation (agents that support it). */
+export const ClientCompact = z.object({ type: z.literal("compact") });
+
 /**
  * Sign the agent in to the user's own model account (cloud sandboxes). Login traffic uses
  * these messages only and never becomes part of the thread's history.
@@ -70,6 +75,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientLoginInput,
   ClientCancelLogin,
   ClientEditQueue,
+  ClientRewind,
+  ClientCompact,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

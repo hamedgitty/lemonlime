@@ -169,4 +169,19 @@ describe("contiguousSeq / latestStatus", () => {
     seq = 0;
     expect(latestStatus([ev({ type: "status_change", from: "idle", to: "running" }), ev({ type: "status_change", from: "running", to: "idle" })])).toBe("idle");
   });
+
+  it("hides what a rewind set aside, and marks which messages can restore files", () => {
+    seq = 0;
+    const items = buildTimeline([
+      ev({ type: "user_message", text: "one", commit: "c0" }),
+      ev({ type: "agent_message", text: "did one", partial: false }),
+      ev({ type: "user_message", text: "two", commit: "c1" }),
+      ev({ type: "agent_message", text: "did two", partial: false }),
+      ev({ type: "rewind", toSeq: 3 }),
+      ev({ type: "user_message", text: "two, again" }),
+    ]);
+    expect(items.map(i => (i.kind === "user" || i.kind === "agent" ? i.text : i.kind))).toEqual(["one", "did one", "notice", "two, again"]);
+    expect(items[0]).toMatchObject({ kind: "user", restorable: true });
+    expect(items[3]).not.toHaveProperty("restorable");
+  });
 });

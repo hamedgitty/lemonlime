@@ -71,4 +71,17 @@ describe("diffLines", () => {
     const kinds = diffLines("--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n keep\n-old\n+new\n").map(l => l.kind);
     expect(kinds).toEqual(["meta", "meta", "hunk", "context", "del", "add"]);
   });
+
+  it("leaves out what a rewind set aside, and says where it happened", () => {
+    seq = 0;
+    const items = buildTimeline([
+      ev({ type: "user_message", text: "one" }),
+      ev({ type: "agent_message", text: "did one", partial: false }),
+      ev({ type: "user_message", text: "two" }),
+      ev({ type: "agent_message", text: "did two", partial: false }),
+      ev({ type: "rewind", toSeq: 3, restoredTo: "abc123" }),
+      ev({ type: "user_message", text: "two, again" }),
+    ]);
+    expect(items.map(i => (i.kind === "user" || i.kind === "agent" ? i.text : i.kind))).toEqual(["one", "did one", "notice", "two, again"]);
+  });
 });

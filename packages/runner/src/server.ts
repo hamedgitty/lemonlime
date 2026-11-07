@@ -153,6 +153,14 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       case "interrupt":
         runner.interrupt();
         break;
+      case "rewind":
+        void runner.rewind(msg.toSeq, msg.restoreFiles).then(r => {
+          if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+        });
+        break;
+      case "compact":
+        if (!runner.compact()) send({ type: "error", code: "bad_request", message: "This agent can't compact its conversation." });
+        break;
       case "edit_queue": {
         const change =
           msg.action === "update"

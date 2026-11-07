@@ -1,5 +1,19 @@
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ArrowDown, ArrowDownToLine, ArrowUpToLine, Check, ChevronRight, CircleAlert, Info, MoreHorizontal, Trash2, Wrench } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDown,
+  ArrowDownToLine,
+  ArrowUpToLine,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  History,
+  Info,
+  MoreHorizontal,
+  Trash2,
+  Undo2,
+  Wrench,
+} from "lucide-react";
 import type { ThreadStatus } from "@lemonlime/protocol";
 import type { TimelineItem } from "../lib/timeline.ts";
 import type { EditQueuedFn } from "../lib/useThreadSession.ts";
@@ -9,6 +23,8 @@ import { DiffView } from "./DiffView.tsx";
 import { Button, LogoMark, Spinner, cx } from "./ui.tsx";
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
+/** Go back to the user message at `seq` (its text goes back in the composer). */
+export type RewindFn = (seq: number, text: string, restoreFiles: boolean) => void;
 
 export function Timeline({
   items,
@@ -16,12 +32,14 @@ export function Timeline({
   empty,
   onApprove,
   onEditQueued,
+  onRewind,
 }: {
   items: TimelineItem[];
   working: boolean;
   empty: ReactNode;
   onApprove?: ApproveFn;
   onEditQueued?: EditQueuedFn;
+  onRewind?: RewindFn;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -70,7 +88,7 @@ export function Timeline({
             : items.map((item, i) => (
                 // Off-screen messages skip layout and paint, so long chats stay fast.
                 <div key={item.key} className={i < items.length - 30 ? "[contain-intrinsic-size:auto_96px] [content-visibility:auto]" : undefined}>
-                  <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} />
+                  <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} />
                 </div>
               ))}
           {working && (
@@ -103,17 +121,27 @@ const Item = memo(function Item({
   item,
   onApprove,
   onEditQueued,
+  onRewind,
 }: {
   item: TimelineItem;
   onApprove?: ApproveFn | undefined;
   onEditQueued?: EditQueuedFn | undefined;
+  onRewind?: RewindFn | undefined;
 }) {
   switch (item.kind) {
     case "user":
       return item.queued && onEditQueued ? (
         <QueuedMessage text={item.text} queued={item.queued} onEdit={onEditQueued} />
       ) : (
-        <UserMessage text={item.text} at={item.at} pending={item.pending} queued={Boolean(item.queued)} />
+        <UserMessage
+          text={item.text}
+          at={item.at}
+          pending={item.pending}
+          queued={Boolean(item.queued)}
+          {...(onRewind && item.seq !== null && !item.pending
+            ? { onRewind: (restore: boolean) => onRewind(item.seq!, item.text, restore), restorable: Boolean(item.restorable) }
+            : {})}
+        />
       );
     case "agent":
       return <AgentMessage text={item.text} streaming={item.streaming} />;
@@ -197,14 +225,51 @@ function NoticeRow({ message }: { message: string }) {
   );
 }
 
-function UserMessage({ text, at, pending, queued }: { text: string; at: string; pending: boolean; queued: boolean }) {
+function UserMessage({
+  text,
+  at,
+  pending,
+  queued,
+  onRewind,
+  restorable,
+}: {
+  text: string;
+  at: string;
+  pending: boolean;
+  queued: boolean;
+  onRewind?: (restoreFiles: boolean) => void;
+  restorable?: boolean;
+}) {
   return (
-    <div className="flex animate-rise justify-end">
+    <div className="group flex animate-rise justify-end">
       <div className="max-w-[78%]">
         <div className={cx("rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft px-4 py-2.5 text-ink", pending && "opacity-70")}>
           <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
         </div>
-        <p className="mt-1 pr-1 text-right text-xs text-ink-faint">{queued ? "Queued, runs when the agent finishes" : pending ? "Sending…" : clockTime(at)}</p>
+        <div className="mt-1 flex items-center justify-end gap-1 pr-1 text-xs text-ink-faint">
+          {onRewind && (
+            <Menu
+              align="end"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="Go back to this message"
+                  className="inline-flex size-6 items-center justify-center rounded-md opacity-0 hover:bg-ink/5 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100"
+                >
+                  <MoreHorizontal aria-hidden="true" className="size-4" />
+                </button>
+              }
+            >
+              <MenuItem icon={<Undo2 />} onSelect={() => onRewind(false)}>
+                Go back to here
+              </MenuItem>
+              <MenuItem icon={<History />} disabled={!restorable} onSelect={() => onRewind(true)}>
+                Go back and restore files
+              </MenuItem>
+            </Menu>
+          )}
+          <span>{queued ? "Queued, runs when the agent finishes" : pending ? "Sending…" : clockTime(at)}</span>
+        </div>
       </div>
     </div>
   );

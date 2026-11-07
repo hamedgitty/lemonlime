@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
   Cloud,
@@ -12,6 +12,7 @@ import {
   Play,
   Power,
   RotateCw,
+  Shrink,
   SquareTerminal,
   Trash2,
   X,
@@ -25,7 +26,7 @@ import { AGENT_LABELS, STATUS_LABELS, repoName } from "../lib/format.ts";
 import { CloudError, type CloudApi } from "../lib/cloud.ts";
 import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
-import { Composer } from "./Composer.tsx";
+import { Composer, type ComposerHandle } from "./Composer.tsx";
 import { TerminalPanel } from "./TerminalPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { Menu, MenuItem, Tip } from "./primitives.tsx";
@@ -164,6 +165,17 @@ function ThreadSessionView({
   }, []);
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
+  const composerRef = useRef<ComposerHandle>(null);
+  const rewindTo = async (seq: number, text: string, restoreFiles: boolean) => {
+    const ok = await confirmAction(
+      restoreFiles
+        ? "Go back to this message and put the files back to how they were then? The agent stops, starts a fresh conversation with a recap, and later changes are set aside (git keeps them under refs/lemonlime/rewind)."
+        : "Go back to this message? The agent stops and starts a fresh conversation with a recap. Files stay as they are now.",
+    );
+    if (!ok) return;
+    session.rewind(seq, restoreFiles);
+    composerRef.current?.fill(text);
+  };
   const [panelTab, setPanelTab] = useState<"changes" | "terminal">("changes");
 
   return (
@@ -215,7 +227,7 @@ function ThreadSessionView({
               Pause
             </Button>
           )}
-          {entry.mode === "local" && (
+          {(entry.mode === "local" || summary.agent.kind === "claude-code") && (
             <Menu
               align="end"
               trigger={
@@ -228,9 +240,16 @@ function ThreadSessionView({
                 </button>
               }
             >
-              <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
-                Remove thread
-              </MenuItem>
+              {summary.agent.kind === "claude-code" && (
+                <MenuItem icon={<Shrink />} disabled={session.state !== "live" || working} onSelect={session.compact}>
+                  Compact conversation
+                </MenuItem>
+              )}
+              {entry.mode === "local" && (
+                <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
+                  Remove thread
+                </MenuItem>
+              )}
             </Menu>
           )}
           <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
@@ -279,11 +298,13 @@ function ThreadSessionView({
           empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
           onApprove={session.approve}
           onEditQueued={session.editQueued}
+          onRewind={rewindTo}
         />
 
         <div className="shrink-0 px-6 pt-2 pb-5">
           <div className="mx-auto max-w-[760px]">
             <Composer
+              ref={composerRef}
               onSend={session.send}
               onInterrupt={session.interrupt}
               working={working}

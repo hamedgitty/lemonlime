@@ -1,4 +1,4 @@
-import type { EventOf, ThreadEvent } from "@lemonlime/protocol";
+import { rewindMessage, withoutRewound, type EventOf, type ThreadEvent } from "@lemonlime/protocol";
 
 /** What the thread view renders, built from the raw event history. */
 export type TimelineItem =
@@ -24,7 +24,8 @@ export interface PendingMessage {
  * - messages in the runner's queue show as queued, other optimistic messages as pending,
  *   until the runner echoes them back.
  */
-export function buildTimeline(events: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
+export function buildTimeline(all: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
+  const events = withoutRewound(all);
   const items: TimelineItem[] = [];
   const tools = new Map<string, Extract<TimelineItem, { kind: "tool" }>>();
   const echoed = new Set<string>();
@@ -90,6 +91,9 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
         break;
       case "notice":
         items.push({ kind: "notice", key: `e${e.seq}`, event: e });
+        break;
+      case "rewind":
+        items.push({ kind: "notice", key: `e${e.seq}`, event: { ...e, type: "notice", code: "rewind", message: rewindMessage(e) } });
         break;
       case "approval_request": {
         const item = { kind: "approval" as const, key: `e${e.seq}`, request: e, result: null as EventOf<"approval_result"> | null };

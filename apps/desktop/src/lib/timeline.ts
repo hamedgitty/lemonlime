@@ -1,4 +1,4 @@
-import type { EventOf, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
+import { rewindMessage, withoutRewound, type EventOf, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
 
 /** A message the user sent that the runner has not echoed back yet. */
 export interface PendingMessage {
@@ -16,6 +16,8 @@ export type TimelineItem =
       text: string;
       pending: boolean;
       queued?: { clientMsgId: string; index: number; count: number };
+      /** Files can be put back to how they were when this was sent. */
+      restorable?: boolean;
     }
   | { kind: "agent"; key: string; seq: number; at: string; text: string; streaming: boolean }
   | {
@@ -64,7 +66,8 @@ export type TimelineItem =
  *
  * Events must be in seq order. Duplicate seqs are ignored.
  */
-export function buildTimeline(events: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
+export function buildTimeline(all: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
+  const events = withoutRewound(all);
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
   const approvalIndex = new Map<string, number>();
@@ -107,7 +110,7 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
     switch (ev.type) {
       case "user_message":
         if (ev.clientMsgId) confirmed.add(ev.clientMsgId);
-        items.push({ kind: "user", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, text: ev.text, pending: false });
+        items.push({ kind: "user", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, text: ev.text, pending: false, ...(ev.commit ? { restorable: true } : {}) });
         break;
       case "tool_call":
         toolIndex.set(ev.callId, items.length);
@@ -173,6 +176,9 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
           code: ev.code,
           ...(ev.untilAt ? { untilAt: ev.untilAt } : {}),
         });
+        break;
+      case "rewind":
+        items.push({ kind: "notice", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, message: rewindMessage(ev), code: "rewind" });
         break;
       case "approval_request":
         approvalIndex.set(ev.requestId, items.length);

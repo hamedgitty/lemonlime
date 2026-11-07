@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { NewEvent, QueuedMessage, Thread, ThreadStatus } from "@lemonlime/protocol";
+import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { EventStore } from "./event-store.ts";
@@ -170,6 +170,7 @@ export class ThreadRunner {
         const rel = relative(this.opts.workdir, this.opts.dataDir);
         if (rel && !rel.startsWith("..") && !isAbsolute(rel)) await this.git.excludePath(rel);
       }
+      this.headCommit = await this.git.head();
     }
     try {
       await installSkills({
@@ -480,7 +481,7 @@ export class ThreadRunner {
   private closing = false;
 
   private startTurn(text: string, clientMsgId: string): void {
-    this.store.append({ type: "user_message", text, clientMsgId });
+    this.store.append({ type: "user_message", text, clientMsgId, ...(this.headCommit ? { commit: this.headCommit } : {}) });
     this.setStatus("running");
     const abort = new AbortController();
     this.abort = abort;
@@ -552,7 +553,9 @@ export class ThreadRunner {
           lastOutput = Date.now();
         }
       };
-      await this.session.runTurn({ prompt, signal: abort.signal, emit, requestApproval });
+      const recap = this.recap;
+      this.recap = null;
+      await this.session.runTurn({ prompt: recap ? `${recap}\n\n${prompt}` : prompt, signal: abort.signal, emit, requestApproval });
       this.crashes = 0;
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -643,9 +646,10 @@ export class ThreadRunner {
     if (!this.git) return;
     const changes = await this.git.collectChanges();
     for (const c of changes) this.store.append({ type: "file_diff", path: c.path, change: c.change, diff: c.diff, truncated: c.truncated });
-    if (changes.length) await this.git.commit(commitSubject(prompt));
+    if (changes.length) this.headCommit = (await this.git.commit(commitSubject(prompt))) ?? this.headCommit;
     if (this.opts.pushBranch && (changes.length || this.unpushed)) {
-      const problem = await this.git.push(this.opts.thread.branch);
+      const problem = await this.git.push(this.opts.thread.branch, { force: this.rewound });
+      if (!problem) this.rewound = false;
       this.unpushed = problem !== null;
       if (problem) {
         this.store.append({
@@ -659,6 +663,54 @@ export class ThreadRunner {
 
   /** A commit that hasn't reached origin yet, retried after the next turn. */
   private unpushed = false;
+  /** The thread branch's commit, kept current so each user message can record it. */
+  private headCommit: string | null = null;
+  /** The branch was moved back by a rewind, so the next push replaces the remote one. */
+  private rewound = false;
+  /** What the thread said before a rewind, handed to the fresh agent conversation once. */
+  private recap: string | null = null;
+
+  /**
+   * Go back to the user message at `toSeq`: stop the agent, drop waiting messages, start
+   * a fresh agent conversation that gets a recap of everything before that message, and,
+   * with `restoreFiles`, put the branch back to where it was when that message was sent
+   * (the work after it is kept at a backup ref). Returns the message's text, for editing.
+   */
+  async rewind(toSeq: number, restoreFiles: boolean): Promise<{ text: string } | { error: string }> {
+    const target = this.store.since(toSeq - 1).find(e => e.seq === toSeq);
+    if (!target || target.type !== "user_message") return { error: "That isn't one of your messages." };
+    if (restoreFiles && (!this.git || !target.commit)) return { error: "There's no saved point to restore files to for that message." };
+    this.queue = [];
+    this.publishQueue();
+    this.clearUsageLimit();
+    this.interrupt();
+    await this.current?.catch(() => undefined);
+    let restoredTo: string | undefined;
+    let backupRef: string | undefined;
+    if (restoreFiles && this.git && target.commit) {
+      backupRef = `refs/lemonlime/rewind/${Date.now()}`;
+      await this.git.rewindTo(target.commit, backupRef);
+      restoredTo = target.commit;
+      this.headCommit = target.commit;
+      this.rewound = true;
+      this.unpushed = Boolean(this.opts.pushBranch);
+    }
+    // Everything the agent knew came from this conversation, so it starts again from a recap.
+    await this.session?.dispose();
+    this.session = null;
+    this.agentState = {};
+    this.recap = recapBefore(this.store.since(0), toSeq);
+    this.store.append({ type: "rewind", toSeq, ...(restoredTo ? { restoredTo } : {}), ...(backupRef ? { backupRef } : {}) });
+    this.saveState();
+    return { text: target.text };
+  }
+
+  /** Shrink the agent's conversation. Only Claude Code has a way to do it from outside. */
+  compact(): boolean {
+    if (this.opts.adapter.kind !== "claude-code") return false;
+    this.sendMessage("/compact");
+    return true;
+  }
 
   private setStatus(to: ThreadStatus, reason?: string): void {
     const from = this.status;
@@ -715,4 +767,24 @@ export function tokensIn(json: string): string[] {
     if (json.trim().length >= 20) out.push(json.trim());
   }
   return out;
+}
+
+/** Most of a recap kept for the agent: the newest part, if the conversation was long. */
+const RECAP_CHARS = 24_000;
+
+/** The conversation before `toSeq`, as plain text a fresh agent conversation can start from. */
+export function recapBefore(events: readonly ThreadEvent[], toSeq: number): string | null {
+  const hidden: [number, number][] = [];
+  for (const e of events) if (e.type === "rewind") hidden.push([e.toSeq, e.seq]);
+  const lines: string[] = [];
+  for (const e of events) {
+    if (e.seq >= toSeq) break;
+    if (hidden.some(([from, to]) => e.seq >= from && e.seq < to)) continue;
+    if (e.type === "user_message") lines.push(`User: ${e.text}`);
+    else if (e.type === "agent_message" && !e.partial) lines.push(`You: ${e.text}`);
+  }
+  if (!lines.length) return null;
+  let body = lines.join("\n\n");
+  if (body.length > RECAP_CHARS) body = `…${body.slice(-RECAP_CHARS)}`;
+  return `This conversation was rewound. Here is what was said before, for context (files are as they are now):\n\n${body}\n\nThe user's next message follows.`;
 }

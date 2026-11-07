@@ -14,6 +14,8 @@ export const UserMessageEvent = z.object({
   text: z.string(),
   /** Id chosen by the client so it can match its optimistic message. */
   clientMsgId: z.string().optional(),
+  /** The thread branch's commit when this message's turn began, for rewinding to it. */
+  commit: z.string().optional(),
 });
 
 export const AgentMessageEvent = z.object({
@@ -123,6 +125,20 @@ export const QueueUpdateEvent = z.object({
   queue: z.array(QueuedMessage),
 });
 
+/**
+ * The thread was rewound to the user message at `toSeq`: everything from that message up
+ * to this event is set aside (apps hide it; it stays in the history). The agent starts a
+ * fresh conversation with a recap of what came before. `restoredTo`: files were put back
+ * to that commit; the work rewound past is kept at `backupRef`.
+ */
+export const RewindEvent = z.object({
+  ...base,
+  type: z.literal("rewind"),
+  toSeq: z.number().int().positive(),
+  restoredTo: z.string().optional(),
+  backupRef: z.string().optional(),
+});
+
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
@@ -135,6 +151,7 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   NoticeEvent,
   ApprovalRequestEvent,
   ApprovalResultEvent,
+  RewindEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];
@@ -145,3 +162,18 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 
 /** An event before the store assigns `threadId`, `seq` and `at` (defaulted fields optional). */
 export type NewEvent = DistributiveOmit<ThreadEventInput, "threadId" | "seq" | "at">;
+
+/** The history as it reads after rewinds: what each rewind set aside is left out (the rewinds stay). */
+export function withoutRewound<E extends { seq: number; type: string; toSeq?: number }>(events: readonly E[]): E[] {
+  const ranges: [number, number][] = [];
+  for (const e of events) if (e.type === "rewind" && typeof e.toSeq === "number") ranges.push([e.toSeq, e.seq]);
+  if (!ranges.length) return [...events];
+  return events.filter(e => !ranges.some(([from, to]) => e.seq >= from && e.seq < to));
+}
+
+/** What apps say where a thread was rewound. */
+export function rewindMessage(e: { restoredTo?: string | undefined }): string {
+  return e.restoredTo
+    ? "Went back to an earlier message and put the files back to how they were then."
+    : "Went back to an earlier message. Files were left as they are.";
+}

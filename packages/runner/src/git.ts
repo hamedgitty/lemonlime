@@ -56,11 +56,12 @@ export class GitWorkspace {
    * Push the current branch to `origin`, setting it as upstream. Returns null on success,
    * or git's error. Never forces: if the remote has moved on, the push is refused.
    */
-  async push(branch: string): Promise<string | null> {
+  async push(branch: string, opts: { force?: boolean } = {}): Promise<string | null> {
     const remotes = (await this.git(["remote"], { allowFail: true })).split("\n").map(r => r.trim());
     if (!remotes.includes("origin")) return "no remote named origin";
     try {
-      await run("git", ["push", "-q", "-u", "origin", `HEAD:refs/heads/${branch}`], {
+      // After a rewind the branch moved back, so it's replaced; only ever the thread's own branch.
+      await run("git", ["push", "-q", "-u", ...(opts.force ? ["--force-with-lease"] : []), "origin", `HEAD:refs/heads/${branch}`], {
         cwd: this.dir,
         maxBuffer: 4 * 1024 * 1024,
         timeout: 120_000,
@@ -199,6 +200,20 @@ export class GitWorkspace {
       changes.push({ path, change, diff, truncated });
     }
     return changes;
+  }
+
+  /** The current commit, or null in a repo with none yet. */
+  async head(): Promise<string | null> {
+    return (await this.git(["rev-parse", "--verify", "-q", "HEAD"], { allowFail: true })).trim() || null;
+  }
+
+  /**
+   * Put the branch and files back to `commit`, keeping what was there at `backupRef` so it
+   * can be recovered. Untracked files the agent left are kept (each turn commits its work).
+   */
+  async rewindTo(commit: string, backupRef: string): Promise<void> {
+    await this.git(["update-ref", backupRef, "HEAD"]);
+    await this.git(["reset", "-q", "--hard", commit]);
   }
 
   /** Commit staged changes on the current branch. Returns the new commit sha, or null if nothing changed. */

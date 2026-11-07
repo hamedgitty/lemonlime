@@ -104,6 +104,16 @@ export class RunnerClient {
     this.post({ type: "edit_queue", clientMsgId, ...change });
   }
 
+  /** Go back to the user message at `toSeq`, optionally putting files back as they were then. */
+  rewind(toSeq: number, restoreFiles: boolean): void {
+    this.post({ type: "rewind", toSeq, restoreFiles });
+  }
+
+  /** Ask the agent to shrink its conversation (Claude Code). */
+  compact(): void {
+    this.post({ type: "compact" });
+  }
+
   /** Answer an approval request from the agent. */
   approve(requestId: string, decision: "allow" | "deny"): void {
     this.post({ type: "approve", requestId, decision });

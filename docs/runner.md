@@ -89,6 +89,17 @@ The PTY comes from `@lydell/node-pty` (prebuilt, no compiler needed). The deskto
 single-file runner can't hold a native module, so `build:sea` copies it next to the
 executable and the app passes `LEMONLIME_NODE_PTY_DIR`.
 
+## Going back (rewind) and compacting
+
+Every user message records the commit the thread's branch was on when its turn began.
+`{"type":"rewind","toSeq":N,"restoreFiles":bool}` goes back to the message at seq N: the
+agent stops, waiting messages are dropped, and the agent starts a fresh conversation that
+gets a recap of everything said before N. With `restoreFiles` the branch is reset to that
+commit; what was there is kept at `refs/lemonlime/rewind/<time>`, and the next push
+replaces the remote branch. History is never deleted: a `rewind` event marks what apps
+leave out (`withoutRewound` in the protocol). `{"type":"compact"}` asks Claude Code to
+shrink its conversation (`/compact`); other agents say they can't.
+
 ## Usage limits
 
 When an agent stops because the user's plan limit is reached (Claude says when it

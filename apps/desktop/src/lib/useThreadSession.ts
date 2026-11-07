@@ -54,6 +54,8 @@ export interface ThreadSession {
   connection: Connection | null;
   /** Change a message waiting in the queue. */
   editQueued: EditQueuedFn;
+  rewind: (toSeq: number, restoreFiles: boolean) => void;
+  compact: () => void;
   /** Tear down and connect again (starting the local runner if needed). */
   restart: () => void;
   /** Close the connection on purpose and show the thread as offline. */
@@ -286,6 +288,8 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const interrupt = useCallback(() => clientRef.current?.interrupt(), []);
   const approve = useCallback((requestId: string, decision: "allow" | "deny") => clientRef.current?.approve(requestId, decision), []);
   const editQueued = useCallback<EditQueuedFn>((id, change) => clientRef.current?.editQueued(id, change), []);
+  const rewind = useCallback((toSeq: number, restoreFiles: boolean) => clientRef.current?.rewind(toSeq, restoreFiles), []);
+  const compact = useCallback(() => clientRef.current?.compact(), []);
   const restart = useCallback(() => setGeneration(g => g + 1), []);
   const disconnect = useCallback(() => {
     disconnectedRef.current = true;
@@ -296,7 +300,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, restart, disconnect };
+  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, rewind, compact, restart, disconnect };
 }
 
 function newClientMsgId(): string {

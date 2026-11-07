@@ -62,8 +62,9 @@ export function loadSettings(): Settings {
   return r.success ? r.data : Settings.parse({});
 }
 
+/** Settings go to local storage, except the access token, which is kept in the keychain. */
 export function saveSettings(s: Settings): void {
-  write(KEY_SETTINGS, s);
+  write(KEY_SETTINGS, { ...s, accessToken: "" });
 }
 
 export function loadLocalThreads(): LocalThreadMeta[] {

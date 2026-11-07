@@ -89,3 +89,34 @@ export async function confirmAction(message: string): Promise<boolean> {
   if (isTauri()) return ask(message, { title: "LemonLime", kind: "warning" });
   return window.confirm(message);
 }
+
+const TOKEN_SECRET = "control-plane-token";
+const BROWSER_TOKEN_KEY = "lemonlime:dev-token";
+
+/**
+ * The control plane access token lives in the OS keychain in the desktop app. In a plain
+ * browser (development preview) it falls back to local storage.
+ */
+export async function loadAccessToken(): Promise<string> {
+  if (!isTauri()) {
+    try {
+      return localStorage.getItem(BROWSER_TOKEN_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  }
+  return (await invoke<string | null>("secret_get", { name: TOKEN_SECRET })) ?? "";
+}
+
+export async function saveAccessToken(token: string): Promise<void> {
+  if (!isTauri()) {
+    try {
+      if (token) localStorage.setItem(BROWSER_TOKEN_KEY, token);
+      else localStorage.removeItem(BROWSER_TOKEN_KEY);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  await invoke("secret_set", { name: TOKEN_SECRET, value: token });
+}

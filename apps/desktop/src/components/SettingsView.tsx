@@ -287,7 +287,7 @@ function AccountPage({ settings, onSave }: { settings: Settings; onSave: (s: Set
             className="w-[280px]"
           />
         </Row>
-        <Row label="Access token" htmlFor="cp-token" description="Kept on this computer only.">
+        <Row label="Access token" htmlFor="cp-token" description="Kept in your system keychain, never in plain files.">
           <div className="relative">
             <TextInput
               id="cp-token"

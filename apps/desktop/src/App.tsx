@@ -9,7 +9,7 @@ import { ThreadView } from "./components/ThreadView.tsx";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
-import { inDesktopShell, listLocalRunners, removeLocalThread, stopLocalRunner } from "./lib/native.ts";
+import { inDesktopShell, listLocalRunners, loadAccessToken, removeLocalThread, saveAccessToken, stopLocalRunner } from "./lib/native.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import {
   forgetEvents,
@@ -57,6 +57,26 @@ export function App() {
   }, []);
   const back = history.at > 0 ? () => setHistory(h => ({ ...h, at: h.at - 1 })) : null;
   const forward = history.at < history.stack.length - 1 ? () => setHistory(h => ({ ...h, at: h.at + 1 })) : null;
+
+  // The access token comes from the keychain. A token an older version left in local
+  // storage is moved there once, then cleared from local storage.
+  useEffect(() => {
+    const legacy = settings.accessToken;
+    void (async () => {
+      try {
+        if (legacy) {
+          await saveAccessToken(legacy);
+          saveSettings({ ...settings, accessToken: "" });
+        }
+        const token = legacy || (await loadAccessToken());
+        if (token) setSettings(s => ({ ...s, accessToken: token }));
+      } catch (err) {
+        console.warn("Could not read the access token from the keychain", err);
+      }
+    })();
+    // Runs once at start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onPrefs = useCallback((patch: Partial<UiPrefs>) => {
     setPrefs(p => {
@@ -278,6 +298,7 @@ export function App() {
   const saveAll = (s: Settings) => {
     saveSettings(s);
     setSettings(s);
+    void saveAccessToken(s.accessToken).catch(err => console.warn("Could not save the access token to the keychain", err));
   };
 
   const sidebar =

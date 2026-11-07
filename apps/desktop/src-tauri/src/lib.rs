@@ -4,6 +4,7 @@
 mod paths;
 mod repo;
 mod runner;
+mod secrets;
 
 use tauri::{Manager, RunEvent};
 
@@ -20,6 +21,8 @@ pub fn run() {
             runner::list_local_runners,
             runner::remove_local_thread,
             repo::inspect_repo,
+            secrets::secret_get,
+            secrets::secret_set,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start LemonLime")

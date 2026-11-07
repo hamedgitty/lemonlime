@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ThreadEvent } from "./events.ts";
 import { AgentConfig, RepoRef, SandboxSize, Thread, ThreadId, ThreadMode, ThreadStatus } from "./thread.ts";
 
 /** HTTP API between clients and the control plane, and between runners and the control plane. */
@@ -46,11 +47,59 @@ export const RunnerHeartbeat = z.object({
   /** ISO time the agent last finished work, or null while running. */
   idleSince: z.string().datetime().nullable(),
   runnerVersion: z.string(),
+  /**
+   * Work still going on in the sandbox after the agent's turn ended: a build or test
+   * using the CPU, a download, or a dev server listening for connections. Keeps an idle
+   * sandbox awake for up to `BACKGROUND_KEEP_AWAKE_MS`. Housekeeping doesn't count.
+   */
+  background: z.enum(["build", "download", "server"]).nullable().optional(),
+  /** True once the runner has finished a `drain`: history uploaded, state saved. */
+  drained: z.boolean().optional(),
 });
 export type RunnerHeartbeat = z.infer<typeof RunnerHeartbeat>;
 
 export const HeartbeatResponse = z.object({
-  /** The control plane may ask the runner to wind down (e.g. before a pause). */
-  action: z.enum(["none", "shutdown"]).default("none"),
+  /**
+   * `drain`: the sandbox is about to be paused; upload history, save state and say
+   * `drained: true` in the next heartbeat. `shutdown`: stop now.
+   */
+  action: z.enum(["none", "drain", "shutdown"]).default("none"),
+  /** Messages waiting for this thread at the control plane (sent while it was paused). */
+  pendingMessages: z.number().int().nonnegative().default(0),
 });
 export type HeartbeatResponse = z.infer<typeof HeartbeatResponse>;
+
+/** Runner → control plane: the next part of the thread's history, to keep after the sandbox is gone. */
+export const RunnerHistoryUpload = z.object({
+  threadId: ThreadId,
+  /** Consecutive events, oldest first, continuing from what the control plane has. */
+  events: z.array(ThreadEvent).min(1).max(2000),
+});
+export type RunnerHistoryUpload = z.infer<typeof RunnerHistoryUpload>;
+
+/** How much history the control plane now holds; the runner sends from `storedSeq + 1` next. */
+export const RunnerHistoryResponse = z.object({ storedSeq: z.number().int().nonnegative() });
+export type RunnerHistoryResponse = z.infer<typeof RunnerHistoryResponse>;
+
+/** A message sent to a thread whose sandbox was paused; the runner picks it up when it wakes. */
+export const PendingMessage = z.object({
+  clientMsgId: z.string().min(1).max(100),
+  text: z.string().min(1).max(200_000),
+});
+export type PendingMessage = z.infer<typeof PendingMessage>;
+
+/** Runner ← control plane: messages waiting for this thread. */
+export const RunnerInbox = z.object({ messages: z.array(PendingMessage) });
+export type RunnerInbox = z.infer<typeof RunnerInbox>;
+
+/** Runner → control plane: these messages are now in the runner's queue or history. */
+export const RunnerInboxAck = z.object({ threadId: ThreadId, clientMsgIds: z.array(z.string()).max(1000) });
+export type RunnerInboxAck = z.infer<typeof RunnerInboxAck>;
+
+/** Client → control plane: the thread's stored history (for paused threads; no sandbox needed). */
+export const ThreadHistoryResponse = z.object({
+  events: z.array(ThreadEvent),
+  /** True when more events follow; ask again with `after` = the last seq. */
+  more: z.boolean(),
+});
+export type ThreadHistoryResponse = z.infer<typeof ThreadHistoryResponse>;

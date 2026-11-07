@@ -30,6 +30,10 @@ export const SANDBOX_RESOURCES: Record<SandboxSize, { vcpu: number; memoryGiB: n
 
 /** A paused-on-idle threshold that every deployment shares. */
 export const IDLE_PAUSE_AFTER_MS = 5 * 60 * 1000;
+/** Background work (builds, downloads, dev servers) keeps an idle sandbox awake this long at most. */
+export const BACKGROUND_KEEP_AWAKE_MS = 2 * 60 * 60 * 1000;
+/** How long the control plane waits for a runner to drain before pausing anyway. */
+export const DRAIN_TIMEOUT_MS = 60 * 1000;
 
 /** Thread ids are lowercase, URL- and branch-safe. */
 export const ThreadId = z.string().regex(/^[a-z0-9][a-z0-9-]{5,63}$/, "thread id must be 6-64 chars of a-z, 0-9 or -");

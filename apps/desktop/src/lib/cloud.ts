@@ -1,4 +1,12 @@
-import { CreateThreadRequest, PolicyDenied, Thread, ThreadWithEndpoint, type CreateThreadRequest as CreateThreadRequestT } from "@lemonlime/protocol";
+import {
+  CreateThreadRequest,
+  PolicyDenied,
+  Thread,
+  ThreadHistoryResponse,
+  ThreadWithEndpoint,
+  type CreateThreadRequest as CreateThreadRequestT,
+  type PendingMessage,
+} from "@lemonlime/protocol";
 import { z } from "zod";
 import { isTauri } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -68,6 +76,20 @@ export class CloudApi {
 
   async resumeThread(id: string): Promise<ThreadWithEndpoint | null> {
     const body = await this.request("POST", `/api/threads/${encodeURIComponent(id)}/resume`);
+    const r = ThreadWithEndpoint.safeParse(body);
+    return r.success ? r.data : null;
+  }
+
+  /** Stored history after `after`; works while the sandbox is paused, without waking it. */
+  async history(id: string, after: number): Promise<ThreadHistoryResponse> {
+    const body = await this.request("GET", `/api/threads/${encodeURIComponent(id)}/events?after=${after}`);
+    const r = ThreadHistoryResponse.safeParse(body);
+    return r.success ? r.data : { events: [], more: false };
+  }
+
+  /** Message a paused thread: saved by the control plane first, then the sandbox wakes. */
+  async sendWhilePaused(id: string, msg: PendingMessage): Promise<ThreadWithEndpoint | null> {
+    const body = await this.request("POST", `/api/threads/${encodeURIComponent(id)}/messages`, msg);
     const r = ThreadWithEndpoint.safeParse(body);
     return r.success ? r.data : null;
   }

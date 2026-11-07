@@ -136,6 +136,22 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       if (cancelled) return;
       if (!conn) {
         setState("offline");
+        // A paused cloud thread: show what the control plane has kept, without waking it.
+        const t = targetRef.current;
+        if (t.mode === "cloud") {
+          try {
+            let after = contiguousSeq(eventsRef.current);
+            for (let page = 0; page < 50 && !cancelled; page++) {
+              const h = await t.api.history(t.thread.id, after);
+              if (cancelled || h.events.length === 0) break;
+              setEvents(prev => appendEvents(prev, h.events));
+              after = h.events[h.events.length - 1]!.seq;
+              if (!h.more) break;
+            }
+          } catch {
+            /* stored history is a nice-to-have; the cache still shows */
+          }
+        }
         return;
       }
 
@@ -221,10 +237,25 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const send = useCallback((text: string) => {
     const client = clientRef.current;
     const trimmed = text.trim();
-    if (!client || !trimmed) return;
+    if (!trimmed) return;
+    const t = targetRef.current;
+    if (!client && t.mode !== "cloud") return;
     const clientMsgId = newClientMsgId();
     setPending(p => [...p, { clientMsgId, text: trimmed, at: new Date().toISOString() }]);
-    client.send(trimmed, clientMsgId);
+    if (client) {
+      client.send(trimmed, clientMsgId);
+      return;
+    }
+    // Paused cloud thread: the control plane keeps the message and wakes the sandbox,
+    // whose runner picks it up; then we connect.
+    if (t.mode !== "cloud") return;
+    void t.api.sendWhilePaused(t.thread.id, { clientMsgId, text: trimmed }).then(
+      () => setGeneration(g => g + 1),
+      err => {
+        setError(err instanceof Error ? err.message : String(err));
+        setState("error");
+      },
+    );
   }, []);
 
   const interrupt = useCallback(() => clientRef.current?.interrupt(), []);

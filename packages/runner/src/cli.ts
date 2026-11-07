@@ -177,18 +177,21 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   process.stdout.write(JSON.stringify({ event: "ready", port: server.port }) + "\n");
 
   const shutdown = async (code = 0) => {
-    stopHeartbeat?.();
+    // Drain on the way out: one last history upload, bounded so a stop is never held up long.
+    if (heartbeat) await Promise.race([heartbeat.beat(), new Promise(r => setTimeout(r, 5000))]);
+    heartbeat?.stop();
     await runner.close();
     await server.close();
     process.exit(code);
   };
-  const stopHeartbeat = values["control-plane"]
+  const heartbeat = values["control-plane"]
     ? startHeartbeat(runner, {
         controlPlaneUrl: values["control-plane"],
         threadSecret: secret,
         version: RUNNER_VERSION,
         onShutdown: () => void shutdown(0),
         log,
+        ownPorts: [server.port],
       })
     : null;
 

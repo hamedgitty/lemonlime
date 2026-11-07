@@ -15,6 +15,13 @@
       "when": 1794039690325,
       "tag": "0001_rate_limit",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794064294196,
+      "tag": "0002_history_drain_inbox",
+      "breakpoints": true
     }
   ]
 }

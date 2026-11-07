@@ -13,6 +13,7 @@ services:
     env_file: .env
     environment:
       LEMONLIME_DATABASE_URL: file:/data/lemonlime.db
+      LEMONLIME_HISTORY_DIR: /data/history
       LEMONLIME_SANDBOX_PROVIDER: docker
       LEMONLIME_SANDBOX_IMAGE: ${LEMONLIME_SANDBOX_IMAGE:-lemonlime/sandbox:latest}
       LEMONLIME_DOCKER_NETWORK: lemonlime-sandboxes

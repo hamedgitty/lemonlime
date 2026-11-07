@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { IDLE_PAUSE_AFTER_MS } from "@lemonlime/protocol";
+import { BACKGROUND_KEEP_AWAKE_MS, DRAIN_TIMEOUT_MS, IDLE_PAUSE_AFTER_MS } from "@lemonlime/protocol";
 import { RUNNER_SILENCE_PAUSE_MS, decideSweep, runtimeSeconds, sweepVerdict, type SweepThread } from "../src/lib/sweep.ts";
 
 const NOW = Date.parse("2026-01-01T12:00:00.000Z");
@@ -62,21 +62,50 @@ describe("decideSweep", () => {
     });
 
     const result = await decideSweep([idle, allowed, denied, broken, local], NOW, policy);
-    expect(result.pause.map(p => [p.thread.id, p.endReason])).toEqual([
+    // Live runners drain first; a later sweep pauses them.
+    expect(result.pause).toEqual([]);
+    expect(result.drain.map(p => [p.thread.id, p.endReason])).toEqual([
       ["idle-thread", "idle"],
       ["denied-thread", "policy"],
     ]);
-    expect(result.pause[1]?.reason).toBe("not allowed");
     expect(result.keep.map(t => t.id)).toEqual(["allowed-thread"]);
     expect(result.errors.map(e => e.thread.id)).toEqual(["broken-thread"]);
     // The policy is not asked about threads that are paused anyway or not running.
     expect(policy.mock.calls.map(([t]) => t.id).sort()).toEqual(["allowed-thread", "broken-thread", "denied-thread"]);
   });
 
+  it("pauses after the runner drains, or after the drain timeout, and a silent runner at once", async () => {
+    const policy = vi.fn(async () => ({ allow: true as const }));
+    const idleSince = ago(IDLE_PAUSE_AFTER_MS + 1000);
+    const asked = thread({ id: "asked", idleSince, drainRequestedAt: ago(10_000) });
+    const drained = thread({ id: "drained", idleSince, drainRequestedAt: ago(10_000), drainedAt: ago(5_000) });
+    const slow = thread({ id: "slow", idleSince, drainRequestedAt: ago(DRAIN_TIMEOUT_MS + 1000) });
+    const silent = thread({
+      id: "silent",
+      status: "running",
+      idleSince: null,
+      lastHeartbeatAt: ago(RUNNER_SILENCE_PAUSE_MS + 1000),
+      runningSince: ago(RUNNER_SILENCE_PAUSE_MS + 2000),
+    });
+    const result = await decideSweep([asked, drained, slow, silent], NOW, policy);
+    expect(result.pause.map(p => p.thread.id).sort()).toEqual(["drained", "silent", "slow"]);
+    expect(result.keep.map(t => t.id)).toEqual(["asked"]);
+    expect(result.drain).toEqual([]);
+  });
+
+  it("keeps an idle sandbox awake for background work, up to the limit", async () => {
+    const policy = vi.fn(async () => ({ allow: true as const }));
+    const building = thread({ id: "building", idleSince: ago(IDLE_PAUSE_AFTER_MS + 1000), background: "build" });
+    const tooLong = thread({ id: "too-long", idleSince: ago(BACKGROUND_KEEP_AWAKE_MS + 1000), background: "server" });
+    const result = await decideSweep([building, tooLong], NOW, policy);
+    expect(result.keep.map(t => t.id)).toEqual(["building"]);
+    expect(result.drain.map(d => d.thread.id)).toEqual(["too-long"]);
+  });
+
   it("is a no-op for an empty or fully paused fleet", async () => {
     const policy = vi.fn();
     const result = await decideSweep([thread({ runningSince: null })], NOW, policy);
-    expect(result).toEqual({ pause: [], keep: [], errors: [] });
+    expect(result).toEqual({ pause: [], drain: [], keep: [], errors: [] });
     expect(policy).not.toHaveBeenCalled();
   });
 });

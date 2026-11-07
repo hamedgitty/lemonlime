@@ -168,6 +168,14 @@ export const threads = sqliteTable(
     lastHeartbeatAt: text("last_heartbeat_at"),
     /** First message, sent by the first client that connects to a fresh runner. */
     initialPrompt: text("initial_prompt"),
+    /** Highest event seq kept in history storage (survives the sandbox). */
+    historySeq: integer("history_seq").notNull().default(0),
+    /** Background work the runner last reported (build, download, server), or null. */
+    background: text("background"),
+    /** When the sweep asked the runner to drain before a pause; null otherwise. */
+    drainRequestedAt: text("drain_requested_at"),
+    /** When the runner said it had drained. */
+    drainedAt: text("drained_at"),
     createdAt: text("created_at").notNull().$defaultFn(nowIso),
     updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
   },
@@ -210,6 +218,22 @@ export const sandboxRuns = sqliteTable(
     check("sandbox_runs_runtime", sql`${t.runtimeSeconds} >= 0`),
     check("sandbox_runs_end_reason", sql`${t.endReason} in ('idle', 'user', 'policy', 'error', 'replaced')`),
   ],
+);
+
+// ─── Messages sent while a sandbox was paused ────────────────────────────────
+
+export const pendingMessages = sqliteTable(
+  "pending_messages",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    threadId: text("thread_id")
+      .notNull()
+      .references(() => threads.id, { onDelete: "cascade" }),
+    clientMsgId: text("client_msg_id").notNull(),
+    text: text("text").notNull(),
+    createdAt: text("created_at").notNull().$defaultFn(nowIso),
+  },
+  t => [uniqueIndex("pending_messages_thread_msg_idx").on(t.threadId, t.clientMsgId)],
 );
 
 // ─── Personal access tokens (desktop app) ────────────────────────────────────

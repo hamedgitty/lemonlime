@@ -1,4 +1,4 @@
-import { IDLE_PAUSE_AFTER_MS, type ThreadMode, type ThreadStatus } from "@lemonlime/protocol";
+import { BACKGROUND_KEEP_AWAKE_MS, DRAIN_TIMEOUT_MS, IDLE_PAUSE_AFTER_MS, type ThreadMode, type ThreadStatus } from "@lemonlime/protocol";
 import type { PolicyDecision, SandboxRun } from "@lemonlime/plugins";
 
 /**
@@ -19,6 +19,11 @@ export interface SweepThread {
   idleSince: string | null;
   runningSince: string | null;
   lastHeartbeatAt: string | null;
+  /** Background work the runner reports (build, download, server), or null. */
+  background?: string | null;
+  /** When the sweep asked the runner to drain, and when it said it had. */
+  drainRequestedAt?: string | null;
+  drainedAt?: string | null;
 }
 
 export type SweepVerdict = { action: "skip" } | { action: "pause"; endReason: EndReason } | { action: "ask_policy" };
@@ -40,7 +45,9 @@ export function sweepVerdict(t: SweepThread, nowMs: number): SweepVerdict {
 
   const idleSince = ms(t.idleSince);
   if (t.status === "idle" && idleSince !== null && nowMs - idleSince >= IDLE_PAUSE_AFTER_MS) {
-    return { action: "pause", endReason: "idle" };
+    // A build, download or dev server the agent started keeps the sandbox awake, up to a limit.
+    const busyInBackground = Boolean(t.background) && nowMs - idleSince < BACKGROUND_KEEP_AWAKE_MS;
+    if (!busyInBackground) return { action: "pause", endReason: "idle" };
   }
 
   const lastSeen = Math.max(runningSince, ms(t.lastHeartbeatAt) ?? 0);
@@ -51,6 +58,8 @@ export function sweepVerdict(t: SweepThread, nowMs: number): SweepVerdict {
 
 export interface SweepDecision<T extends SweepThread> {
   pause: Array<{ thread: T; endReason: EndReason; reason?: string }>;
+  /** Due to pause, but first the runner should drain (upload history, save state). */
+  drain: Array<{ thread: T; endReason: EndReason }>;
   keep: T[];
   /** Threads whose policy check threw; left running and retried next sweep. */
   errors: Array<{ thread: T; error: string }>;
@@ -66,11 +75,12 @@ export async function decideSweep<T extends SweepThread>(
   nowMs: number,
   canKeepRunning: (thread: T) => Promise<PolicyDecision>,
 ): Promise<SweepDecision<T>> {
-  const result: SweepDecision<T> = { pause: [], keep: [], errors: [] };
+  const result: SweepDecision<T> = { pause: [], drain: [], keep: [], errors: [] };
+  const due: Array<{ thread: T; endReason: EndReason; reason?: string }> = [];
   const toCheck: T[] = [];
   for (const thread of threads) {
     const v = sweepVerdict(thread, nowMs);
-    if (v.action === "pause") result.pause.push({ thread, endReason: v.endReason });
+    if (v.action === "pause") due.push({ thread, endReason: v.endReason });
     else if (v.action === "ask_policy") toCheck.push(thread);
   }
   const decisions = await Promise.allSettled(toCheck.map(t => canKeepRunning(t)));
@@ -78,9 +88,29 @@ export async function decideSweep<T extends SweepThread>(
     const thread = toCheck[i]!;
     if (d.status === "rejected") result.errors.push({ thread, error: String(d.reason) });
     else if (d.value.allow) result.keep.push(thread);
-    else result.pause.push({ thread, endReason: "policy", reason: d.value.reason });
+    else due.push({ thread, endReason: "policy", reason: d.value.reason });
   });
+
+  for (const item of due) {
+    const step = drainStep(item.thread, item.endReason, nowMs);
+    if (step === "pause") result.pause.push(item);
+    else if (step === "drain") result.drain.push(item);
+    else result.keep.push(item.thread);
+  }
   return result;
+}
+
+/**
+ * Before pausing a sandbox whose runner is alive, ask it to drain (finish writing,
+ * upload history) and pause once it says it has, or after `DRAIN_TIMEOUT_MS`.
+ * A silent or failed runner can't drain, so it is paused straight away.
+ */
+export function drainStep(t: SweepThread, endReason: EndReason, nowMs: number): "drain" | "wait" | "pause" {
+  if (endReason === "error") return "pause";
+  const requested = ms(t.drainRequestedAt ?? null);
+  if (requested === null) return "drain";
+  if (ms(t.drainedAt ?? null) !== null || nowMs - requested >= DRAIN_TIMEOUT_MS) return "pause";
+  return "wait";
 }
 
 /** Whole seconds between a run's start and `endMs`, never negative. */

@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import {
   Thread,
   branchForThread,
@@ -15,6 +15,7 @@ import { sandboxRuns, threads, type ThreadRow } from "@lemonlime/db";
 import { getThreadForUser, listThreadsForUser } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
+import { countPendingMessages } from "./history.ts";
 import { RUNNER_PORT, buildRunnerLaunch, validateCloudLaunch } from "./runner-command.ts";
 import { decideSweep, runtimeSeconds, type EndReason, type SweepThread } from "./sweep.ts";
 import { issueClientToken, threadSecret } from "./tokens.ts";
@@ -52,6 +53,9 @@ function toSweepThread(row: ThreadRow): SweepThread & { row: ThreadRow } {
     idleSince: isoOrNull(row.idleSince),
     runningSince: isoOrNull(row.runningSince),
     lastHeartbeatAt: isoOrNull(row.lastHeartbeatAt),
+    background: row.background,
+    drainRequestedAt: isoOrNull(row.drainRequestedAt),
+    drainedAt: isoOrNull(row.drainedAt),
     row,
   };
 }
@@ -68,6 +72,11 @@ function runningSandbox(row: ThreadRow): RunningSandbox {
 }
 
 // ─── Reading ────────────────────────────────────────────────────────────────
+
+/** A thread row by id, without an access check (for runner-authenticated routes). */
+export function getThreadRow(ctx: AppContext, id: string): Promise<ThreadRow | null> {
+  return getRow(ctx, id);
+}
 
 async function getRow(ctx: AppContext, id: string): Promise<ThreadRow | null> {
   return (await ctx.db.select().from(threads).where(eq(threads.id, id)).get()) ?? null;
@@ -227,6 +236,9 @@ export async function endRun(
     runningSince: null,
     idleSince: null,
     runnerUrl: null,
+    background: null,
+    drainRequestedAt: null,
+    drainedAt: null,
     ...(opts.destroy ? { sandboxId: null } : {}),
   };
   const [claimed] = await ctx.db
@@ -304,6 +316,9 @@ export async function resumeThread(ctx: AppContext, userId: string, id: string):
     runningSince: now,
     idleSince: now,
     lastHeartbeatAt: null,
+    background: null,
+    drainRequestedAt: null,
+    drainedAt: null,
   });
   await notify("onSandboxStarted", () => usagePolicy.onSandboxStarted(runningSandbox(updated)));
   return threadResponse(ctx, updated, userId);
@@ -329,16 +344,24 @@ export async function recordHeartbeat(ctx: AppContext, hb: RunnerHeartbeat): Pro
   // The control plane already paused or stopped this sandbox: keep our state and ask the runner to stop.
   if (row.mode === "cloud" && !row.runningSince) {
     await updateRow(ctx, row.id, { latestSeq, lastHeartbeatAt: now });
-    return { action: "shutdown" };
+    return { action: "shutdown", pendingMessages: 0 };
   }
 
+  // The agent started working again (e.g. a message arrived): call off any pending drain.
+  const working = hb.status === "running";
+  const drainRequestedAt = working ? null : row.drainRequestedAt;
+  const drainedAt = working ? null : hb.drained && drainRequestedAt ? now : row.drainedAt;
   await updateRow(ctx, row.id, {
     status: hb.status,
     latestSeq,
     idleSince: hb.idleSince,
     lastHeartbeatAt: now,
+    background: hb.background ?? null,
+    drainRequestedAt,
+    drainedAt,
   });
-  return { action: "none" };
+  const pending = await countPendingMessages(ctx, row.id);
+  return { action: drainRequestedAt && !drainedAt ? "drain" : "none", pendingMessages: pending };
 }
 
 // ─── Sweep ──────────────────────────────────────────────────────────────────
@@ -346,6 +369,8 @@ export async function recordHeartbeat(ctx: AppContext, hb: RunnerHeartbeat): Pro
 export interface SweepResult {
   checked: number;
   paused: Array<{ threadId: string; endReason: EndReason }>;
+  /** Asked to drain this time; paused by a later sweep. */
+  draining: string[];
   errors: Array<{ threadId: string; error: string }>;
 }
 
@@ -363,8 +388,18 @@ export async function sweepRunningSandboxes(ctx: AppContext, nowMs: number = Dat
   const result: SweepResult = {
     checked: running.length,
     paused: [],
+    draining: [],
     errors: decision.errors.map(e => ({ threadId: e.thread.id, error: e.error })),
   };
+  const nowIso = new Date(nowMs).toISOString();
+  for (const { thread } of decision.drain) {
+    // The runner is told to drain in its next heartbeat; the next sweep pauses it.
+    await ctx.db
+      .update(threads)
+      .set({ drainRequestedAt: nowIso, drainedAt: null })
+      .where(and(eq(threads.id, thread.id), isNull(threads.drainRequestedAt)));
+    result.draining.push(thread.id);
+  }
   for (const { thread, endReason } of decision.pause) {
     try {
       await endRun(ctx, thread.row, endReason, thread.row.status === "failed" ? { status: "failed" } : {});

@@ -102,6 +102,7 @@ cd apps/web
 
 # 1. Create the database and paste its id into wrangler.jsonc (d1_databases[0].database_id).
 npx wrangler d1 create lemonlime
+npx wrangler r2 bucket create lemonlime-history   # thread history (binding HISTORY)
 
 # 2. Apply the schema (packages/db/migrations).
 pnpm db:migrate:remote
@@ -248,6 +249,25 @@ SQLite has no row-level security. Every query made on behalf of a person goes
 through `apps/web/src/lib/access.ts`, which checks that they belong to the
 workspace (threads) or own the row (tokens). Threads in other workspaces are
 reported as not found.
+
+## Thread history and paused sandboxes
+
+Runners upload each thread's history to the control plane as they go (with every
+heartbeat, and in full before a pause), so a thread can be read, and messaged, while its
+sandbox is paused:
+
+- **Storage:** the R2 bucket bound as `HISTORY` on Workers; on Node, a folder
+  (`LEMONLIME_HISTORY_DIR`, default `./data/history`). Without either, threads still
+  work but can only be read while their sandbox runs.
+- **Pausing:** when a sandbox is due to pause, the sweep first asks its runner to *drain*
+  (upload everything, save state). It pauses once the runner confirms, or after a minute.
+  A runner that has stopped answering is paused straight away.
+- **Background work:** builds or tests using the CPU, downloads, and dev servers that the
+  agent left running keep an idle sandbox awake for up to 2 hours. Upkeep such as
+  language servers and git doesn't.
+- **Messages while paused:** `POST /api/threads/:id/messages` saves the message, then
+  wakes the sandbox; the runner picks it up when it starts. The apps do this when you
+  send to a paused thread.
 
 ## Choosing a sandbox provider
 

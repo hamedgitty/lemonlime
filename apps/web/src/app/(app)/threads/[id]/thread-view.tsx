@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { RunnerClient, type ConnectionState } from "@lemonlime/client";
-import type { PolicyDenied, Thread, ThreadEvent } from "@lemonlime/protocol";
+import type { PolicyDenied, Thread, ThreadEvent, ThreadHistoryResponse } from "@lemonlime/protocol";
 import { DeniedNotice } from "@/components/denied-notice.tsx";
 import { AGENT_LABELS, StatusPill, repoName } from "@/components/status-pill.tsx";
 import { apiFetch } from "@/lib/api-client.ts";
@@ -114,6 +114,27 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
     };
   }, [endpointUrl, refresh, initial.initialPrompt]);
 
+  // The stored history, so a paused thread can be read without waking its sandbox. The
+  // live connection then resumes after the last stored event.
+  useEffect(() => {
+    if (!isCloud) return;
+    let cancelled = false;
+    void (async () => {
+      let after = eventsRef.current.at(-1)?.seq ?? 0;
+      for (let page = 0; page < 50 && !cancelled; page++) {
+        const res = await apiFetch<ThreadHistoryResponse>(`/api/threads/${id}/events?after=${after}`);
+        if (!res.ok || cancelled) return;
+        for (const event of res.data.events) eventsRef.current = addEvent(eventsRef.current, event);
+        setEvents(eventsRef.current);
+        if (!res.data.more || res.data.events.length === 0) return;
+        after = res.data.events.at(-1)!.seq;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, isCloud]);
+
   // While not connected, poll so a resume from another device or an automatic pause shows up.
   useEffect(() => {
     if (endpointUrl || !isCloud || closed) return;
@@ -163,10 +184,20 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
     setPending(p => [...p, { clientMsgId, text, at: new Date().toISOString() }]);
     setDraft("");
     if (clientRef.current) clientRef.current.send(text, clientMsgId);
-    else {
-      queuedRef.current.push({ text, clientMsgId });
-      if (canResume) void resume();
-    }
+    else if (canResume) void sendWhilePaused(text, clientMsgId);
+    else queuedRef.current.push({ text, clientMsgId });
+  }
+
+  /** Saved by the control plane first, so it isn't lost if this tab closes; then the sandbox wakes. */
+  async function sendWhilePaused(text: string, clientMsgId: string) {
+    setBusy("resume");
+    setActionError(null);
+    setDenied(null);
+    const res = await apiFetch<ThreadResponse>(`/api/threads/${id}/messages`, { method: "POST", body: { text, clientMsgId } });
+    setBusy(null);
+    if (res.ok) apply(res.data);
+    else if (res.denied) setDenied(res.denied);
+    else setActionError(res.message);
   }
 
   function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {

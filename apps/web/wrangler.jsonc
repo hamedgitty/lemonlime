@@ -28,6 +28,9 @@
       "migrations_dir": "../../packages/db/migrations",
     },
   ],
+  // Thread history kept after it leaves the sandbox, so paused threads can be read
+  // without waking them. Create with `wrangler r2 bucket create lemonlime-history`.
+  "r2_buckets": [{ "binding": "HISTORY", "bucket_name": "lemonlime-history" }],
   // Cloudflare Email Service, used for sign-in codes. The sender domain in
   // LEMONLIME_EMAIL_FROM must be onboarded (`wrangler email sending enable <domain>`).
   // Remove this block to send through Resend (RESEND_API_KEY) instead.

@@ -157,19 +157,28 @@ describe("threads, scoped to a workspace", () => {
     expect(resumed.thread.status).toBe("provisioning");
     expect(sandbox.calls).toContain("resume:sb-1");
 
-    // Heartbeats update status; once idle long enough the sweep pauses it, exactly once.
+    // Heartbeats update status; once idle long enough the sweep asks the runner to drain,
+    // and pauses it once it has, exactly once.
     const idleSince = new Date(Date.now() - IDLE_PAUSE_AFTER_MS - 1000).toISOString();
     expect(await recordHeartbeat(ctx, { threadId: id, status: "idle", latestSeq: 7, idleSince, runnerVersion: "test" })).toEqual({
       action: "none",
+      pendingMessages: 0,
+    });
+    expect(await sweepRunningSandboxes(ctx)).toEqual({ checked: 1, paused: [], draining: [id], errors: [] });
+    expect(await recordHeartbeat(ctx, { threadId: id, status: "idle", latestSeq: 7, idleSince, runnerVersion: "test" })).toMatchObject({ action: "drain" });
+    expect(await sweepRunningSandboxes(ctx)).toEqual({ checked: 1, paused: [], draining: [], errors: [] }); // still draining
+    expect(await recordHeartbeat(ctx, { threadId: id, status: "idle", latestSeq: 8, idleSince, runnerVersion: "test", drained: true })).toMatchObject({
+      action: "none",
     });
     const sweep = await sweepRunningSandboxes(ctx);
-    expect(sweep).toEqual({ checked: 1, paused: [{ threadId: id, endReason: "idle" }], errors: [] });
-    expect(await sweepRunningSandboxes(ctx)).toEqual({ checked: 0, paused: [], errors: [] });
+    expect(sweep).toEqual({ checked: 1, paused: [{ threadId: id, endReason: "idle" }], draining: [], errors: [] });
+    expect(await sweepRunningSandboxes(ctx)).toEqual({ checked: 0, paused: [], draining: [], errors: [] });
     expect((await db.select().from(sandboxRuns).where(eq(sandboxRuns.threadId, id))).map(r => r.endReason)).toEqual(["user", "idle"]);
 
     // A runner that keeps reporting after the pause is asked to shut down.
     expect(await recordHeartbeat(ctx, { threadId: id, status: "idle", latestSeq: 9, idleSince, runnerVersion: "test" })).toEqual({
       action: "shutdown",
+      pendingMessages: 0,
     });
     const [row] = await db.select().from(threads).where(eq(threads.id, id));
     expect(row).toMatchObject({ status: "paused", latestSeq: 9, runningSince: null });

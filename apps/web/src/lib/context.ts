@@ -3,6 +3,7 @@ import { resolvePlugin, type ResolvedPlugin } from "@lemonlime/plugins";
 import { createSandboxProvider, type SandboxProvider } from "@lemonlime/sandbox";
 import pluginExport from "@lemonlime/deployment-plugin";
 import { createEmailSender, type EmailSender, type SendEmailBinding } from "./email.ts";
+import { fileHistoryStore, r2HistoryStore, type HistoryStore } from "./history.ts";
 
 /**
  * Everything a request (or the scheduled sweep) needs, built from the platform's
@@ -24,6 +25,8 @@ export interface AppContext {
   email: EmailSender;
   /** The configured sandbox provider, created on first use. */
   sandbox(): SandboxProvider;
+  /** Where thread history is kept after it leaves the sandbox; null if not set up. */
+  history: HistoryStore | null;
   config: AppConfig;
 }
 
@@ -69,6 +72,18 @@ export interface CreateAppContextOptions {
   plugin?: ResolvedPlugin;
   sandbox?: () => SandboxProvider;
   email?: EmailSender;
+  history?: HistoryStore | null;
+}
+
+/**
+ * History storage: the R2 bucket bound as HISTORY (Workers), else a folder on disk
+ * (Node: LEMONLIME_HISTORY_DIR, default ./data/history). None on Workers without a bucket.
+ */
+function defaultHistory(runtime: AppContext["runtime"], env: Record<string, unknown>, vars: Record<string, string | undefined>): HistoryStore | null {
+  const bucket = env.HISTORY as Parameters<typeof r2HistoryStore>[0] | undefined;
+  if (bucket && typeof bucket.put === "function") return r2HistoryStore(bucket);
+  if (runtime === "node") return fileHistoryStore(vars.LEMONLIME_HISTORY_DIR || "./data/history");
+  return null;
 }
 
 export function createAppContext(opts: CreateAppContextOptions): AppContext {
@@ -90,6 +105,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
         provider ??= createSandboxProvider(vars);
         return provider;
       }),
+    history: opts.history !== undefined ? opts.history : defaultHistory(opts.runtime, opts.env, vars),
     config: makeConfig(vars),
   };
 }

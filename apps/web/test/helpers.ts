@@ -5,6 +5,7 @@ import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider }
 import { createPersonalWorkspace } from "../src/lib/access.ts";
 import { createAppContext, type AppContext } from "../src/lib/context.ts";
 import type { EmailMessage, EmailSender } from "../src/lib/email.ts";
+import { memoryHistoryStore } from "../src/lib/history.ts";
 
 export const TEST_ENV = {
   LEMONLIME_PUBLIC_URL: "http://localhost:3000",
@@ -46,6 +47,7 @@ export interface TestApp {
   db: Db;
   sandbox: FakeSandboxProvider;
   emails: EmailMessage[];
+  history: ReturnType<typeof memoryHistoryStore>;
 }
 
 export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}): Promise<TestApp> {
@@ -58,6 +60,7 @@ export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}
       emails.push(m);
     },
   };
+  const history = memoryHistoryStore();
   const plugin: ResolvedPlugin = { ...defaultPlugin, usagePolicy: { ...defaultPlugin.usagePolicy, ...opts.policy } };
   const ctx = createAppContext({
     runtime: "node",
@@ -67,8 +70,9 @@ export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}
     plugin,
     email,
     sandbox: () => sandbox as unknown as SandboxProvider,
+    history,
   });
-  return { ctx, db, sandbox, emails };
+  return { ctx, db, sandbox, emails, history };
 }
 
 /** Insert a user row directly (as Better Auth would) plus their personal workspace. */

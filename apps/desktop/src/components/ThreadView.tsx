@@ -68,7 +68,9 @@ function ThreadSessionView({
   // While connected the runner is the source of truth; otherwise the control plane (cloud) is.
   const liveStatus: ThreadStatus | null = entry.mode === "cloud" ? (connected ? (session.status ?? entry.thread.status) : entry.thread.status) : session.status;
   const working = liveStatus === "running" && connected;
-  const composerDisabled = session.state === "starting" || session.state === "offline" || session.state === "error";
+  // A paused cloud thread still takes messages: sending one saves it and wakes the sandbox.
+  const pausedCloud = entry.mode === "cloud" && entry.thread.status === "paused" && session.state === "offline";
+  const composerDisabled = !pausedCloud && (session.state === "starting" || session.state === "offline" || session.state === "error");
 
   // Once a local runner has been started, refresh the "running" set in the sidebar.
   useEffect(() => {
@@ -229,7 +231,7 @@ function ThreadSessionView({
               ? "Starting the runner…"
               : "Connecting…"
             : summary.mode === "cloud" && cloudStatus === "paused"
-              ? "This sandbox is paused. Resume it to continue."
+              ? "This sandbox is paused. Send a message to wake it."
               : "Not connected"
         }
       />

@@ -1,0 +1,61 @@
+name: Desktop build check
+
+# Builds the desktop app, unsigned, on every platform the release builds for, and keeps
+# the installers as workflow artifacts for a week. Run it by hand to check the Windows
+# and Linux builds (or try them on a machine) without tagging a release.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --target aarch64-apple-darwin
+            name: macos-arm64
+          - os: windows-latest
+            args: ""
+            name: windows-x64
+          - os: ubuntu-22.04
+            args: ""
+            name: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.os, 'macos') && 'aarch64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: System libraries for Tauri (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @lemonlime/runner build:sea
+      # No signing keys here, so no update files: those are only made for releases.
+      - run: pnpm --filter @lemonlime/desktop tauri build ${{ matrix.args }} --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lemonlime-${{ matrix.name }}
+          retention-days: 7
+          path: |
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.dmg
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.msi
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.exe
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.deb
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.AppImage
+            apps/desktop/src-tauri/target/**/release/bundle/**/*.rpm
+          if-no-files-found: error

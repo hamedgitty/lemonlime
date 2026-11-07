@@ -45,10 +45,11 @@ describe("git credential helper", () => {
 
     const request = "protocol=https\nhost=github.com\npath=acme/app.git\n";
     expect(await gitCredential("get", request, env)).toBe("username=x-access-token\npassword=ghs_fresh\n");
-    expect(seen).toEqual(["/api/runner/git-credentials?threadId=cred-thread-1 runner"]);
+    expect(seen).toEqual(["/api/runner/git-credentials?threadId=cred-thread-1&host=github.com runner"]);
     answer = { status: 404, body: { error: "not_found" } };
     expect(await gitCredential("get", request, env)).toBe("");
     expect(await gitCredential("get", "protocol=ssh\nhost=github.com\n", env)).toBe("");
+    expect(await gitCredential("get", "protocol=https\n", env)).toBe("");
     expect(await gitCredential("store", request, env)).toBe("");
     expect(await gitCredential("get", request, {})).toBe("");
   });

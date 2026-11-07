@@ -18,6 +18,14 @@ describe("authenticateRunner", () => {
     expect(await authenticateRunner(`Bearer ${token}`, THREAD, MASTER, NOW)).toEqual({ ok: true, threadId: THREAD });
   });
 
+  it("rejects tokens made to last, since whoever made one could keep it", async () => {
+    expect(await authenticateRunner(`Bearer ${await runnerToken(THREAD, { exp: NOW + 601 })}`, THREAD, MASTER, NOW)).toMatchObject({
+      ok: false,
+      status: 401,
+      error: "token lives too long",
+    });
+  });
+
   it("rejects a missing or malformed header", async () => {
     expect(await authenticateRunner(null, THREAD, MASTER, NOW)).toMatchObject({ ok: false, status: 401 });
     expect(await authenticateRunner("Basic abc", THREAD, MASTER, NOW)).toMatchObject({ ok: false, status: 401 });

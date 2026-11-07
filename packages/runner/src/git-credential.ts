@@ -29,16 +29,19 @@ export async function gitCredential(op: string, input: string, env: NodeJS.Proce
       .filter(([k, v]) => k && v !== undefined)
       .map(([k, ...v]) => [k!.trim(), v.join("=").trim()]),
   );
-  if (req.protocol !== "https") return "";
+  if (req.protocol !== "https" || !req.host) return "";
   const threadId = env.LEMONLIME_THREAD_ID;
   const secret = env.LEMONLIME_THREAD_SECRET;
   const base = env.LEMONLIME_CONTROL_PLANE_URL;
   if (!threadId || !secret || !base) return "";
   const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 120 }, secret);
-  const res = await fetch(`${base.replace(/\/+$/, "")}/api/runner/git-credentials?threadId=${encodeURIComponent(threadId)}`, {
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(15_000),
-  }).catch(() => null);
+  const res = await fetch(
+    `${base.replace(/\/+$/, "")}/api/runner/git-credentials?threadId=${encodeURIComponent(threadId)}&host=${encodeURIComponent(req.host)}`,
+    {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(15_000),
+    },
+  ).catch(() => null);
   if (!res?.ok) return "";
   const body = (await res.json().catch(() => ({}))) as { username?: string; password?: string };
   if (!body.username || !body.password) return "";

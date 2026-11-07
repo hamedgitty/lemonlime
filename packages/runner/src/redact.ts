@@ -41,6 +41,8 @@ export function createRedactor(secrets: Record<string, string>): (event: NewEven
 /** The secrets named in LEMONLIME_REDACT_ENV ("A,B"), with their values from the environment. */
 export function secretsFromEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
+  // The runner's own thread secret is always hidden: with it, anyone could act as the runner.
+  if (env.LEMONLIME_THREAD_SECRET) out.LEMONLIME_THREAD_SECRET = env.LEMONLIME_THREAD_SECRET;
   for (const name of (env.LEMONLIME_REDACT_ENV ?? "")
     .split(",")
     .map(s => s.trim())

@@ -16,6 +16,7 @@ import {
   recordHeartbeat,
   resumeThread,
   sweepRunningSandboxes,
+  getLiveRunnerThread,
 } from "../src/lib/threads.ts";
 import { addUser, createTestApp } from "./helpers.ts";
 
@@ -110,6 +111,17 @@ describe("threads, scoped to a workspace", () => {
 
     const closed = await deleteThread(ctx, alice.userId, created.thread.id);
     expect(closed.thread.status).toBe("stopped");
+  });
+
+  it("serves runner routes only while the cloud thread is meant to be running", async () => {
+    const { ctx, db } = await createTestApp();
+    const alice = await addUser(db, "alice@example.com");
+    const { thread } = await createThread(ctx, alice.userId, alice.workspaceId, cloudThread);
+    expect((await getLiveRunnerThread(ctx, thread.id)).id).toBe(thread.id);
+    await pauseThread(ctx, alice.userId, thread.id);
+    expect(await httpStatus(getLiveRunnerThread(ctx, thread.id))).toBe(404);
+    const local = await createThread(ctx, alice.userId, alice.workspaceId, { ...cloudThread, mode: "local" });
+    expect(await httpStatus(getLiveRunnerThread(ctx, local.thread.id))).toBe(404);
   });
 
   it("passes what the runner reports about CPU use to the usage policy", async () => {

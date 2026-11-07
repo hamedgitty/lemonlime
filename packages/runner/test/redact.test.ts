@@ -12,6 +12,7 @@ describe("secret redaction", () => {
   it("reads the secret names from LEMONLIME_REDACT_ENV", () => {
     expect(secretsFromEnv({ LEMONLIME_REDACT_ENV: "A, B,C", A: "value-a", B: "value-b" })).toEqual({ A: "value-a", B: "value-b" });
     expect(secretsFromEnv({})).toEqual({});
+    expect(secretsFromEnv({ LEMONLIME_THREAD_SECRET: "thread-secret-value" })).toEqual({ LEMONLIME_THREAD_SECRET: "thread-secret-value" });
   });
 
   it("keeps secrets out of the thread's history", async () => {

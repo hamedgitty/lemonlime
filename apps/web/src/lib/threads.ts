@@ -86,6 +86,17 @@ export function getThreadRow(ctx: AppContext, id: string): Promise<ThreadRow | n
   return getRow(ctx, id);
 }
 
+/**
+ * For runner routes that hand something out or change the thread: the cloud thread, only
+ * while its sandbox is meant to be running. Whoever once got hold of a thread's secret
+ * can't keep using it after the thread is paused or closed.
+ */
+export async function getLiveRunnerThread(ctx: AppContext, id: string): Promise<ThreadRow> {
+  const row = await getRow(ctx, id);
+  if (!row || row.mode !== "cloud" || !LIVE_STATUSES.has(row.status)) throw new HttpError(404, "Thread not found.");
+  return row;
+}
+
 async function getRow(ctx: AppContext, id: string): Promise<ThreadRow | null> {
   return (await ctx.db.select().from(threads).where(eq(threads.id, id)).get()) ?? null;
 }

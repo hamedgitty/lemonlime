@@ -1,6 +1,12 @@
 import { ThreadId, deriveThreadSecret, signToken, verifyToken } from "@lemonlime/protocol";
 import { bearerToken } from "./access-tokens.ts";
 
+/**
+ * Runners sign their own tokens, a few minutes ahead. One that claims to last longer
+ * was made to be kept, so it's refused.
+ */
+export const MAX_RUNNER_TOKEN_SECONDS = 10 * 60;
+
 /** Client tokens are short-lived; clients fetch a fresh one on every (re)connect. */
 export const CLIENT_TOKEN_TTL_SECONDS = 15 * 60;
 
@@ -44,5 +50,6 @@ export async function authenticateRunner(
   if (!result.ok) return { ok: false, status: 401, error: `token ${result.reason.replace("_", " ")}` };
   if (result.claims.scope !== "runner") return { ok: false, status: 403, error: "token is not a runner token" };
   if (result.claims.threadId !== threadId) return { ok: false, status: 403, error: "token is for another thread" };
+  if (result.claims.exp > nowSec + MAX_RUNNER_TOKEN_SECONDS) return { ok: false, status: 401, error: "token lives too long" };
   return { ok: true, threadId };
 }

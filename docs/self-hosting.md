@@ -220,10 +220,20 @@ docker compose up -d
 ```
 
 How runners are reached: each sandbox joins the `lemonlime-sandboxes` network and opens
-no port on the host. Caddy forwards `/sandbox/lemonlime-<thread id>/…` to that
-container's runner, so apps talk to runners over the same HTTPS address as the
-dashboard, and only those containers on the runner port can be reached. Runners send
-heartbeats to the dashboard over the internal network (`LEMONLIME_RUNNER_CONTROL_PLANE_URL`).
+no port on the host. Caddy forwards `/sandbox/lemonlime-<thread id>/ws` (and `/healthz`)
+to that container's runner, so apps talk to runners over the same HTTPS address as the
+dashboard. Nothing else a sandbox serves is passed through, since code in a sandbox
+controls its port and a page from it would run on the dashboard's origin. The dashboard
+isn't on the sandbox network at all: runners reach its runner API through Caddy's
+internal port 8080 (`LEMONLIME_RUNNER_CONTROL_PLANE_URL`).
+
+Sandbox network firewall: `scripts/sandbox-firewall.sh` (installed as the
+`lemonlime-firewall` service by the install script) lets sandboxes reach the internet and
+Caddy, and nothing else: not each other, not the host, not private networks and not the
+cloud metadata service at 169.254.169.254, which would hand out the server's own cloud
+credentials. Outbound mail ports are closed too. If you set up by hand, run it as root
+after `docker compose up -d`. Sandbox containers also run with no extra Linux
+capabilities, `no-new-privileges` and a limit of 1024 processes.
 
 The dashboard container has the host's Docker socket so it can start sandboxes, which
 gives it full control of Docker on the host: use a machine dedicated to LemonLime.
@@ -346,11 +356,19 @@ Create the app at **GitHub → Settings → Developer settings → GitHub Apps �
 
 - **Callback URL** and **Setup URL**: `<LEMONLIME_PUBLIC_URL>/api/github/setup`
 - Turn on **Request user authorization (OAuth) during installation** (LemonLime uses it
-  to check that whoever installs the app can manage that installation).
+  to check that whoever connects an installation owns that account, or is an owner of
+  that organization).
 - **Webhook**: off.
 - **Repository permissions**: Contents *Read and write*, Pull requests *Read and write*,
   Metadata *Read-only*.
+- **Organization permissions**: Members *Read-only* (to check the person connecting an
+  organization is one of its owners).
 - **Where can this app be installed?** Any account, so other people can install it.
+
+Agents can push to any branch the token reaches. GitHub can't limit a token to one
+branch, so protect your default branch with a ruleset (**Settings → Rules → Rulesets**:
+require a pull request, block force pushes and deletion); thread branches
+(`agent/*`) are then the only ones agents can change directly.
 
 Then generate a private key and set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL
 name), `GITHUB_APP_PRIVATE_KEY` (the PEM; newlines may be written as `\n`),

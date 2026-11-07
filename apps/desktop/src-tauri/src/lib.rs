@@ -2,6 +2,7 @@
 //! processes that back local threads.
 
 mod paths;
+mod previews;
 mod repo;
 mod runner;
 mod secrets;
@@ -30,6 +31,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(runner::Runners::default())
+        .manage(previews::Tunnels::default())
         .invoke_handler(tauri::generate_handler![
             runner::start_local_runner,
             runner::stop_local_runner,
@@ -39,6 +41,9 @@ pub fn run() {
             repo::inspect_repo,
             secrets::secret_get,
             secrets::secret_set,
+            previews::start_preview_tunnel,
+            previews::preview_tunnel_token,
+            previews::stop_preview_tunnel,
             skills::list_skills,
             skills::add_skill,
             skills::remove_skill,
@@ -57,7 +62,10 @@ pub fn run() {
                 }
             }
             // Never leave runner processes behind when the app quits.
-            RunEvent::Exit => app.state::<runner::Runners>().stop_all(),
+            RunEvent::Exit => {
+                app.state::<runner::Runners>().stop_all();
+                app.state::<previews::Tunnels>().stop_all();
+            }
             _ => {}
         });
 }

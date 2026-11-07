@@ -7,6 +7,7 @@ import {
   ExternalLink,
   FileDiff,
   GitBranch,
+  Globe,
   Laptop,
   PanelRight,
   Pause,
@@ -33,6 +34,7 @@ import { Timeline } from "./Timeline.tsx";
 import { Composer, type ComposerHandle } from "./Composer.tsx";
 import { TerminalPanel } from "./TerminalPanel.tsx";
 import { SideChatPanel } from "./SideChatPanel.tsx";
+import { PreviewPanel } from "./PreviewPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { Menu, MenuItem, Tip } from "./primitives.tsx";
 import { Button, StatusDot, cx, openExternal } from "./ui.tsx";
@@ -77,6 +79,7 @@ function ThreadSessionView({
   onRemoveLocal,
   onCloudRefresh,
   onRunnersChanged,
+  runnerPath,
 }: ThreadViewProps & { target: SessionTarget }) {
   const session = useThreadSession(target, {
     onProgress: entry.mode === "local" ? onLocalProgress : undefined,
@@ -200,7 +203,7 @@ function ThreadSessionView({
     session.rewind(seq, restoreFiles);
     composerRef.current?.fill(text);
   };
-  const [panelTab, setPanelTab] = useState<"changes" | "terminal" | "side">("changes");
+  const [panelTab, setPanelTab] = useState<"changes" | "terminal" | "side" | "browser">("changes");
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -442,7 +445,9 @@ function ThreadSessionView({
           </div>
         </div>
       </section>
-      {panelOpen && <SidePanel tab={panelTab} onTab={setPanelTab} session={session} onClose={() => setPanelOpen(false)} />}
+      {panelOpen && (
+        <SidePanel tab={panelTab} onTab={setPanelTab} session={session} mode={entry.mode} runnerPath={runnerPath} onClose={() => setPanelOpen(false)} />
+      )}
     </div>
   );
 }
@@ -452,11 +457,15 @@ function SidePanel({
   tab,
   onTab,
   session,
+  mode,
+  runnerPath,
   onClose,
 }: {
-  tab: "changes" | "terminal" | "side";
-  onTab: (t: "changes" | "terminal" | "side") => void;
+  tab: "changes" | "terminal" | "side" | "browser";
+  onTab: (t: "changes" | "terminal" | "side" | "browser") => void;
   session: ReturnType<typeof useThreadSession>;
+  mode: "local" | "cloud";
+  runnerPath: string;
   onClose: () => void;
 }) {
   const changed = useMemo(() => new Set(session.events.filter(e => e.type === "file_diff").map(e => (e as { path: string }).path)).size, [session.events]);
@@ -482,6 +491,10 @@ function SidePanel({
           <SquareTerminal aria-hidden="true" className="size-3.5" />
           Terminal
         </button>
+        <button type="button" role="tab" aria-selected={tab === "browser"} onClick={() => onTab("browser")} className={tabClass(tab === "browser")}>
+          <Globe aria-hidden="true" className="size-3.5" />
+          Browser
+        </button>
         <button type="button" role="tab" aria-selected={tab === "side"} onClick={() => onTab("side")} className={tabClass(tab === "side")}>
           <MessagesSquare aria-hidden="true" className="size-3.5" />
           Side chat
@@ -498,6 +511,7 @@ function SidePanel({
       </div>
       {tab === "changes" && <ChangesList events={session.events} />}
       {tab === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
+      {tab === "browser" && <PreviewPanel events={session.events} mode={mode} connection={session.connection} {...(runnerPath ? { runnerPath } : {})} />}
       {terminalSeen && (
         <div className={cx("min-h-0 flex-1 flex-col", tab === "terminal" ? "flex" : "hidden")}>
           <TerminalPanel connection={session.connection} />

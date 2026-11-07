@@ -320,7 +320,7 @@ fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path
 }
 
 /// Asks the runner to shut down cleanly, then forces it after a grace period.
-fn terminate(mut child: Child) {
+pub(crate) fn terminate(mut child: Child) {
     if matches!(child.try_wait(), Ok(Some(_))) {
         return;
     }
@@ -360,7 +360,7 @@ fn terminate(mut child: Child) {
 /// A command that runs the runner. Script paths (e.g. the checkout's
 /// `packages/runner/bin/lemonlime-runner.js`) are run with Node, which also
 /// makes them work on Windows.
-fn runner_command(program: &Path) -> Result<Command, String> {
+pub(crate) fn runner_command(program: &Path) -> Result<Command, String> {
     let is_script = program
         .extension()
         .and_then(|e| e.to_str())

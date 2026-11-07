@@ -113,6 +113,18 @@ sit in `.lemonlime-attachments/` in the thread's folder (kept out of git), and a
 levels and limits. `--model` and `--reasoning` are fixed when the thread starts: Claude
 Code gets a thinking budget (`MAX_THINKING_TOKENS`), Codex `model_reasoning_effort`.
 
+## Previews
+
+When the agent starts a dev server it runs `lemonlime-runner preview <port> --name <what>`
+(the bundled `lemonlime-previews` skill tells it to), which signs a runner token with the
+thread's secret and offers the port; a `preview_update` event lists what's on offer. On
+this computer the apps open `http://localhost:<port>` directly. For a cloud thread the
+desktop app runs the runner in `tunnel` mode: it listens on 127.0.0.1 only, refuses
+requests whose Host or Origin isn't that address (so other sites can't reach it through
+DNS rebinding), and carries each connection to the sandbox over the runner's `/tunnel`
+socket, which takes a client token and only offered ports. HTTP, WebSockets and
+server-sent events all pass through as bytes; there is no public URL.
+
 ## Side chats
 
 `side_ask` (with no `sideId`) starts a side chat: a separate agent conversation, at the

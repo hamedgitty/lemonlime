@@ -117,6 +117,22 @@ export async function skillsFolder(): Promise<string> {
   return invoke<string>("skills_folder");
 }
 
+/** Open a cloud preview on 127.0.0.1 through the runner; returns the local port. */
+export async function startPreviewTunnel(runnerUrl: string, port: number, token: string, runnerPath?: string): Promise<number> {
+  requireShell();
+  return invoke<number>("start_preview_tunnel", { runnerUrl, port, token, runnerPath: runnerPath || null });
+}
+
+export async function previewTunnelToken(runnerUrl: string, port: number, token: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  return invoke<boolean>("preview_tunnel_token", { runnerUrl, port, token });
+}
+
+export async function stopPreviewTunnel(runnerUrl: string, port: number): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("stop_preview_tunnel", { runnerUrl, port });
+}
+
 /** Asks a yes/no question with the native dialog (or the browser's when not in the shell). */
 export async function confirmAction(message: string): Promise<boolean> {
   if (isTauri()) return ask(message, { title: "LemonLime", kind: "warning" });

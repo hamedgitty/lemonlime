@@ -30,7 +30,10 @@ export default {
         }
         const auto = await runDueAutomations(app).catch(err => (console.error("[lemonlime] automations failed:", err), null));
         if (auto && (auto.started.length || auto.skipped.length || auto.failed.length)) console.log("[lemonlime] automations:", auto);
-      })(),
+      })().catch(err => {
+        // A rejected waitUntil promise is dropped without a trace; say why the sweep didn't run.
+        console.error("[lemonlime] sweep failed:", err);
+      }),
     );
   },
 };

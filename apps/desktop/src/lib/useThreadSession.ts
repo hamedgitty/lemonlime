@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RunnerClient } from "@lemonlime/client";
-import { signToken, type SideChatSummary, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
+import { signToken, type ComputerRequest, type SideChatSummary, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
 import { appendEvents, contiguousSeq, type PendingMessage } from "./timeline.ts";
 import { forgetEvents, loadEvents, saveEvents, type LocalThreadMeta } from "./storage.ts";
-import { isLocalRunnerRunning, startLocalRunner } from "./native.ts";
+import { confirmAction, isLocalRunnerRunning, startLocalRunner } from "./native.ts";
+import { answerComputerRequest, type ComputerLevel } from "./computer.ts";
 import type { CloudApi } from "./cloud.ts";
 import { joinCommand } from "./command.ts";
 
@@ -30,6 +31,8 @@ export interface SessionCallbacks {
   onStatus?: (threadId: string, status: ThreadStatus) => void;
   /** Local threads: the first prompt has been handed to the runner. */
   onPromptSent?: (threadId: string) => void;
+  /** Cloud threads: this thread's computer access setting, read when a request comes in. */
+  computerLevel?: () => ComputerLevel;
 }
 
 export interface Connection {
@@ -202,6 +205,14 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
             setGeneration(g => g + 1);
           }
         },
+        ...(targetRef.current.mode === "cloud"
+          ? {
+              onComputerRequest: (requestId: string, request: ComputerRequest) => {
+                const level = callbacksRef.current.computerLevel?.() ?? "off";
+                void answerComputerRequest(level, request, confirmAction).then(r => client?.computerResult(requestId, r.ok, r.output));
+              },
+            }
+          : {}),
         onSideChats: chats => !cancelled && setSideChats(chats),
         onSideEvent: (sideId, e) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: [...(m[sideId] ?? []).filter(x => x.seq < e.seq), e] })),
         onSideHistory: (sideId, events) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: events })),

@@ -13,6 +13,8 @@ export const ClientHello = z.object({
   token: z.string().min(1),
   /** Send every event with seq > resumeFrom. 0 replays the whole history. */
   resumeFrom: z.number().int().nonnegative().default(0),
+  /** This app can answer `computer_request`s (the desktop app, which decides what to allow). */
+  computer: z.boolean().optional(),
 });
 
 export const ClientSendMessage = z.object({
@@ -55,6 +57,24 @@ export type ClientEditQueue = z.infer<typeof ClientEditQueue>;
 
 /** Go back to the user message at `toSeq` (see RewindEvent); optionally put files back too. */
 export const ClientRewind = z.object({ type: z.literal("rewind"), toSeq: z.number().int().positive(), restoreFiles: z.boolean().default(false) });
+/**
+ * Computer access for cloud agents: the runner forwards what the agent asked for to a
+ * desktop app that said it can answer (`hello.computer`). The app decides, by the user's
+ * setting for the thread (off, read-only, ask first, full), and replies once.
+ */
+export const ComputerRequest = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("read_file"), path: z.string().min(1).max(4096) }),
+  z.object({ op: z.literal("list_dir"), path: z.string().min(1).max(4096) }),
+  z.object({ op: z.literal("run_command"), command: z.string().min(1).max(20_000), cwd: z.string().max(4096).optional() }),
+]);
+export type ComputerRequest = z.infer<typeof ComputerRequest>;
+export const ClientComputerResult = z.object({
+  type: z.literal("computer_result"),
+  requestId: z.string().max(100),
+  ok: z.boolean(),
+  output: z.string().max(2_000_000),
+});
+
 /** Ask the agent to shrink its conversation (agents that support it). */
 export const ClientCompact = z.object({ type: z.literal("compact") });
 
@@ -99,6 +119,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientSidePin,
   ClientSideClose,
   ClientSideOpen,
+  ClientComputerResult,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -155,6 +176,9 @@ export const ServerSideHistory = z.object({ type: z.literal("side_history"), sid
 /** A `side_ask` was taken: `sideId` is the chat it went to (new, if none was given). */
 export const ServerSideStarted = z.object({ type: z.literal("side_started"), sideId: z.string(), requestId: z.string().optional() });
 
+/** A request from the agent for the user's computer; answer with `computer_result`. */
+export const ServerComputerRequest = z.object({ type: z.literal("computer_request"), requestId: z.string(), request: ComputerRequest });
+
 export const ServerMessage = z.discriminatedUnion("type", [
   ServerWelcome,
   ServerEvent,
@@ -167,6 +191,7 @@ export const ServerMessage = z.discriminatedUnion("type", [
   ServerSideEvent,
   ServerSideHistory,
   ServerSideStarted,
+  ServerComputerRequest,
 ]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 

@@ -252,6 +252,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
   // For the agent's own `lemonlime-runner preview`: where this runner is, and which thread.
   process.env.LEMONLIME_RUNNER_URL = `http://127.0.0.1:${server.port}`;
+  // Cloud agents can ask for the user's own computer (their desktop app decides).
+  if (inSandbox) process.env.LEMONLIME_COMPUTER_TOOLS = "1";
   process.env.LEMONLIME_THREAD_ID = id;
   // Machine-readable line for parent processes (e.g. the desktop app) that asked for port 0.
   process.stdout.write(JSON.stringify({ event: "ready", port: server.port }) + "\n");

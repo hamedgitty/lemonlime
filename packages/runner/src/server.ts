@@ -1,7 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { createConnection, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
-import { parseClientMessage, parseTerminalClientMessage, verifyToken, type ServerMessage, type TerminalServerMessage } from "@lemonlime/protocol";
+import {
+  ComputerRequest,
+  parseClientMessage,
+  parseTerminalClientMessage,
+  verifyToken,
+  type ServerMessage,
+  type TerminalServerMessage,
+} from "@lemonlime/protocol";
 import { TerminalSession, type SpawnPty } from "./terminal.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
@@ -37,7 +44,7 @@ const TERMINAL_SLOW_MS = 10_000;
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
-    if (path === "/capabilities" || path.startsWith("/attachments") || path === "/previews" || path.startsWith("/subagents")) {
+    if (path === "/capabilities" || path.startsWith("/attachments") || path === "/previews" || path.startsWith("/subagents") || path === "/computer") {
       void handleHttpApi(req, res, path, runner, opts).catch(() => {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "internal" }));
@@ -152,12 +159,14 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       send({ type: "side_chats", chats: runner.side.list() });
       const offSide = runner.side.subscribe((sideId, event) => send({ type: "side_event", sideId, event }));
       const offSideList = runner.side.onList(chats => send({ type: "side_chats", chats }));
+      const offComputer = msg.computer ? runner.computer.addClient(send) : () => undefined;
       const offEvents = unsubscribe;
       unsubscribe = () => {
         offEvents?.();
         offLogin();
         offSide();
         offSideList();
+        offComputer();
       };
       return;
     }
@@ -173,6 +182,9 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         break;
       case "interrupt":
         runner.interrupt();
+        break;
+      case "computer_result":
+        runner.computer.answer(msg.requestId, { ok: msg.ok, output: msg.output });
         break;
       case "side_ask": {
         const r = runner.side.ask(msg.text, msg.sideId);
@@ -357,6 +369,24 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     res.writeHead(204, CORS);
     res.end();
     return;
+  }
+  if (path === "/computer" && req.method === "POST") {
+    // From the cloud agent's own tools: a runner token signed with the thread secret.
+    const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+    if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
+    const body = await readBody(req, 64 * 1024);
+    const parsed = ComputerRequest.safeParse(
+      (() => {
+        try {
+          return JSON.parse(body?.toString() ?? "{}");
+        } catch {
+          return null;
+        }
+      })(),
+    );
+    if (!parsed.success) return reply(res, 400, { error: "bad request" });
+    return reply(res, 200, await runner.computer.request(parsed.data));
   }
   if (path.startsWith("/subagents")) {
     // From the agents' own subagents MCP server: a runner token signed with the thread secret.

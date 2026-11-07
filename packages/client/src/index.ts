@@ -1,4 +1,4 @@
-import { parseServerMessage, type ClientMessage, type SideChatSummary, type Thread, type ThreadEvent } from "@lemonlime/protocol";
+import { parseServerMessage, type ClientMessage, type ComputerRequest, type SideChatSummary, type Thread, type ThreadEvent } from "@lemonlime/protocol";
 
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "closed";
 
@@ -24,6 +24,11 @@ export interface RunnerClientOptions {
   onSideEvent?: (sideId: string, event: ThreadEvent) => void;
   onSideHistory?: (sideId: string, events: ThreadEvent[]) => void;
   onSideStarted?: (sideId: string, requestId?: string) => void;
+  /**
+   * This app answers cloud agents' requests for the user's computer (the desktop app).
+   * Each request must get exactly one `computerResult`.
+   */
+  onComputerRequest?: (requestId: string, request: ComputerRequest) => void;
   /** Max delay between reconnect attempts. */
   maxBackoffMs?: number;
 }
@@ -137,6 +142,12 @@ export class RunnerClient {
     this.post({ type: "side_open", sideId });
   }
 
+  /** The answer to a `computer_request` (sent straight away, not queued: it's for this connection's request). */
+  computerResult(requestId: string, ok: boolean, output: string): void {
+    const msg: ClientMessage = { type: "computer_result", requestId, ok, output: output.slice(0, 2_000_000) };
+    if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(msg));
+  }
+
   /** Answer an approval request from the agent. */
   approve(requestId: string, decision: "allow" | "deny"): void {
     this.post({ type: "approve", requestId, decision });
@@ -173,7 +184,10 @@ export class RunnerClient {
     this.ws = ws;
     this.live = false;
 
-    ws.onopen = () => ws.send(JSON.stringify({ type: "hello", token, resumeFrom: this.lastSeq } satisfies ClientMessage));
+    ws.onopen = () =>
+      ws.send(
+        JSON.stringify({ type: "hello", token, resumeFrom: this.lastSeq, ...(this.opts.onComputerRequest ? { computer: true } : {}) } satisfies ClientMessage),
+      );
     ws.onmessage = ev => {
       const msg = parseServerMessage(typeof ev.data === "string" ? ev.data : String(ev.data));
       if (!msg) return;
@@ -219,6 +233,18 @@ export class RunnerClient {
           break;
         case "side_started":
           this.opts.onSideStarted?.(msg.sideId, msg.requestId);
+          break;
+        case "computer_request":
+          if (this.opts.onComputerRequest) this.opts.onComputerRequest(msg.requestId, msg.request);
+          else
+            ws.send(
+              JSON.stringify({
+                type: "computer_result",
+                requestId: msg.requestId,
+                ok: false,
+                output: "This app can't reach the user's computer.",
+              } satisfies ClientMessage),
+            );
           break;
         case "error":
           this.opts.onError?.(msg.message, msg.code);

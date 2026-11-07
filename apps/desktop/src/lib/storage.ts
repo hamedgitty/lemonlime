@@ -133,6 +133,8 @@ export const UiPrefs = z.object({
   archived: z.record(z.string(), z.string()).default({}),
   /** The archive explanation has been shown once. */
   archivedHint: z.boolean().default(false),
+  /** What each cloud thread's agent may do on this computer (missing = off). */
+  computerAccess: z.record(z.string(), z.enum(["off", "read", "ask", "full"])).default({}),
   /** The first-run setup card was finished or put away. */
   setupDone: z.boolean().default(false),
   /** Setup steps ticked by hand (agent signed in). */

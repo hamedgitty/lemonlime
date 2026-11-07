@@ -1,6 +1,7 @@
 //! LemonLime desktop shell: the window, native dialogs, and the local runner
 //! processes that back local threads.
 
+mod computer;
 mod paths;
 mod previews;
 mod repo;
@@ -41,6 +42,9 @@ pub fn run() {
             repo::inspect_repo,
             secrets::secret_get,
             secrets::secret_set,
+            computer::computer_read_file,
+            computer::computer_list_dir,
+            computer::computer_run_command,
             previews::start_preview_tunnel,
             previews::preview_tunnel_token,
             previews::stop_preview_tunnel,

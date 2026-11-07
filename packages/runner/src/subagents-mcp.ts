@@ -29,6 +29,29 @@ const TOOLS = [
   },
 ];
 
+/** Offered to cloud agents only: the user's own computer, through their desktop app. */
+const COMPUTER_TOOLS = [
+  {
+    name: "computer_read_file",
+    description:
+      "Read a file on the user's own computer (not the sandbox), if they allow it in LemonLime. Use only when the task needs something that lives there. Give an absolute path.",
+    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "computer_list_dir",
+    description: "List a folder on the user's own computer, if they allow it. Absolute path.",
+    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+  },
+  {
+    name: "computer_run_command",
+    description:
+      "Run a shell command on the user's own computer, if they allow it (they may be asked first, and may say no). Keep it to what the task needs; say why in your reply.",
+    inputSchema: { type: "object", properties: { command: { type: "string" }, cwd: { type: "string" } }, required: ["command"] },
+  },
+];
+
+const toolsFor = (env: NodeJS.ProcessEnv) => (env.LEMONLIME_COMPUTER_TOOLS === "1" ? [...TOOLS, ...COMPUTER_TOOLS] : TOOLS);
+
 async function call(env: NodeJS.ProcessEnv, path: string, body?: Json): Promise<{ ok: boolean; data: Json }> {
   const base = env.LEMONLIME_RUNNER_URL;
   const threadId = env.LEMONLIME_THREAD_ID;
@@ -57,6 +80,16 @@ export async function runSubagentTool(name: string, args: Json, env: NodeJS.Proc
   if (name === "list_subagents") {
     const r = await call(env, "/subagents");
     return r.ok ? text(JSON.stringify(r.data.subagents ?? [], null, 2)) : text(String(r.data.error ?? "Couldn't list them."), true);
+  }
+  if (name.startsWith("computer_") && env.LEMONLIME_COMPUTER_TOOLS === "1") {
+    const op = name === "computer_read_file" ? "read_file" : name === "computer_list_dir" ? "list_dir" : name === "computer_run_command" ? "run_command" : null;
+    if (!op) return text(`Unknown tool ${name}`, true);
+    const body =
+      op === "run_command"
+        ? { op, command: String(args.command ?? ""), ...(args.cwd ? { cwd: String(args.cwd) } : {}) }
+        : { op, path: String(args.path ?? "") };
+    const r = await call(env, "/computer", body);
+    return r.ok && r.data.ok ? text(String(r.data.output ?? "")) : text(String(r.data.output ?? r.data.error ?? "Not allowed."), true);
   }
   if (name === "message_subagent") {
     const r = await call(env, "/subagents/message", { id: String(args.id ?? ""), text: String(args.text ?? "") });
@@ -87,7 +120,7 @@ export function runSubagentsMcp(env: NodeJS.ProcessEnv = process.env): void {
           },
         });
       case "tools/list":
-        return send({ id: msg.id, result: { tools: TOOLS } });
+        return send({ id: msg.id, result: { tools: toolsFor(env) } });
       case "tools/call":
         return send({ id: msg.id, result: await runSubagentTool(msg.params?.name ?? "", msg.params?.arguments ?? {}, env) });
       case "ping":

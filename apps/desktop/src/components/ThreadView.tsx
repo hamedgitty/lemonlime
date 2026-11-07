@@ -15,6 +15,7 @@ import {
   Power,
   RotateCw,
   MessagesSquare,
+  Monitor,
   Paperclip,
   Shrink,
   SquareTerminal,
@@ -25,6 +26,7 @@ import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
+import { COMPUTER_LEVELS, type ComputerLevel } from "../lib/computer.ts";
 import type { ThreadEntry } from "../lib/threads.ts";
 import { summarize } from "../lib/threads.ts";
 import { AGENT_LABELS, STATUS_LABELS, repoName } from "../lib/format.ts";
@@ -36,7 +38,7 @@ import { TerminalPanel } from "./TerminalPanel.tsx";
 import { SideChatPanel } from "./SideChatPanel.tsx";
 import { PreviewPanel } from "./PreviewPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
-import { Menu, MenuItem, Tip } from "./primitives.tsx";
+import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface ThreadViewProps {
@@ -51,6 +53,9 @@ export interface ThreadViewProps {
   onRemoveLocal: (id: string) => void;
   onCloudRefresh: () => void;
   onRunnersChanged: () => void;
+  /** Cloud threads: what the agent may do on this computer. */
+  computerLevel: ComputerLevel;
+  onComputerLevel: (level: ComputerLevel) => void;
 }
 
 export function ThreadView(props: ThreadViewProps) {
@@ -80,8 +85,13 @@ function ThreadSessionView({
   onCloudRefresh,
   onRunnersChanged,
   runnerPath,
+  computerLevel,
+  onComputerLevel,
 }: ThreadViewProps & { target: SessionTarget }) {
+  const levelRef = useRef(computerLevel);
+  levelRef.current = computerLevel;
   const session = useThreadSession(target, {
+    computerLevel: () => levelRef.current,
     onProgress: entry.mode === "local" ? onLocalProgress : undefined,
     onStatus: entry.mode === "local" ? onLocalStatus : undefined,
     onPromptSent: onLocalPromptSent,
@@ -254,7 +264,7 @@ function ThreadSessionView({
               Pause
             </Button>
           )}
-          {(entry.mode === "local" || summary.agent.kind === "claude-code") && (
+          {(entry.mode === "local" || entry.mode === "cloud" || summary.agent.kind === "claude-code") && (
             <Menu
               align="end"
               trigger={
@@ -271,6 +281,16 @@ function ThreadSessionView({
                 <MenuItem icon={<Shrink />} disabled={session.state !== "live" || working} onSelect={session.compact}>
                   Compact conversation
                 </MenuItem>
+              )}
+              {entry.mode === "cloud" && (
+                <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
+                  <MenuLabel>What the agent may do on this computer</MenuLabel>
+                  <MenuChoice
+                    value={computerLevel}
+                    onChange={onComputerLevel}
+                    options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
+                  />
+                </SubMenu>
               )}
               {entry.mode === "local" && (
                 <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>

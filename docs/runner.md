@@ -137,6 +137,17 @@ with no app open; the thread shows `subagent_started` / `subagent_replied` notic
 Only the agent that started a subagent can message it. The tools call the runner's
 `/subagents` routes with a runner token signed with the thread secret.
 
+## Computer access (cloud threads)
+
+In a sandbox, agents also get `computer_read_file`, `computer_list_dir` and
+`computer_run_command` for the user's own computer. The runner forwards each request to
+the newest connected desktop app that said it can answer (`hello.computer`), and the app
+decides by the thread's setting: **Off** (the default), **Read-only**, **Ask first** (it
+shows the exact request, with control, invisible and non-ASCII characters escaped so
+look-alikes can't hide anything) or **Full**. Paths must be absolute and are never
+followed through symbolic links; reads stop at 1 MB, commands at 60 seconds and 256 KB of
+output. With no desktop app open, the agent is told the computer can't be reached.
+
 ## Side chats
 
 `side_ask` (with no `sideId`) starts a side chat: a separate agent conversation, at the

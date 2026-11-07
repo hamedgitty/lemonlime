@@ -500,6 +500,11 @@ export function App() {
                 onRemoveLocal={onRemoveLocal}
                 onCloudRefresh={refreshCloud}
                 onRunnersChanged={refreshRunners}
+                computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
+                onComputerLevel={level => {
+                  if (selectedEntry.mode !== "cloud") return;
+                  onPrefs({ computerAccess: { ...prefs.computerAccess, [selectedEntry.thread.id]: level } });
+                }}
               />
             ) : (
               <Home

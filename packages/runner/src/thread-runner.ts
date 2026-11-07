@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
 import { Subagents } from "./subagents.ts";
+import { ComputerBridge } from "./computer.ts";
 import { attachmentNote, Attachments, ATTACHMENTS_DIR, type Upload } from "./attachments.ts";
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
@@ -172,6 +173,8 @@ export class ThreadRunner {
   readonly attachments: Attachments;
   /** Agents the thread's agent started to work on parts of its task. */
   readonly subagents: Subagents;
+  /** Cloud agents' requests for the user's own computer, answered by the desktop app. */
+  readonly computer = new ComputerBridge();
 
   private previewList: Preview[] = [];
 

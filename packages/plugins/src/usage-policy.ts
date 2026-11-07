@@ -67,6 +67,19 @@ export interface UsageNotice {
 }
 
 /**
+ * A short standing summary of a workspace's usage, for a card in the apps' sidebars,
+ * e.g. title "Cloud hours", detail "143 of 200 left this month", progress 0.72.
+ */
+export interface UsageSummary {
+  title: string;
+  detail: string;
+  /** Share used or left, 0-1, drawn as a bar; omit for none. */
+  progress?: number;
+  actionUrl?: string;
+  actionLabel?: string;
+}
+
+/**
  * Decides whether sandboxes may run, and is told when they start and stop.
  *
  * The control plane calls this for every cloud thread. It must never be bypassed,
@@ -83,6 +96,8 @@ export interface UsagePolicy {
   onSandboxStopped(run: SandboxRun): Promise<void>;
   /** Optional banner for a workspace (e.g. running low). Null or absent shows nothing. */
   notice?(subject: PolicySubject): Promise<UsageNotice | null>;
+  /** Optional sidebar card for a workspace. Null or absent shows nothing. */
+  summary?(subject: PolicySubject): Promise<UsageSummary | null>;
 }
 
 const ALLOW: PolicyDecision = { allow: true };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { usageNotice } from "../src/lib/usage.ts";
+import { usageNotice, usageSummary } from "../src/lib/usage.ts";
 import { createTestApp } from "./helpers.ts";
 
 describe("usage notice", () => {
@@ -17,5 +17,11 @@ describe("usage notice", () => {
       },
     });
     expect(await usageNotice(broken.ctx, "u", "w")).toBeNull();
+  });
+
+  it("gives the sidebar card when the deployment has one, kept to a 0-1 bar", async () => {
+    expect(await usageSummary((await createTestApp()).ctx, "u", "w")).toBeNull();
+    const app = await createTestApp({ policy: { summary: async () => ({ title: "Cloud hours", detail: "143 of 200 left", progress: 1.4 }) } });
+    expect(await usageSummary(app.ctx, "u", "w")).toEqual({ title: "Cloud hours", detail: "143 of 200 left", progress: 1 });
   });
 });

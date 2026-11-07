@@ -93,6 +93,20 @@ export class CloudApi {
     };
   }
 
+  /** The deployment's usage card for the sidebar (e.g. cloud hours left), or null. */
+  async usageSummary(): Promise<{ title: string; detail: string; progress?: number; actionUrl?: string; actionLabel?: string } | null> {
+    const body = (await this.request("GET", "/api/usage")) as { summary?: unknown } | null;
+    const s = body?.summary as { title?: unknown; detail?: unknown; progress?: unknown; actionUrl?: unknown; actionLabel?: unknown } | null | undefined;
+    if (!s || typeof s.title !== "string" || typeof s.detail !== "string") return null;
+    return {
+      title: s.title,
+      detail: s.detail,
+      ...(typeof s.progress === "number" ? { progress: Math.min(1, Math.max(0, s.progress)) } : {}),
+      ...(typeof s.actionUrl === "string" && /^https:\/\//.test(s.actionUrl) ? { actionUrl: s.actionUrl } : {}),
+      ...(typeof s.actionLabel === "string" ? { actionLabel: s.actionLabel } : {}),
+    };
+  }
+
   /** Stored history after `after`; works while the sandbox is paused, without waking it. */
   async history(id: string, after: number): Promise<ThreadHistoryResponse> {
     const body = await this.request("GET", `/api/threads/${encodeURIComponent(id)}/events?after=${after}`);

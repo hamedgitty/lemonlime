@@ -189,12 +189,17 @@ export function App() {
 
   // The deployment's usage banner (e.g. running low on cloud hours).
   const [usage, setUsage] = useState<Awaited<ReturnType<CloudApi["usageNotice"]>>>(null);
+  const [summary, setSummary] = useState<Awaited<ReturnType<CloudApi["usageSummary"]>>>(null);
   useEffect(() => {
     if (!cloudApi) {
       setUsage(null);
+      setSummary(null);
       return;
     }
-    const load = () => void cloudApi.usageNotice().then(setUsage, () => setUsage(null));
+    const load = () => {
+      void cloudApi.usageNotice().then(setUsage, () => setUsage(null));
+      void cloudApi.usageSummary().then(setSummary, () => setSummary(null));
+    };
     load();
     const t = setInterval(load, 5 * 60_000);
     return () => clearInterval(t);
@@ -419,6 +424,7 @@ export function App() {
         searchOpen={searchOpen}
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
+        usageCard={summary ? <UsageCard summary={summary} /> : undefined}
       />
     );
 
@@ -516,4 +522,33 @@ function sameSet(a: Set<string>, b: string[]): boolean {
   if (a.size !== b.length) return false;
   for (const x of b) if (!a.has(x)) return false;
   return true;
+}
+
+/** The deployment's usage card at the foot of the sidebar (cloud hours and the like). */
+function UsageCard({ summary }: { summary: { title: string; detail: string; progress?: number; actionUrl?: string; actionLabel?: string } }) {
+  return (
+    <div className="rounded-xl border border-line bg-paper px-3 py-2.5">
+      <div className="flex items-baseline gap-2">
+        <p className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-ink">{summary.title}</p>
+        {summary.actionUrl && (
+          <button type="button" onClick={() => void openExternal(summary.actionUrl!)} className="shrink-0 text-[12.5px] font-medium text-leaf hover:underline">
+            {summary.actionLabel ?? "Manage"}
+          </button>
+        )}
+      </div>
+      <p className="mt-0.5 truncate text-[12.5px] text-ink-soft">{summary.detail}</p>
+      {summary.progress !== undefined && (
+        <div
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-cream-deep"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(summary.progress * 100)}
+          aria-label={summary.title}
+        >
+          <div className="h-full rounded-full bg-lime" style={{ width: `${Math.round(summary.progress * 100)}%` }} />
+        </div>
+      )}
+    </div>
+  );
 }

@@ -3,7 +3,7 @@ name: Release desktop app
 # Push a tag like v0.2.0 to build the desktop app for every platform and attach it,
 # with the signed update files the app checks for, to a draft GitHub release.
 #
-# Secrets (Settings → Secrets and variables → Actions):
+# Secrets (Settings → Secrets and variables → Actions; scripts/set-release-secrets.sh sets them all):
 #   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD   sign updates (required)
 #   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
 #   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID                         sign + notarize macOS (optional)

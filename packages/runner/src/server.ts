@@ -142,6 +142,21 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       case "interrupt":
         runner.interrupt();
         break;
+      case "edit_queue": {
+        const change =
+          msg.action === "update"
+            ? msg.text
+              ? { action: "update" as const, text: msg.text }
+              : null
+            : msg.action === "move"
+              ? msg.toIndex !== undefined
+                ? { action: "move" as const, toIndex: msg.toIndex }
+                : null
+              : { action: msg.action };
+        if (!change) send({ type: "error", code: "bad_request", message: `${msg.action} needs ${msg.action === "update" ? "text" : "toIndex"}` });
+        else runner.editQueued(msg.clientMsgId, change);
+        break;
+      }
       case "approve":
         runner.answerApproval(msg.requestId, msg.decision);
         break;

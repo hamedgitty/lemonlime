@@ -8,7 +8,15 @@ export interface PendingMessage {
 }
 
 export type TimelineItem =
-  | { kind: "user"; key: string; seq: number | null; at: string; text: string; pending: boolean; queued?: boolean }
+  | {
+      kind: "user";
+      key: string;
+      seq: number | null;
+      at: string;
+      text: string;
+      pending: boolean;
+      queued?: { clientMsgId: string; index: number; count: number };
+    }
   | { kind: "agent"; key: string; seq: number; at: string; text: string; streaming: boolean }
   | {
       kind: "tool";
@@ -195,11 +203,19 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
   }
 
   const queuedIds = new Set<string>();
-  for (const q of queue) {
-    if (confirmed.has(q.clientMsgId)) continue;
+  const waiting = queue.filter(q => !confirmed.has(q.clientMsgId));
+  waiting.forEach((q, index) => {
     queuedIds.add(q.clientMsgId);
-    items.push({ kind: "user", key: `p${q.clientMsgId}`, seq: null, at: q.queuedAt, text: q.text, pending: true, queued: true });
-  }
+    items.push({
+      kind: "user",
+      key: `p${q.clientMsgId}`,
+      seq: null,
+      at: q.queuedAt,
+      text: q.text,
+      pending: true,
+      queued: { clientMsgId: q.clientMsgId, index, count: waiting.length },
+    });
+  });
   for (const p of pending) {
     if (confirmed.has(p.clientMsgId) || queuedIds.has(p.clientMsgId)) continue;
     items.push({ kind: "user", key: `p${p.clientMsgId}`, seq: null, at: p.at, text: p.text, pending: true });

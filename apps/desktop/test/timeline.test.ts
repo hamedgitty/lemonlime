@@ -94,8 +94,9 @@ describe("buildTimeline", () => {
     );
     expect(items.map(i => (i.kind === "user" ? [i.text, i.pending, i.queued ?? false] : null))).toEqual([
       ["working on it", false, false],
-      ["mine, queued", true, true],
-      ["from my phone", true, true],
+      // Their place in line, so they can be moved or sent now.
+      ["mine, queued", true, { clientMsgId: "q1", index: 0, count: 2 }],
+      ["from my phone", true, { clientMsgId: "q2", index: 1, count: 2 }],
       ["mine, still sending", true, false],
     ]);
     // Once a queued message starts it shows as a normal message, once.

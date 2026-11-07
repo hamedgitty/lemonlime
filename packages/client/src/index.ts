@@ -96,6 +96,14 @@ export class RunnerClient {
     this.post({ type: "cancel_login" });
   }
 
+  /** Change a message still waiting in the queue (see ClientEditQueue). */
+  editQueued(
+    clientMsgId: string,
+    change: { action: "update"; text: string } | { action: "remove" } | { action: "move"; toIndex: number } | { action: "send_now" },
+  ): void {
+    this.post({ type: "edit_queue", clientMsgId, ...change });
+  }
+
   /** Answer an approval request from the agent. */
   approve(requestId: string, decision: "allow" | "deny"): void {
     this.post({ type: "approve", requestId, decision });

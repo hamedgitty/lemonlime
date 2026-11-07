@@ -319,6 +319,40 @@ export class ThreadRunner {
     while (this.current) await this.current;
   }
 
+  /**
+   * Change a message still waiting in the queue. Returns false when it isn't there any
+   * more (it already started, or never was). `send_now` moves it to the front and stops
+   * the current turn, so the agent turns to it straight away.
+   */
+  editQueued(
+    clientMsgId: string,
+    change: { action: "update"; text: string } | { action: "remove" } | { action: "move"; toIndex: number } | { action: "send_now" },
+  ): boolean {
+    const i = this.queue.findIndex(q => q.clientMsgId === clientMsgId);
+    if (i < 0) return false;
+    const [item] = this.queue.splice(i, 1);
+    switch (change.action) {
+      case "update":
+        this.queue.splice(i, 0, { ...item!, text: change.text });
+        break;
+      case "remove":
+        break;
+      case "move":
+        this.queue.splice(Math.min(change.toIndex, this.queue.length), 0, item!);
+        break;
+      case "send_now":
+        this.queue.unshift(item!);
+        break;
+    }
+    this.publishQueue();
+    this.saveState();
+    if (change.action === "send_now") {
+      if (this.current) this.interrupt();
+      else this.startNext();
+    }
+    return true;
+  }
+
   /** Stop the agent's current turn. Queued messages still run afterwards. */
   interrupt(): void {
     this.abort?.abort();

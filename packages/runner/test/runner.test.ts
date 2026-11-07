@@ -146,6 +146,50 @@ describe("runner end to end", () => {
     expect(runnerScope.events).toEqual([]);
   });
 
+  it("lets queued messages be edited, removed, reordered and sent now", async () => {
+    const prompts: string[] = [];
+    const releases: (() => void)[] = [];
+    const slow: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => ({
+        runTurn: ctx =>
+          new Promise<void>(resolve => {
+            prompts.push(ctx.prompt);
+            releases.push(resolve);
+            ctx.signal.addEventListener("abort", () => resolve());
+          }),
+        saveState: () => ({}),
+        dispose: async () => {},
+      }),
+    };
+    const { runner } = await boot(slow, "test-thread-edit");
+    runner.sendMessage("working", "a");
+    for (const [text, id] of [
+      ["b", "b"],
+      ["c", "c"],
+      ["d", "d"],
+    ])
+      runner.sendMessage(text!, id);
+    const ids = () => runner.queued.map(q => `${q.clientMsgId}:${q.text}`);
+
+    expect(runner.editQueued("b", { action: "update", text: "b, but better" })).toBe(true);
+    expect(runner.editQueued("d", { action: "move", toIndex: 0 })).toBe(true);
+    expect(runner.editQueued("c", { action: "remove" })).toBe(true);
+    expect(ids()).toEqual(["d:d", "b:b, but better"]);
+    expect(runner.editQueued("a", { action: "remove" })).toBe(false); // already running
+    expect(runner.editQueued("zzz", { action: "remove" })).toBe(false);
+
+    // Steer: stop the current turn and do this next.
+    expect(runner.editQueued("b", { action: "send_now" })).toBe(true);
+    await until(() => prompts.length === 2);
+    expect(prompts).toEqual(["working", "b, but better"]);
+    expect(ids()).toEqual(["d:d"]);
+    releases[1]!();
+    await until(() => prompts.length === 3);
+    releases[2]!();
+    await runner.settled();
+  });
+
   it("queues messages sent while busy and runs them in order after the turn", async () => {
     const prompts: string[] = [];
     const releases: (() => void)[] = [];

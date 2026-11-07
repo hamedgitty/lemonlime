@@ -19,6 +19,11 @@ export type SessionState =
 
 export type SessionTarget = { mode: "local"; meta: LocalThreadMeta; runnerPath: string } | { mode: "cloud"; thread: Thread; api: CloudApi };
 
+export type EditQueuedFn = (
+  clientMsgId: string,
+  change: { action: "update"; text: string } | { action: "remove" } | { action: "move"; toIndex: number } | { action: "send_now" },
+) => void;
+
 export interface SessionCallbacks {
   /** Called (debounced) when new events have been stored. */
   onProgress?: (threadId: string, lastSeq: number) => void;
@@ -45,6 +50,8 @@ export interface ThreadSession {
   interrupt: () => void;
   /** Answer the agent's request for permission. */
   approve: (requestId: string, decision: "allow" | "deny") => void;
+  /** Change a message waiting in the queue. */
+  editQueued: EditQueuedFn;
   /** Tear down and connect again (starting the local runner if needed). */
   restart: () => void;
   /** Close the connection on purpose and show the thread as offline. */
@@ -272,6 +279,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
 
   const interrupt = useCallback(() => clientRef.current?.interrupt(), []);
   const approve = useCallback((requestId: string, decision: "allow" | "deny") => clientRef.current?.approve(requestId, decision), []);
+  const editQueued = useCallback<EditQueuedFn>((id, change) => clientRef.current?.editQueued(id, change), []);
   const restart = useCallback(() => setGeneration(g => g + 1), []);
   const disconnect = useCallback(() => {
     disconnectedRef.current = true;
@@ -281,7 +289,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, send, interrupt, approve, restart, disconnect };
+  return { events, pending, state, error, status, send, interrupt, approve, editQueued, restart, disconnect };
 }
 
 function newClientMsgId(): string {

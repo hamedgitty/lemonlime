@@ -1,14 +1,28 @@
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronRight, CircleAlert, Info, Wrench } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowDownToLine, ArrowUpToLine, Check, ChevronRight, CircleAlert, Info, MoreHorizontal, Trash2, Wrench } from "lucide-react";
 import type { ThreadStatus } from "@lemonlime/protocol";
 import type { TimelineItem } from "../lib/timeline.ts";
+import type { EditQueuedFn } from "../lib/useThreadSession.ts";
+import { Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
 import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
 import { DiffView } from "./DiffView.tsx";
 import { Button, LogoMark, Spinner, cx } from "./ui.tsx";
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
 
-export function Timeline({ items, working, empty, onApprove }: { items: TimelineItem[]; working: boolean; empty: ReactNode; onApprove?: ApproveFn }) {
+export function Timeline({
+  items,
+  working,
+  empty,
+  onApprove,
+  onEditQueued,
+}: {
+  items: TimelineItem[];
+  working: boolean;
+  empty: ReactNode;
+  onApprove?: ApproveFn;
+  onEditQueued?: EditQueuedFn;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
@@ -56,7 +70,7 @@ export function Timeline({ items, working, empty, onApprove }: { items: Timeline
             : items.map((item, i) => (
                 // Off-screen messages skip layout and paint, so long chats stay fast.
                 <div key={item.key} className={i < items.length - 30 ? "[contain-intrinsic-size:auto_96px] [content-visibility:auto]" : undefined}>
-                  <Item item={item} onApprove={onApprove} />
+                  <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} />
                 </div>
               ))}
           {working && (
@@ -85,10 +99,22 @@ export function Timeline({ items, working, empty, onApprove }: { items: Timeline
   );
 }
 
-const Item = memo(function Item({ item, onApprove }: { item: TimelineItem; onApprove?: ApproveFn | undefined }) {
+const Item = memo(function Item({
+  item,
+  onApprove,
+  onEditQueued,
+}: {
+  item: TimelineItem;
+  onApprove?: ApproveFn | undefined;
+  onEditQueued?: EditQueuedFn | undefined;
+}) {
   switch (item.kind) {
     case "user":
-      return <UserMessage text={item.text} at={item.at} pending={item.pending} queued={item.queued ?? false} />;
+      return item.queued && onEditQueued ? (
+        <QueuedMessage text={item.text} queued={item.queued} onEdit={onEditQueued} />
+      ) : (
+        <UserMessage text={item.text} at={item.at} pending={item.pending} queued={Boolean(item.queued)} />
+      );
     case "agent":
       return <AgentMessage text={item.text} streaming={item.streaming} />;
     case "tool":
@@ -183,6 +209,122 @@ function UserMessage({ text, at, pending, queued }: { text: string; at: string; 
     </div>
   );
 }
+
+/** A message waiting for the agent: send it now, edit it, move it or take it back. */
+function QueuedMessage({
+  text,
+  queued,
+  onEdit,
+}: {
+  text: string;
+  queued: NonNullable<Extract<TimelineItem, { kind: "user" }>["queued"]>;
+  onEdit: EditQueuedFn;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+  const id = queued.clientMsgId;
+  const save = () => {
+    const next = draft.trim();
+    if (next && next !== text) onEdit(id, { action: "update", text: next });
+    setEditing(false);
+  };
+  return (
+    <div className="flex justify-end">
+      <div className={cx("flex max-w-[78%] flex-col items-end", editing && "w-full items-stretch")}>
+        {editing ? (
+          <div className="rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft p-2">
+            <textarea
+              aria-label="Edit queued message"
+              autoFocus
+              onFocus={e => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  save();
+                } else if (e.key === "Escape") {
+                  setDraft(text);
+                  setEditing(false);
+                }
+              }}
+              rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+              className="w-full resize-none rounded-lg bg-transparent px-2 py-1.5 text-ink outline-none"
+            />
+            <div className="flex justify-end gap-2 px-1 pb-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setDraft(text);
+                  setEditing(false);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" variant="primary" disabled={!draft.trim()} onClick={save}>
+                Save
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl rounded-br-md border border-dashed border-[#e9c900] bg-lemon-soft/60 px-4 py-2.5 text-ink">
+            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
+          </div>
+        )}
+        {!editing && (
+          <div className="mt-1 flex items-center justify-end gap-1 pr-1 text-xs text-ink-faint">
+            <span className="mr-1">{queued.count > 1 ? `Queued, ${ordinal(queued.index + 1)} in line` : "Queued, runs when the agent finishes"}</span>
+            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => onEdit(id, { action: "send_now" })}>
+              Send now
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                setDraft(text);
+                setEditing(true);
+              }}
+            >
+              Edit
+            </Button>
+            <Menu
+              align="end"
+              trigger={
+                <button
+                  type="button"
+                  aria-label="More for this queued message"
+                  className="inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-ink/5 hover:text-ink"
+                >
+                  <MoreHorizontal aria-hidden="true" className="size-4" />
+                </button>
+              }
+            >
+              <MenuItem icon={<ArrowUpToLine />} disabled={queued.index === 0} onSelect={() => onEdit(id, { action: "move", toIndex: 0 })}>
+                Move to front
+              </MenuItem>
+              <MenuItem
+                icon={<ArrowDownToLine />}
+                disabled={queued.index === queued.count - 1}
+                onSelect={() => onEdit(id, { action: "move", toIndex: queued.count - 1 })}
+              >
+                Move to back
+              </MenuItem>
+              <MenuSeparator />
+              <MenuItem icon={<Trash2 />} onSelect={() => onEdit(id, { action: "remove" })}>
+                Remove from queue
+              </MenuItem>
+            </Menu>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const ordinal = (n: number) =>
+  `${n}${n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th"}`;
 
 function AgentMessage({ text, streaming }: { text: string; streaming: boolean }) {
   return (

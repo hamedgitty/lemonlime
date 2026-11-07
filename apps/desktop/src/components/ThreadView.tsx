@@ -260,6 +260,7 @@ function ThreadSessionView({
           working={working && items[items.length - 1]?.kind !== "agent"}
           empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
           onApprove={session.approve}
+          onEditQueued={session.editQueued}
         />
 
         <div className="shrink-0 px-6 pt-2 pb-5">

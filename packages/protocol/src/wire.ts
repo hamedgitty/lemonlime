@@ -36,6 +36,22 @@ export const ClientApprove = z.object({
 export const ClientPing = z.object({ type: z.literal("ping"), t: z.number().optional() });
 
 /**
+ * Change a message waiting in the queue: `update` its text, `remove` it, `move` it to
+ * `toIndex`, or `send_now` (steer): stop the current turn and run it next. Messages that
+ * already started can't be changed; the answer is the next `queue_update`.
+ */
+export const ClientEditQueue = z.object({
+  type: z.literal("edit_queue"),
+  action: z.enum(["update", "remove", "move", "send_now"]),
+  clientMsgId: z.string().min(1).max(100),
+  /** New text, for `update`. */
+  text: z.string().min(1).max(200_000).optional(),
+  /** New position (0 = next), for `move`. */
+  toIndex: z.number().int().min(0).max(10_000).optional(),
+});
+export type ClientEditQueue = z.infer<typeof ClientEditQueue>;
+
+/**
  * Sign the agent in to the user's own model account (cloud sandboxes). Login traffic uses
  * these messages only and never becomes part of the thread's history.
  */
@@ -53,6 +69,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientStartLogin,
   ClientLoginInput,
   ClientCancelLogin,
+  ClientEditQueue,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

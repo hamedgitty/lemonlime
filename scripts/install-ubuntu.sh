@@ -67,6 +67,28 @@ docker compose --profile build build
 say "Starting LemonLime"
 docker compose up -d
 
+say "Firewalling the sandbox network"
+# Keeps sandboxes away from each other, this server, the local network and the cloud
+# metadata service. Re-applied after Docker starts on every boot.
+cat > /etc/systemd/system/lemonlime-firewall.service <<UNIT
+[Unit]
+Description=LemonLime sandbox firewall
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/bash $DIR/scripts/sandbox-firewall.sh
+ExecStop=/usr/bin/bash $DIR/scripts/sandbox-firewall.sh remove
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable -q lemonlime-firewall.service
+systemctl restart lemonlime-firewall.service
+
 URL=$(grep '^LEMONLIME_PUBLIC_URL=' .env | cut -d= -f2-)
 say "LemonLime is running at $URL"
 if ! grep -q '^RESEND_API_KEY=.\+' .env; then

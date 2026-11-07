@@ -76,6 +76,14 @@ export class DockerProvider implements SandboxProvider {
       `${res.memoryGiB}g`,
       "--restart",
       "no",
+      // The agent runs as a normal user and needs none of root's powers; a fork bomb
+      // shouldn't take the host down with it.
+      "--security-opt",
+      "no-new-privileges",
+      "--cap-drop",
+      "ALL",
+      "--pids-limit",
+      "1024",
       ...(this.opts.publicUrl ? [] : ["-p", `${this.bindHost}::${o.runner.port}`]),
       ...(this.opts.network ? ["--network", this.opts.network] : []),
       "--label",

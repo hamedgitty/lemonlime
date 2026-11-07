@@ -18,13 +18,15 @@ services:
       LEMONLIME_SANDBOX_IMAGE: ${LEMONLIME_SANDBOX_IMAGE:-lemonlime/sandbox:latest}
       LEMONLIME_DOCKER_NETWORK: lemonlime-sandboxes
       LEMONLIME_DOCKER_PUBLIC_URL: ${LEMONLIME_PUBLIC_URL}/sandbox
-      LEMONLIME_RUNNER_CONTROL_PLANE_URL: http://web:3000
+      # Runners reach the dashboard through the proxy's sandbox-only port, never directly.
+      LEMONLIME_RUNNER_CONTROL_PLANE_URL: http://proxy:8080
     volumes:
       - lemonlime-data:/data
       # Lets the dashboard start sandbox containers. Anything with this socket controls
       # Docker on the host, so only run this on a machine dedicated to LemonLime.
       - /var/run/docker.sock:/var/run/docker.sock
-    networks: [default, sandboxes]
+    # Not on the sandbox network: sandboxes can only reach it through the proxy.
+    networks: [default]
     restart: unless-stopped
 
   proxy:
@@ -35,7 +37,9 @@ services:
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
-    networks: [default, sandboxes]
+    networks:
+      default: {}
+      sandboxes: { ipv4_address: 172.30.0.2 }
     depends_on: [web]
     restart: unless-stopped
 
@@ -58,6 +62,13 @@ services:
 networks:
   sandboxes:
     name: lemonlime-sandboxes
+    # A fixed bridge name and subnet so scripts/sandbox-firewall.sh can keep sandboxes
+    # from reaching each other, this host, the local network and cloud metadata.
+    driver_opts:
+      com.docker.network.bridge.name: lemonlime-sb
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
 
 volumes:
   lemonlime-data:

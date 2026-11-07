@@ -1,20 +1,48 @@
-# Reverse proxy for self-hosting with compose.yaml. Serves the dashboard and, under
-# /sandbox/<container>/, each cloud thread's runner, so apps reach runners over the
-# same HTTPS address. Only containers named lemonlime-<thread id> on the runner port
-# are reachable, never anything else on the network.
+# Reverse proxy for self-hosting with compose.yaml, and the only way in or out of the
+# sandbox network.
+#
+# Public site: the dashboard, plus each cloud thread's runner under
+# /sandbox/<container>/, so apps reach runners over the same HTTPS address. Only the
+# runner's WebSocket and health check are passed through, from containers named
+# lemonlime-<thread id> on the runner port. Code in a sandbox controls what its port
+# serves, so nothing else from it may reach a browser on the dashboard's origin.
+#
+# :8080 (sandbox network only): runners reach the dashboard's runner API through here,
+# never directly, so the address the dashboard sees is the sandbox's own.
 #
 # LEMONLIME_SITE_ADDRESS: your domain (e.g. lemonlime.example.com) for automatic HTTPS,
 # or :80 for plain HTTP on a private network.
 {$LEMONLIME_SITE_ADDRESS::80} {
 	encode zstd gzip
 
-	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/.*)$
+	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/ws|/healthz)$
 	handle @runner {
 		rewrite * {re.runner.2}
-		reverse_proxy {re.runner.1}:7420
+		reverse_proxy {re.runner.1}:7420 {
+			# Even if something else answers on the port, the browser treats it as an
+			# opaque, script-less page.
+			header_down Content-Security-Policy "sandbox; default-src 'none'"
+			header_down X-Content-Type-Options nosniff
+			header_down -Set-Cookie
+		}
+	}
+
+	@otherSandbox path /sandbox/*
+	handle @otherSandbox {
+		respond 404
 	}
 
 	handle {
 		reverse_proxy web:3000
+	}
+}
+
+:8080 {
+	@runnerApi path /api/runner/*
+	handle @runnerApi {
+		reverse_proxy web:3000
+	}
+	handle {
+		respond 404
 	}
 }

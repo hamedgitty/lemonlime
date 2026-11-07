@@ -13,6 +13,8 @@ import type { AgentCredential } from "./login.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { formatGb, MemoryGuard, prioritizeMemory } from "./memory-guard.ts";
 import { loadPty } from "./terminal.ts";
+import { startTunnel } from "./tunnel.ts";
+import { createInterface } from "node:readline";
 import { biggestWriter, DiskGuard, formatBytes } from "./disk-guard.ts";
 import { runCommandGuardHook } from "./command-guard.ts";
 import { startServer } from "./server.ts";
@@ -103,6 +105,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const argv = args[0] === "--" ? args.slice(1) : args;
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
+  if (argv[0] === "preview") return previewCommand(argv.slice(1));
+  if (argv[0] === "tunnel") return tunnelCommand(argv.slice(1));
   if (argv[0] === "command-guard") {
     const input = await new Promise<string>(resolve => {
       let data = "";
@@ -241,8 +245,12 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     threadSecret: secret,
     version: RUNNER_VERSION,
     terminal: { cwd: workdir, spawn: await loadPty() },
+    ownPorts: [port],
   });
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
+  // For the agent's own `lemonlime-runner preview`: where this runner is, and which thread.
+  process.env.LEMONLIME_RUNNER_URL = `http://127.0.0.1:${server.port}`;
+  process.env.LEMONLIME_THREAD_ID = id;
   // Machine-readable line for parent processes (e.g. the desktop app) that asked for port 0.
   process.stdout.write(JSON.stringify({ event: "ready", port: server.port }) + "\n");
 
@@ -393,4 +401,62 @@ if (isEntry) {
     process.stderr.write(`lemonlime-runner: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     process.exit(1);
   });
+}
+
+/**
+ * `lemonlime-runner preview <port> [--name <what>] [--remove]`: run by the agent after it
+ * starts a dev server, so the user can open it. Talks to this thread's runner.
+ */
+async function previewCommand(args: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { name: { type: "string" }, remove: { type: "boolean", default: false } },
+  });
+  const port = Number(positionals[0]);
+  const base = process.env.LEMONLIME_RUNNER_URL;
+  const threadId = process.env.LEMONLIME_THREAD_ID;
+  const secret = process.env.LEMONLIME_THREAD_SECRET;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("usage: lemonlime-runner preview <port> [--name <what it is>] [--remove]");
+  if (!base || !threadId || !secret) throw new Error("Run this from inside a LemonLime thread (the runner sets LEMONLIME_RUNNER_URL).");
+  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 60 }, secret);
+  const res = await fetch(`${base}/previews`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ port, name: values.name ?? "", remove: values.remove }),
+  });
+  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  if (!res.ok) throw new Error(body.error ?? `runner answered ${res.status}`);
+  process.stdout.write(
+    values.remove
+      ? `Port ${port} is no longer offered for preview.\n`
+      : `Port ${port} is ready to preview in LemonLime${values.name ? ` as "${values.name}"` : ""}.\n`,
+  );
+}
+
+/**
+ * `lemonlime-runner tunnel --url <runner ws url> --port <preview port> [--local-port <n>]`:
+ * started by the desktop app to show a cloud preview on 127.0.0.1. Client tokens arrive on
+ * stdin, one JSON line each ({"token": "..."}), and the newest is used for new connections.
+ */
+async function tunnelCommand(args: string[]): Promise<void> {
+  const { values } = parseArgs({ args, options: { url: { type: "string" }, port: { type: "string" }, "local-port": { type: "string", default: "0" } } });
+  if (!values.url || !values.port) throw new Error("usage: lemonlime-runner tunnel --url <runner ws url> --port <n> [--local-port <n>]");
+  let token = "";
+  const lines = createInterface({ input: process.stdin });
+  const first = new Promise<void>(resolve => {
+    lines.on("line", line => {
+      try {
+        const t = (JSON.parse(line) as { token?: string }).token;
+        if (t) token = t;
+      } catch {
+        /* ignore */
+      }
+      if (token) resolve();
+    });
+  });
+  lines.on("close", () => process.exit(0)); // the app went away
+  await first;
+  const tunnel = await startTunnel({ runnerUrl: values.url, port: Number(values.port), localPort: Number(values["local-port"]), token: () => token });
+  process.stdout.write(JSON.stringify({ event: "listening", port: tunnel.port }) + "\n");
 }

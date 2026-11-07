@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
+import type { NewEvent, Preview, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
@@ -161,6 +161,23 @@ export class ThreadRunner {
   /** Files uploaded to send with messages. */
   readonly attachments: Attachments;
 
+  private previewList: Preview[] = [];
+
+  /** Dev servers the agent offered for preview. */
+  get previews(): readonly Preview[] {
+    return this.previewList;
+  }
+
+  /** Offer (or rename) a port for preview, or take it back. */
+  setPreview(port: number, name: string | null): void {
+    const others = this.previewList.filter(p => p.port !== port);
+    this.previewList =
+      name === null
+        ? others
+        : [...others, { port, name: name.slice(0, 80) || `Port ${port}`, addedAt: new Date().toISOString() }].sort((a, b) => a.port - b.port);
+    this.store.append({ type: "preview_update", previews: this.previewList });
+  }
+
   get thread(): Thread {
     return { ...this.opts.thread, status: this.status, latestSeq: this.store.latestSeq, updatedAt: new Date().toISOString() };
   }
@@ -220,6 +237,8 @@ export class ThreadRunner {
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
     for (const q of this.queue) this.seen.add(q.clientMsgId);
     this.autoContinues = saved?.autoContinues ?? [];
+    const lastPreviews = [...this.store.since(0)].reverse().find(e => e.type === "preview_update");
+    if (lastPreviews?.type === "preview_update") this.previewList = lastPreviews.previews;
     if (saved?.usageLimit) {
       this.usageLimit = saved.usageLimit;
       this.scheduleLimitContinue();

@@ -19,3 +19,4 @@ export { MemoryGuard, OOM_SCORE_FOR_WORK, descendants, listProcesses, prioritize
 export { TerminalSession, loadPty, shellEnv, type Pty, type SpawnPty } from "./terminal.ts";
 export { dangerousCommand, runCommandGuardHook } from "./command-guard.ts";
 export { DiskGuard, biggestWriter, diskSpace, type DiskSpace } from "./disk-guard.ts";
+export { allowedRequest, startTunnel, type RunningTunnel } from "./tunnel.ts";

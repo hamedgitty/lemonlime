@@ -143,6 +143,24 @@ export const RewindEvent = z.object({
   backupRef: z.string().optional(),
 });
 
+export const Preview = z.object({
+  port: z.number().int().min(1).max(65535),
+  /** What it is, e.g. "web app" or "storybook". */
+  name: z.string().max(80),
+  addedAt: z.string().datetime(),
+});
+export type Preview = z.infer<typeof Preview>;
+
+/**
+ * The dev servers the agent has offered for preview, sent whenever the list changes.
+ * Apps reach one through the runner's `/tunnel` (cloud) or straight on localhost (local).
+ */
+export const PreviewUpdateEvent = z.object({
+  ...base,
+  type: z.literal("preview_update"),
+  previews: z.array(Preview),
+});
+
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
@@ -156,6 +174,7 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   ApprovalRequestEvent,
   ApprovalResultEvent,
   RewindEvent,
+  PreviewUpdateEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

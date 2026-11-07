@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import { createConnection, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseClientMessage, parseTerminalClientMessage, verifyToken, type ServerMessage, type TerminalServerMessage } from "@lemonlime/protocol";
 import { TerminalSession, type SpawnPty } from "./terminal.ts";
@@ -15,6 +15,8 @@ export interface ServerOptions {
   version: string;
   /** The thread's terminal: a shell in `cwd`. Without `spawn` (no PTY support), it says so. */
   terminal?: { cwd: string; spawn: SpawnPty | null };
+  /** Ports the runner itself uses, never offered for preview. */
+  ownPorts?: number[];
 }
 
 export interface RunningServer {
@@ -35,7 +37,7 @@ const TERMINAL_SLOW_MS = 10_000;
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
-    if (path === "/capabilities" || path.startsWith("/attachments")) {
+    if (path === "/capabilities" || path.startsWith("/attachments") || path === "/previews") {
       void handleHttpApi(req, res, path, runner, opts).catch(() => {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "internal" }));
@@ -64,11 +66,13 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_FRAME_BYTES });
+  const tunnelWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const terminal = opts.terminal?.spawn ? new TerminalSession(opts.terminal.spawn, opts.terminal.cwd) : null;
   http.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
     if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
     else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminal));
+    else if (path === "/tunnel") tunnelWss.handleUpgrade(req, socket, head, ws => handleTunnel(ws, req, runner, opts));
     else socket.destroy();
   });
 
@@ -80,7 +84,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
         port,
         close: () =>
           new Promise<void>(done => {
-            for (const c of [...wss.clients, ...terminalWss.clients]) c.terminate();
+            for (const c of [...wss.clients, ...terminalWss.clients, ...tunnelWss.clients]) c.terminate();
+            tunnelWss.close();
             wss.close();
             terminalWss.close();
             terminal?.close();
@@ -353,6 +358,28 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     res.end();
     return;
   }
+  if (path === "/previews") {
+    // From the agent's own `lemonlime-runner preview`: a runner token, signed with the thread secret it was given.
+    const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+    if (req.method === "GET")
+      return auth?.ok && auth.claims.threadId === runner.thread.id
+        ? reply(res, 200, { previews: runner.previews })
+        : reply(res, 401, { error: "unauthorized" });
+    if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
+    const body = await readBody(req, 4096);
+    let parsed: { port?: unknown; name?: unknown; remove?: unknown } = {};
+    try {
+      parsed = JSON.parse(body?.toString() ?? "{}") as typeof parsed;
+    } catch {
+      return reply(res, 400, { error: "bad json" });
+    }
+    const port = Number(parsed.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return reply(res, 400, { error: "bad port" });
+    if (port === req.socket.localPort || opts.ownPorts?.includes(port)) return reply(res, 400, { error: "That's the runner's own port." });
+    runner.setPreview(port, parsed.remove === true ? null : String(parsed.name ?? ""));
+    return reply(res, 200, { previews: runner.previews });
+  }
   if (path === "/capabilities" && req.method === "GET") {
     const agent = runner.thread.agent;
     return reply(
@@ -393,4 +420,68 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     return "error" in r ? reply(res, r.status, r) : reply(res, 200, r);
   }
   return reply(res, 404, { error: "not_found" });
+}
+
+/**
+ * One TCP connection to a preview port inside the sandbox, carried over a WebSocket: a
+ * text hello with a client token, then binary frames both ways. Only ports the agent
+ * offered, only on this machine's loopback.
+ */
+function handleTunnel(ws: WebSocket, req: IncomingMessage, runner: ThreadRunner, opts: ServerOptions): void {
+  const port = Number(new URL(req.url ?? "/", "http://runner").searchParams.get("port"));
+  let socket: Socket | null = null;
+  let state: "hello" | "checking" | "open" = "hello";
+  // Bytes the client sends while its token is being checked, written once connected.
+  const early: Buffer[] = [];
+  const timer = setTimeout(() => ws.close(4401, "unauthorized"), HELLO_TIMEOUT_MS);
+
+  const open = () => {
+    const s = createConnection({ host: "127.0.0.1", port });
+    socket = s;
+    state = "open";
+    for (const b of early.splice(0)) s.write(b);
+    s.on("data", d => {
+      ws.send(d, { binary: true });
+      if (ws.bufferedAmount > 4 * 1024 * 1024) {
+        s.pause();
+        const resume = setInterval(() => {
+          if (ws.bufferedAmount < 1024 * 1024 || ws.readyState !== ws.OPEN) {
+            clearInterval(resume);
+            s.resume();
+          }
+        }, 20);
+      }
+    });
+    s.on("close", () => ws.close(1000));
+    s.on("error", () => ws.close(1011, "connection to the dev server failed"));
+  };
+
+  ws.on("message", (data, binary) => {
+    if (state === "open") {
+      if (binary) socket?.write(data as Buffer);
+      return;
+    }
+    if (state === "checking") {
+      if (binary) early.push(Buffer.from(data as Buffer));
+      return;
+    }
+    state = "checking";
+    clearTimeout(timer);
+    let token = "";
+    try {
+      token = binary ? "" : ((JSON.parse(data.toString()) as { token?: string }).token ?? "");
+    } catch {
+      /* not a hello */
+    }
+    void (async () => {
+      const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+      if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return ws.close(4401, "unauthorized");
+      if (!runner.previews.some(p => p.port === port)) return ws.close(4404, "not a preview port");
+      open();
+    })();
+  });
+  ws.on("close", () => {
+    clearTimeout(timer);
+    socket?.destroy();
+  });
 }

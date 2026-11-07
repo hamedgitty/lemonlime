@@ -64,3 +64,10 @@ export function parseTerminalServerMessage(raw: string): TerminalServerMessage |
     return null;
   }
 }
+
+/**
+ * The runner's `/tunnel?port=N`: after a text `hello` with a client token, every binary
+ * frame is raw bytes to and from that port inside the sandbox (only ports the agent offered
+ * for preview). One WebSocket per TCP connection.
+ */
+export const TunnelHello = z.object({ type: z.literal("hello"), token: z.string().min(1) });

@@ -58,7 +58,7 @@ const editing = (kind: AgentKind): AgentAdapter => ({
 describe("bundled skills", () => {
   it("each has a SKILL.md whose name matches its folder and says when to use it", () => {
     const names = listSkills(BUNDLED_SKILLS_DIR);
-    expect(names).toEqual(["lemonlime-ask-when-blocked", "lemonlime-git-hygiene", "lemonlime-open-pr", "lemonlime-run-tests-first"]);
+    expect(names).toEqual(["lemonlime-ask-when-blocked", "lemonlime-git-hygiene", "lemonlime-open-pr", "lemonlime-previews", "lemonlime-run-tests-first"]);
     for (const name of names) {
       const text = readFileSync(join(BUNDLED_SKILLS_DIR, name, "SKILL.md"), "utf8");
       const front = /^---\n([\s\S]+?)\n---\n/.exec(text)?.[1] ?? "";

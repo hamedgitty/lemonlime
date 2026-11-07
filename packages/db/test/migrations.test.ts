@@ -8,7 +8,9 @@ const dir = join(import.meta.dirname, "..", "migrations");
 
 describe("migrations", () => {
   it("embeds exactly the SQL files wrangler applies (run `pnpm --filter @lemonlime/db generate` after schema changes)", () => {
-    const files = readdirSync(dir).filter(f => f.endsWith(".sql")).sort();
+    const files = readdirSync(dir)
+      .filter(f => f.endsWith(".sql"))
+      .sort();
     expect(migrations.map(m => m.name)).toEqual(files);
     for (const m of migrations) expect(m.sql).toBe(readFileSync(join(dir, m.name), "utf8"));
   });
@@ -31,8 +33,8 @@ describe("migrations", () => {
     ).rejects.toThrow(/FOREIGN KEY/);
     await client.execute("INSERT INTO user (id, name, email, updated_at) VALUES ('u1', '', 'u1@example.com', 0)");
     await client.execute("INSERT INTO workspaces (id, name, created_at) VALUES ('w1', 'W', '')");
-    await expect(
-      client.execute("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ('w1', 'u1', 'admin', '')"),
-    ).rejects.toThrow(/CHECK/);
+    await expect(client.execute("INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ('w1', 'u1', 'admin', '')")).rejects.toThrow(
+      /CHECK/,
+    );
   });
 });

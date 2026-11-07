@@ -10,10 +10,7 @@ const ev = <E extends Record<string, unknown>>(e: E) => ({ threadId: T, seq: ++s
 describe("buildTimeline", () => {
   it("joins streaming chunks and replaces them with the whole message", () => {
     seq = 0;
-    const events = [
-      ev({ type: "agent_message", text: "Hel", partial: true }),
-      ev({ type: "agent_message", text: "lo", partial: true }),
-    ];
+    const events = [ev({ type: "agent_message", text: "Hel", partial: true }), ev({ type: "agent_message", text: "lo", partial: true })];
     expect(buildTimeline(events)).toMatchObject([{ kind: "agent", text: "Hello", streaming: true }]);
     events.push(ev({ type: "agent_message", text: "Hello!", partial: false }));
     expect(buildTimeline(events)).toMatchObject([{ kind: "agent", text: "Hello!", streaming: false }]);
@@ -56,7 +53,11 @@ describe("addEvent", () => {
 
   it("keeps events sorted and drops duplicates", () => {
     seq = 0;
-    const [a, b, c] = [ev({ type: "agent_message", text: "a", partial: false }), ev({ type: "agent_message", text: "b", partial: false }), ev({ type: "agent_message", text: "c", partial: false })];
+    const [a, b, c] = [
+      ev({ type: "agent_message", text: "a", partial: false }),
+      ev({ type: "agent_message", text: "b", partial: false }),
+      ev({ type: "agent_message", text: "c", partial: false }),
+    ];
     let list = addEvent([], a!);
     list = addEvent(list, c!);
     list = addEvent(list, b!);

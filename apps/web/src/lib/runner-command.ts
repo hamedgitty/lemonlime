@@ -47,11 +47,16 @@ export function runnerArgs(input: RunnerCommandInput): string[] {
   }
   if (agent.model) args.push("--model", value("--model", agent.model));
   args.push(
-    "--repo", value("--repo", repo.url),
-    "--base", value("--base", repo.baseBranch),
-    "--host", "0.0.0.0",
-    "--port", String(input.port ?? RUNNER_PORT),
-    "--control-plane", value("--control-plane", input.controlPlaneUrl),
+    "--repo",
+    value("--repo", repo.url),
+    "--base",
+    value("--base", repo.baseBranch),
+    "--host",
+    "0.0.0.0",
+    "--port",
+    String(input.port ?? RUNNER_PORT),
+    "--control-plane",
+    value("--control-plane", input.controlPlaneUrl),
   );
   return args;
 }
@@ -80,11 +85,11 @@ const BRANCH = /^(?!-)(?!\/)(?!.*\.\.)(?!.*\/\/)(?!.*\.lock$)[A-Za-z0-9._/-]{1,2
 export function validateCloudLaunch(agent: AgentConfig, repo: RepoRef): string | null {
   if (!REPO_URL.test(repo.url)) return "Repository must be a git URL (https://, ssh://, git:// or git@host:path).";
   if (!BRANCH.test(repo.baseBranch)) return "Base branch is not a valid branch name.";
-  if (agent.kind === "acp" && !agent.command?.length) return "ACP agents need a command, e.g. [\"opencode\", \"acp\"].";
+  if (agent.kind === "acp" && !agent.command?.length) return 'ACP agents need a command, e.g. ["opencode", "acp"].';
   if (agent.model !== undefined && (agent.model === "" || agent.model.startsWith("-") || /[\0\r\n]/.test(agent.model))) {
     return "Model name is not valid.";
   }
   if (agent.command?.some(part => part.includes("\0") || /[\r\n]/.test(part))) return "Agent command is not valid.";
-  if (agent.command?.[0]?.startsWith("-")) return "Agent command cannot start with \"-\".";
+  if (agent.command?.[0]?.startsWith("-")) return 'Agent command cannot start with "-".';
   return null;
 }

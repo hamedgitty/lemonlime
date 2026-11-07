@@ -17,9 +17,7 @@ export type SessionState =
   | "offline"
   | "error";
 
-export type SessionTarget =
-  | { mode: "local"; meta: LocalThreadMeta; runnerPath: string }
-  | { mode: "cloud"; thread: Thread; api: CloudApi };
+export type SessionTarget = { mode: "local"; meta: LocalThreadMeta; runnerPath: string } | { mode: "cloud"; thread: Thread; api: CloudApi };
 
 export interface SessionCallbacks {
   /** Called (debounced) when new events have been stored. */
@@ -261,11 +259,7 @@ async function resolveConnection(target: SessionTarget): Promise<Connection | nu
     });
     return {
       url: `ws://127.0.0.1:${info.port}/ws`,
-      token: () =>
-        signToken(
-          { threadId: meta.id, scope: "client", sub: "desktop", exp: Math.floor(Date.now() / 1000) + CLIENT_TOKEN_TTL_S },
-          info.secret,
-        ),
+      token: () => signToken({ threadId: meta.id, scope: "client", sub: "desktop", exp: Math.floor(Date.now() / 1000) + CLIENT_TOKEN_TTL_S }, info.secret),
     };
   }
 

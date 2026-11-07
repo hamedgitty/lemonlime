@@ -95,7 +95,9 @@ export const verification = sqliteTable(
 export const workspaces = sqliteTable(
   "workspaces",
   {
-    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
     name: text("name").notNull(),
     personal: integer("personal", { mode: "boolean" }).notNull().default(false),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
@@ -202,7 +204,9 @@ export const sandboxRuns = sqliteTable(
 export const accessTokens = sqliteTable(
   "access_tokens",
   {
-    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),

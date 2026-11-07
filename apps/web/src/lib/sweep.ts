@@ -21,10 +21,7 @@ export interface SweepThread {
   lastHeartbeatAt: string | null;
 }
 
-export type SweepVerdict =
-  | { action: "skip" }
-  | { action: "pause"; endReason: EndReason }
-  | { action: "ask_policy" };
+export type SweepVerdict = { action: "skip" } | { action: "pause"; endReason: EndReason } | { action: "ask_policy" };
 
 const ms = (iso: string | null): number | null => {
   if (!iso) return null;

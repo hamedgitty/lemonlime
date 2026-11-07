@@ -116,9 +116,7 @@ describe("thread access", () => {
   it("loses access when membership is removed", async () => {
     const { db, alice } = await setup();
     const { and, eq } = await import("drizzle-orm");
-    await db
-      .delete(workspaceMembers)
-      .where(and(eq(workspaceMembers.workspaceId, alice.workspaceId), eq(workspaceMembers.userId, alice.userId)));
+    await db.delete(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, alice.workspaceId), eq(workspaceMembers.userId, alice.userId)));
     expect(await findThreadForUser(db, alice.userId, "alice-thread-1")).toBeNull();
   });
 });

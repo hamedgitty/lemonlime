@@ -77,7 +77,9 @@ function Approval({ item, onApprove }: { item: Extract<TimelineItem, { kind: "ap
   return (
     <div role="group" aria-label="The agent is asking for permission" className="rounded-2xl border border-line bg-paper px-4 py-3.5">
       <p className="font-medium">{isCommand ? "The agent wants to run this command" : `The agent wants to use ${request.tool}`}</p>
-      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-cream px-3 py-2 font-mono text-[12.5px]">{request.summary}</pre>
+      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-cream px-3 py-2 font-mono text-[12.5px]">
+        {request.summary}
+      </pre>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <button type="button" className="btn-lemon h-8" disabled={sent !== null || !onApprove} onClick={() => answer("allow")}>
           Allow
@@ -154,15 +156,11 @@ function ToolItem({ call, result }: { call: EventOf<"tool_call">; result: EventO
       <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-2.5 [&::-webkit-details-marker]:hidden">
         <span
           aria-hidden
-          className={`h-2 w-2 shrink-0 rounded-full ${
-            state === "running" ? "animate-pulse bg-[#c9a800]" : state === "error" ? "bg-red-600" : "bg-leaf"
-          }`}
+          className={`h-2 w-2 shrink-0 rounded-full ${state === "running" ? "animate-pulse bg-[#c9a800]" : state === "error" ? "bg-red-600" : "bg-leaf"}`}
         />
         <span className="font-medium">{call.name}</span>
         {summary && <span className="min-w-0 flex-1 truncate font-mono text-[0.8125rem] text-muted">{summary}</span>}
-        <span className="ml-auto shrink-0 text-xs text-muted">
-          {state === "running" ? "Running" : state === "error" ? "Failed" : "Done"}
-        </span>
+        <span className="ml-auto shrink-0 text-xs text-muted">{state === "running" ? "Running" : state === "error" ? "Failed" : "Done"}</span>
         <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 text-muted transition-transform group-open:rotate-90" fill="currentColor">
           <path d="M6 3.5 10.5 8 6 12.5 5 11.5 8.5 8 5 4.5z" />
         </svg>
@@ -178,9 +176,7 @@ function ToolItem({ call, result }: { call: EventOf<"tool_call">; result: EventO
         )}
         {result && (
           <div>
-            <p className={`mb-1 text-xs font-medium ${result.isError ? "text-red-700" : "text-muted"}`}>
-              {result.isError ? "Error" : "Output"}
-            </p>
+            <p className={`mb-1 text-xs font-medium ${result.isError ? "text-red-700" : "text-muted"}`}>{result.isError ? "Error" : "Output"}</p>
             <pre className="max-h-96 overflow-auto rounded-lg bg-cream p-3 font-mono text-[0.8125rem] leading-relaxed whitespace-pre-wrap break-words">
               {formatValue(result.output) || "(no output)"}
             </pre>

@@ -20,7 +20,9 @@ export default async function SettingsPage() {
       <h1 className="text-3xl font-semibold">Settings</h1>
 
       <section aria-labelledby="account-heading" className="card p-6">
-        <h2 id="account-heading" className="text-xl font-semibold">Account</h2>
+        <h2 id="account-heading" className="text-xl font-semibold">
+          Account
+        </h2>
         <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-[10rem_1fr]">
           <dt className="text-muted">Email</dt>
           <dd>{user.email ?? "Unknown"}</dd>
@@ -38,10 +40,12 @@ export default async function SettingsPage() {
       {renderSlot(billingUI.accountSection, { workspaceId })}
 
       <section aria-labelledby="tokens-heading" className="card p-6">
-        <h2 id="tokens-heading" className="text-xl font-semibold">Personal access tokens</h2>
+        <h2 id="tokens-heading" className="text-xl font-semibold">
+          Personal access tokens
+        </h2>
         <p className="mt-1 text-sm text-muted">
-          The desktop app uses a token to start and resume cloud threads for you. Paste it into the desktop app together
-          with the control plane URL. Revoke a token any time to sign that app out.
+          The desktop app uses a token to start and resume cloud threads for you. Paste it into the desktop app together with the control plane URL. Revoke a
+          token any time to sign that app out.
         </p>
         <TokensManager initial={tokens} />
       </section>

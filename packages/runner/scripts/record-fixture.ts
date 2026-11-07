@@ -59,8 +59,17 @@ async function main(): Promise<void> {
   const id = `record-${kind}`;
   const now = new Date().toISOString();
   const thread: Thread = {
-    id, title: "", agent: { kind }, repo: { url: work, baseBranch: "main" }, branch: branchForThread(id),
-    mode: "local", status: "provisioning", sandboxSize: "small", latestSeq: 0, createdAt: now, updatedAt: now,
+    id,
+    title: "",
+    agent: { kind },
+    repo: { url: work, baseBranch: "main" },
+    branch: branchForThread(id),
+    mode: "local",
+    status: "provisioning",
+    sandboxSize: "small",
+    latestSeq: 0,
+    createdAt: now,
+    updatedAt: now,
   };
   const command = [process.execPath, join(here, "tee-agent.mjs"), log, ...cliCommand];
   const runner = new ThreadRunner({ thread, workdir: work, dataDir: join(root, "data"), adapter: adapterFor(kind), session: { autonomy: "edits", command } });
@@ -80,7 +89,13 @@ async function main(): Promise<void> {
   for (const e of runner.store.since(0)) console.error(JSON.stringify(e).slice(0, 200));
 
   const version = (await detectVersion(info.binary)) ?? "unknown";
-  const rows = sanitize(readFileSync(log, "utf8"), { agent: kind, cli: cliCommand.join(" "), version, workdir: work, note: process.env.LEMONLIME_RECORD_NOTE ?? "" });
+  const rows = sanitize(readFileSync(log, "utf8"), {
+    agent: kind,
+    cli: cliCommand.join(" "),
+    version,
+    workdir: work,
+    note: process.env.LEMONLIME_RECORD_NOTE ?? "",
+  });
   const out = join(here, "..", "test", "fixtures", "agents", kind, `${name}.jsonl`);
   mkdirSync(dirname(out), { recursive: true });
   writeFileSync(out, rows.map(r => JSON.stringify(r)).join("\n") + "\n");
@@ -90,12 +105,27 @@ async function main(): Promise<void> {
 }
 
 const CLAUDE_INIT_KEYS = ["type", "subtype", "cwd", "session_id", "model", "permissionMode", "apiKeySource", "claude_code_version", "uuid"];
-const CLAUDE_RESULT_KEYS = ["type", "subtype", "is_error", "result", "session_id", "duration_ms", "num_turns", "stop_reason", "terminal_reason", "total_cost_usd", "permission_denials", "uuid"];
+const CLAUDE_RESULT_KEYS = [
+  "type",
+  "subtype",
+  "is_error",
+  "result",
+  "session_id",
+  "duration_ms",
+  "num_turns",
+  "stop_reason",
+  "terminal_reason",
+  "total_cost_usd",
+  "permission_denials",
+  "uuid",
+];
 const pick = (o: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter(k => k in o).map(k => [k, o[k]]));
 
 /** Make a raw recording safe to publish. See test/fixtures/agents/README.md. */
 export function sanitize(raw: string, meta: { agent: string; cli: string; version: string; workdir: string; note: string }) {
-  const rows: Record<string, unknown>[] = [{ dir: "meta", agent: meta.agent, cli: meta.cli, version: meta.version, recorded: new Date().toISOString().slice(0, 10), note: meta.note }];
+  const rows: Record<string, unknown>[] = [
+    { dir: "meta", agent: meta.agent, cli: meta.cli, version: meta.version, recorded: new Date().toISOString().slice(0, 10), note: meta.note },
+  ];
   const workdirs = [meta.workdir, meta.workdir.replace(/^\/private/, ""), `/private${meta.workdir}`];
   const scrub = (text: string) => {
     for (const w of workdirs) text = text.split(w).join("/work");
@@ -114,7 +144,8 @@ export function sanitize(raw: string, meta: { agent: string; cli: string; versio
       if (meta.agent === "claude-code") {
         if (m.type === "system" && m.subtype === "init") m = pick(m, CLAUDE_INIT_KEYS);
         else if (m.type === "result") m = pick(m, CLAUDE_RESULT_KEYS);
-        else if (m.type === "rate_limit_event") m = { type: m.type, rate_limit_info: { status: "allowed", rateLimitType: "five_hour", utilization: 0.1 }, session_id: m.session_id };
+        else if (m.type === "rate_limit_event")
+          m = { type: m.type, rate_limit_info: { status: "allowed", rateLimitType: "five_hour", utilization: 0.1 }, session_id: m.session_id };
         for (const k of ["wire_ingest_context", "wire_tool_inputs", "thinking_display"]) delete m[k];
       }
       if (meta.agent === "opencode") {

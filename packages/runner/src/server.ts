@@ -26,7 +26,17 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
     if (req.method === "GET" && (req.url === "/healthz" || req.url === "/")) {
       const t = runner.thread;
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-      res.end(JSON.stringify({ ok: true, threadId: t.id, status: t.status, latestSeq: t.latestSeq, idleSince: runner.idle, version: opts.version, agentVersion: runner.agentVersion }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          threadId: t.id,
+          status: t.status,
+          latestSeq: t.latestSeq,
+          idleSince: runner.idle,
+          version: opts.version,
+          agentVersion: runner.agentVersion,
+        }),
+      );
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });

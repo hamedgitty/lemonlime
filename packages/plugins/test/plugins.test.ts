@@ -34,7 +34,10 @@ describe("resolving plugins", () => {
   });
 
   it("builds factory plugins from the runtime env", () => {
-    const p = resolvePlugin(definePlugin(({ env }) => ({ name: `plugin-${String(env.REGION)}` })), { env: { REGION: "eu" } });
+    const p = resolvePlugin(
+      definePlugin(({ env }) => ({ name: `plugin-${String(env.REGION)}` })),
+      { env: { REGION: "eu" } },
+    );
     expect(p.name).toBe("plugin-eu");
     expect(p.usagePolicy).toBe(allowAllPolicy);
   });

@@ -22,7 +22,10 @@ export const STATUS_LABELS: Record<DisplayStatus, string> = {
 
 /** Last path segment of a local path or clone URL. */
 export function repoName(pathOrUrl: string): string {
-  const cleaned = pathOrUrl.trim().replace(/[\\/]+$/, "").replace(/\.git$/, "");
+  const cleaned = pathOrUrl
+    .trim()
+    .replace(/[\\/]+$/, "")
+    .replace(/\.git$/, "");
   const parts = cleaned.split(/[\\/:]/).filter(Boolean);
   return parts[parts.length - 1] ?? pathOrUrl;
 }

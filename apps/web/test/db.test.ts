@@ -70,12 +70,14 @@ describe("sign-up with an email code", () => {
     expect(await userWorkspaceIds(db, result.user.id)).toEqual([ws!.id]);
 
     // The session cookie value resolves back to the user.
-    const session = await auth.api.getSession({ headers: new Headers({ cookie: `better-auth.session_token=${await signedCookie(ctx.vars.BETTER_AUTH_SECRET!, result.token)}` }) });
+    const session = await auth.api.getSession({
+      headers: new Headers({ cookie: `better-auth.session_token=${await signedCookie(ctx.vars.BETTER_AUTH_SECRET!, result.token)}` }),
+    });
     expect(session?.user.id).toBe(result.user.id);
 
     // Signing in again does not create a second workspace.
     await auth.api.sendVerificationOTP({ body: { email: "new@example.com", type: "sign-in" } });
-    const code2 = /\b(\d{6})\b/.exec(emails[1]!.text)?.[1]!;
+    const code2 = /\b(\d{6})\b/.exec(emails[1]!.text)?.[1] ?? "";
     await auth.api.signInEmailOTP({ body: { email: "new@example.com", otp: code2 } });
     expect(await db.select().from(workspaceMembers).where(eq(workspaceMembers.userId, result.user.id))).toHaveLength(1);
   });

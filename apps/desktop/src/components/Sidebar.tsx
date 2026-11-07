@@ -99,17 +99,7 @@ export function Sidebar(p: SidebarProps) {
   );
 }
 
-function Section({
-  icon,
-  title,
-  action,
-  children,
-}: {
-  icon: ReactNode;
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
+function Section({ icon, title, action, children }: { icon: ReactNode; title: string; action?: ReactNode; children: ReactNode }) {
   return (
     <div className="mt-2 first:mt-0">
       <div className="flex h-8 items-center gap-2 px-2.5 text-[12.5px] font-medium text-rind-muted">
@@ -136,9 +126,7 @@ function ThreadRow({ t, selected, onSelect }: { t: ThreadSummary; selected: bool
       >
         <StatusDot status={t.status} className="mt-[7px]" />
         <span className="min-w-0 flex-1">
-          <span className={cx("block truncate text-[13.5px] font-medium", selected ? "text-white" : "text-rind-text")}>
-            {t.title}
-          </span>
+          <span className={cx("block truncate text-[13.5px] font-medium", selected ? "text-white" : "text-rind-text")}>{t.title}</span>
           <span className="mt-0.5 flex items-center gap-1.5 text-xs text-rind-muted">
             <span className="truncate">{repoName(t.repo)}</span>
             <span aria-hidden="true">·</span>

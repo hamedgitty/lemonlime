@@ -3,7 +3,16 @@ import type { AgentKind, NewEvent } from "@lemonlime/protocol";
 import { summarizeToolInput, type ApprovalDecision } from "../approvals.ts";
 import { lineSplitter } from "./lines.ts";
 import { killGently, tryJson } from "./process.ts";
-import { AgentError, classifyAgentFailure, oversizeNotice, type AgentAdapter, type AgentSession, type Autonomy, type SessionOptions, type TurnContext } from "./types.ts";
+import {
+  AgentError,
+  classifyAgentFailure,
+  oversizeNotice,
+  type AgentAdapter,
+  type AgentSession,
+  type Autonomy,
+  type SessionOptions,
+  type TurnContext,
+} from "./types.ts";
 
 /**
  * Agent Client Protocol (https://agentclientprotocol.com): JSON-RPC 2.0 over stdio.
@@ -15,7 +24,7 @@ export function acpAdapter(kind: AgentKind = "acp", defaultCommand?: string[]): 
     kind,
     createSession(opts) {
       const command = opts.command?.length ? opts.command : defaultCommand;
-      if (!command?.length) throw new AgentError("ACP agents need a command, e.g. --agent-command \"opencode acp\"", "bad_config");
+      if (!command?.length) throw new AgentError('ACP agents need a command, e.g. --agent-command "opencode acp"', "bad_config");
       return new AcpSession({ ...opts, command });
     },
   };
@@ -161,8 +170,7 @@ class AcpSession implements AgentSession {
       if (msg.error) {
         const reason = String((msg.error as Json).message ?? "ACP error");
         p.reject(new AgentError(reason, classifyAgentFailure(reason)));
-      }
-      else p.resolve(msg.result);
+      } else p.resolve(msg.result);
       return;
     }
     // Request from the agent to us.
@@ -217,8 +225,8 @@ export function answerAgentRequest(
     const options = (params?.options as { optionId: string; kind: string }[] | undefined) ?? [];
     const allowed = needsApproval(params, autonomy) ? decision === "allow" : true;
     const pick = allowed
-      ? options.find(o => o.kind === "allow_once") ?? options.find(o => o.kind === "allow_always")
-      : options.find(o => o.kind === "reject_once") ?? options.find(o => o.kind === "reject_always");
+      ? (options.find(o => o.kind === "allow_once") ?? options.find(o => o.kind === "allow_always"))
+      : (options.find(o => o.kind === "reject_once") ?? options.find(o => o.kind === "reject_always"));
     if (!pick) return { result: { outcome: { outcome: "cancelled" } } };
     return { result: { outcome: { outcome: "selected", optionId: pick.optionId } } };
   }
@@ -256,7 +264,7 @@ export class AcpTranslator {
         if (!this.started.has(id)) {
           const prev = this.waiting.get(id);
           const name = prev?.name ?? String(u.title ?? u.kind ?? "tool");
-          const input = hasInput(u.rawInput) ? u.rawInput : prev?.input ?? null;
+          const input = hasInput(u.rawInput) ? u.rawInput : (prev?.input ?? null);
           if (u.status === "in_progress" || u.status === "completed" || u.status === "failed") {
             out.push(...this.endMessage());
             this.waiting.delete(id);

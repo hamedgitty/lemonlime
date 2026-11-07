@@ -116,7 +116,11 @@ function ApprovalCard({ item, onApprove }: { item: Extract<TimelineItem, { kind:
     const why = !allowed && item.by && item.by !== "user" ? DECLINED_BECAUSE[item.by] : undefined;
     return (
       <div className="flex items-start gap-2.5 px-1 text-[13.5px] text-ink-soft" role="note">
-        {allowed ? <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" /> : <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />}
+        {allowed ? (
+          <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
+        ) : (
+          <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
+        )}
         <p className="min-w-0 [overflow-wrap:anywhere]">
           {allowed ? "Allowed" : "Not allowed"}
           {why ? ` (${why})` : ""}: <code className="font-mono text-[12.5px] text-ink">{item.summary}</code>
@@ -164,12 +168,7 @@ function UserMessage({ text, at, pending, queued }: { text: string; at: string; 
   return (
     <div className="flex animate-rise justify-end">
       <div className="max-w-[78%]">
-        <div
-          className={cx(
-            "rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft px-4 py-2.5 text-ink",
-            pending && "opacity-70",
-          )}
-        >
+        <div className={cx("rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft px-4 py-2.5 text-ink", pending && "opacity-70")}>
           <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
         </div>
         <p className="mt-1 pr-1 text-right text-xs text-ink-faint">{queued ? "Queued, runs when the agent finishes" : pending ? "Sending…" : clockTime(at)}</p>
@@ -222,15 +221,7 @@ function InlineCode({ text }: { text: string }) {
   return <>{bits.map((b, i) => (i % 2 === 1 ? <code key={i}>{b}</code> : b))}</>;
 }
 
-function ToolCall({
-  name,
-  input,
-  result,
-}: {
-  name: string;
-  input: unknown;
-  result: { output: unknown; isError: boolean } | null;
-}) {
+function ToolCall({ name, input, result }: { name: string; input: unknown; result: { output: unknown; isError: boolean } | null }) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   const summary = summarizeToolInput(input);
@@ -246,10 +237,7 @@ function ToolCall({
         aria-controls={bodyId}
         className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left hover:bg-cream/60 focus-visible:-outline-offset-2"
       >
-        <ChevronRight
-          aria-hidden="true"
-          className={cx("size-4 shrink-0 text-ink-faint transition-transform duration-150", open && "rotate-90")}
-        />
+        <ChevronRight aria-hidden="true" className={cx("size-4 shrink-0 text-ink-faint transition-transform duration-150", open && "rotate-90")} />
         <Wrench aria-hidden="true" className="size-3.5 shrink-0 text-ink-soft" />
         <span className="shrink-0 text-[13px] font-medium text-ink">{name}</span>
         {summary && <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-soft">{summary}</span>}

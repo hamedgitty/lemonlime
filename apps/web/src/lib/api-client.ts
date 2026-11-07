@@ -1,8 +1,6 @@
 import { PolicyDenied } from "@lemonlime/protocol";
 
-export type ApiResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; message: string; denied: PolicyDenied | null };
+export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; message: string; denied: PolicyDenied | null };
 
 /** Fetch a control-plane API route from the browser and normalise errors, including 402 policy denials. */
 export async function apiFetch<T>(path: string, init: { method?: string; body?: unknown } = {}): Promise<ApiResult<T>> {
@@ -23,9 +21,6 @@ export async function apiFetch<T>(path: string, init: { method?: string; body?: 
     const denied = PolicyDenied.safeParse(data);
     if (denied.success) return { ok: false, status: 402, message: denied.data.reason, denied: denied.data };
   }
-  const message =
-    data && typeof data === "object" && "message" in data && typeof data.message === "string"
-      ? data.message
-      : `Request failed (${res.status}).`;
+  const message = data && typeof data === "object" && "message" in data && typeof data.message === "string" ? data.message : `Request failed (${res.status}).`;
   return { ok: false, status: res.status, message, denied: null };
 }

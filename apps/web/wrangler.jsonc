@@ -10,14 +10,14 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "assets": {
     "directory": ".open-next/assets",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
   },
   "services": [
     {
       // Self-reference used by OpenNext; must match "name".
       "binding": "WORKER_SELF_REFERENCE",
-      "service": "lemonlime-web"
-    }
+      "service": "lemonlime-web",
+    },
   ],
   "d1_databases": [
     {
@@ -25,8 +25,8 @@
       "database_name": "lemonlime",
       // Replace with the id printed by `wrangler d1 create lemonlime`.
       "database_id": "00000000-0000-0000-0000-000000000000",
-      "migrations_dir": "../../packages/db/migrations"
-    }
+      "migrations_dir": "../../packages/db/migrations",
+    },
   ],
   // Cloudflare Email Service, used for sign-in codes. The sender domain in
   // LEMONLIME_EMAIL_FROM must be onboarded (`wrangler email sending enable <domain>`).
@@ -34,7 +34,7 @@
   "send_email": [{ "name": "EMAIL" }],
   // Pause idle sandboxes every minute (scheduled() in worker.ts).
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["* * * * *"],
   },
   "observability": { "enabled": true },
   // Non-secret settings. Override per deployment.
@@ -43,6 +43,6 @@
     "LEMONLIME_EMAIL_FROM": "LemonLime <sign-in@example.com>",
     // docker only works on Node; use daytona or e2b on Workers.
     "LEMONLIME_SANDBOX_PROVIDER": "daytona",
-    "LEMONLIME_SANDBOX_IMAGE": "lemonlime/sandbox:latest"
-  }
+    "LEMONLIME_SANDBOX_IMAGE": "lemonlime/sandbox:latest",
+  },
 }

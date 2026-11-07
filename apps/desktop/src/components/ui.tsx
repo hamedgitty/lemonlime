@@ -12,8 +12,7 @@ type Variant = "primary" | "secondary" | "ghost" | "danger";
 type Size = "sm" | "md";
 
 const VARIANTS: Record<Variant, string> = {
-  primary:
-    "bg-lemon text-ink border border-[#e9c900] shadow-[inset_0_-1px_0_rgb(0_0_0/0.08)] hover:bg-[#ffe84f] active:bg-[#f5d400]",
+  primary: "bg-lemon text-ink border border-[#e9c900] shadow-[inset_0_-1px_0_rgb(0_0_0/0.08)] hover:bg-[#ffe84f] active:bg-[#f5d400]",
   secondary: "bg-white text-ink border border-line-strong hover:bg-cream hover:border-ink-faint/50",
   ghost: "text-ink-soft hover:text-ink hover:bg-ink/5 border border-transparent",
   danger: "bg-white text-danger border border-danger/30 hover:bg-danger-soft",
@@ -48,12 +47,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   );
 });
 
-export function IconButton({
-  label,
-  className,
-  children,
-  ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+export function IconButton({ label, className, children, ...rest }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
   return (
     <button
       type="button"
@@ -106,10 +100,7 @@ export function Field({
 export const inputClass =
   "w-full rounded-[10px] border border-control bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-[border-color,box-shadow] duration-150 focus:border-leaf focus:shadow-[0_0_0_1px_var(--color-leaf)] focus:outline-none";
 
-export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function TextInput(
-  { className, ...rest },
-  ref,
-) {
+export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function TextInput({ className, ...rest }, ref) {
   return <input ref={ref} className={cx(inputClass, className)} {...rest} />;
 });
 
@@ -172,14 +163,7 @@ export function SegmentedControl<T extends string>({
               "has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-leaf",
             )}
           >
-            <input
-              type="radio"
-              name={name}
-              className="sr-only"
-              checked={active}
-              disabled={o.disabled}
-              onChange={() => onChange(o.value)}
-            />
+            <input type="radio" name={name} className="sr-only" checked={active} disabled={o.disabled} onChange={() => onChange(o.value)} />
             {o.label}
           </label>
         );
@@ -196,10 +180,5 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 export function Spinner({ className }: { className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cx("inline-block size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent", className)}
-    />
-  );
+  return <span aria-hidden="true" className={cx("inline-block size-3.5 animate-spin rounded-full border-2 border-current border-r-transparent", className)} />;
 }

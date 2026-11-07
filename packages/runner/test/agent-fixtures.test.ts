@@ -20,7 +20,10 @@ interface Turn {
 /** Run every recorded prompt of a fixture through the real adapter, in order. */
 async function replayFixture(kind: AgentKind, name: string): Promise<{ turns: Turn[]; state: Record<string, string> }> {
   const file = join(here, "fixtures/agents", kind, `${name}.jsonl`);
-  const rows = readFileSync(file, "utf8").trim().split("\n").map(l => JSON.parse(l) as { dir: string; line: string });
+  const rows = readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map(l => JSON.parse(l) as { dir: string; line: string });
   const prompts = rows.flatMap(r => {
     if (r.dir === "argv") {
       const argv = JSON.parse(r.line) as string[];
@@ -143,7 +146,11 @@ describe("OpenCode 1.18 over ACP (recorded)", () => {
     const lastFirst = ofType(first.events, "agent_message").at(-1)!;
     expect(lastFirst.partial).toBe(false);
     expect(lastFirst.text).toMatch(/add/);
-    expect(ofType(second.events, "agent_message").filter(e => !e.partial).map(e => e.text)).toEqual(["I changed add.js."]);
+    expect(
+      ofType(second.events, "agent_message")
+        .filter(e => !e.partial)
+        .map(e => e.text),
+    ).toEqual(["I changed add.js."]);
     expect(second.error).toBeUndefined();
     expect(state.sessionId).toMatch(/^ses_/);
   });

@@ -177,7 +177,13 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     process.exit(code);
   };
   const stopHeartbeat = values["control-plane"]
-    ? startHeartbeat(runner, { controlPlaneUrl: values["control-plane"], threadSecret: secret, version: RUNNER_VERSION, onShutdown: () => void shutdown(0), log })
+    ? startHeartbeat(runner, {
+        controlPlaneUrl: values["control-plane"],
+        threadSecret: secret,
+        version: RUNNER_VERSION,
+        onShutdown: () => void shutdown(0),
+        log,
+      })
     : null;
 
   process.on("SIGTERM", () => void shutdown(0));
@@ -210,7 +216,7 @@ export async function cleanup(argv: string[]): Promise<void> {
 const isEntry = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("cli.ts");
 if (isEntry) {
   main().catch(err => {
-    process.stderr.write(`lemonlime-runner: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`);
+    process.stderr.write(`lemonlime-runner: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     process.exit(1);
   });
 }

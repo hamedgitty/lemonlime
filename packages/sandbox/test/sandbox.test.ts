@@ -38,8 +38,7 @@ function scriptedFetch(replies: Reply[]) {
   return { fetch, calls };
 }
 
-const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const empty = (status = 200) => new Response(null, { status });
 
 function decodeEnvelope(bytes: Uint8Array): unknown {
@@ -77,9 +76,7 @@ describe("createSandboxProvider", () => {
   });
 
   it("names the missing variable", () => {
-    expect(() => createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "daytona" })).toThrow(
-      "DAYTONA_API_KEY is required for the daytona sandbox provider",
-    );
+    expect(() => createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "daytona" })).toThrow("DAYTONA_API_KEY is required for the daytona sandbox provider");
     expect(() => createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "e2b" })).toThrow("E2B_API_KEY is required for the e2b sandbox provider");
     expect(() => createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "nope" })).toThrow('Unknown sandbox provider "nope". Use docker, daytona or e2b.');
   });
@@ -280,11 +277,7 @@ describe("DaytonaProvider", () => {
   });
 
   it("destroys, ignoring a missing sandbox but not other errors", async () => {
-    const { fetch, calls } = scriptedFetch([
-      json({ id: "sb1", state: "destroying" }),
-      json({ message: "not found" }, 404),
-      json({ message: "boom" }, 500),
-    ]);
+    const { fetch, calls } = scriptedFetch([json({ id: "sb1", state: "destroying" }), json({ message: "not found" }, 404), json({ message: "boom" }, 500)]);
     const p = make(fetch);
     await p.destroy("sb1");
     await p.destroy("gone");
@@ -365,9 +358,7 @@ describe("E2BProvider", () => {
       () => connectStream([{ flags: 2, message: { error: { code: "invalid_argument", message: "bad cmd" } } }]),
       empty(204),
     ]);
-    await expect(make(fetch).create({ threadId: "t3", size: "small", runner })).rejects.toThrow(
-      "E2B could not start the runner: invalid_argument: bad cmd",
-    );
+    await expect(make(fetch).create({ threadId: "t3", size: "small", runner })).rejects.toThrow("E2B could not start the runner: invalid_argument: bad cmd");
     expect(calls[2]).toMatchObject({ method: "DELETE", url: `${API}/sandboxes/ib3` });
   });
 
@@ -396,7 +387,12 @@ describe("E2BProvider", () => {
   });
 
   it("pauses, treating already-paused and missing sandboxes as done", async () => {
-    const { fetch, calls } = scriptedFetch([empty(204), json({ message: "already paused" }, 409), json({ message: "nope" }, 404), json({ message: "boom" }, 500)]);
+    const { fetch, calls } = scriptedFetch([
+      empty(204),
+      json({ message: "already paused" }, 409),
+      json({ message: "nope" }, 404),
+      json({ message: "boom" }, 500),
+    ]);
     const p = make(fetch);
     await p.pause("ib1");
     await p.pause("ib1");

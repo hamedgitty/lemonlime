@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
+import type { NewEvent, QueuedMessage, Thread, ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { EventStore } from "./event-store.ts";
@@ -159,7 +159,8 @@ export class ThreadRunner {
       this.store.append({
         type: "error",
         code: "turn_outcome_unknown",
-        message: "The runner stopped while the agent was working, so the last message may not have finished. It will not be run again. Check the changes, then ask the agent to continue if needed.",
+        message:
+          "The runner stopped while the agent was working, so the last message may not have finished. It will not be run again. Check the changes, then ask the agent to continue if needed.",
         fatal: false,
       });
       this.setStatus("idle", "runner restarted");
@@ -324,7 +325,12 @@ export class ThreadRunner {
     }
     if (timedOut) {
       const hours = Math.round((timeoutMs / 3_600_000) * 10) / 10;
-      emit({ type: "error", code: "turn_timeout", message: `Stopped the agent after ${hours} hours on one message. Its changes so far are kept. Send a message to continue.`, fatal: false });
+      emit({
+        type: "error",
+        code: "turn_timeout",
+        message: `Stopped the agent after ${hours} hours on one message. Its changes so far are kept. Send a message to continue.`,
+        fatal: false,
+      });
     }
     try {
       await this.recordChanges(prompt);
@@ -370,7 +376,11 @@ export class ThreadRunner {
     if (this.crashes === 1) {
       emit({ type: "error", code: "agent_crashed", message, fatal: false });
       this.session = this.newSession();
-      emit({ type: "notice", code: "agent_restarted", message: "The agent stopped unexpectedly, so it was restarted. Your next message continues the same conversation." });
+      emit({
+        type: "notice",
+        code: "agent_restarted",
+        message: "The agent stopped unexpectedly, so it was restarted. Your next message continues the same conversation.",
+      });
     } else {
       emit({
         type: "error",

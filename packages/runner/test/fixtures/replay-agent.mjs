@@ -13,7 +13,10 @@ import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 const [fixture, ...args] = process.argv.slice(2);
-const rows = readFileSync(fixture, "utf8").trim().split("\n").map(l => JSON.parse(l));
+const rows = readFileSync(fixture, "utf8")
+  .trim()
+  .split("\n")
+  .map(l => JSON.parse(l));
 const meta = rows.find(r => r.dir === "meta");
 const out = line => process.stdout.write(line + "\n");
 
@@ -35,7 +38,9 @@ function replayOneShot() {
   const given = normalize(args);
   const turn = turns.find(t => JSON.stringify(t.argv) === JSON.stringify(given));
   if (!turn) {
-    process.stderr.write(`replay-agent: no recorded turn has these args:\n${JSON.stringify(given)}\nrecorded:\n${turns.map(t => JSON.stringify(t.argv)).join("\n")}\n`);
+    process.stderr.write(
+      `replay-agent: no recorded turn has these args:\n${JSON.stringify(given)}\nrecorded:\n${turns.map(t => JSON.stringify(t.argv)).join("\n")}\n`,
+    );
     process.exit(3);
   }
   turn.out.forEach(out);

@@ -23,7 +23,10 @@ describe("Claude Code stream-json", () => {
     ]);
 
     const result = parseClaudeLine(
-      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "3 passed" }], is_error: false }] } }),
+      JSON.stringify({
+        type: "user",
+        message: { content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "text", text: "3 passed" }], is_error: false }] },
+      }),
     );
     expect(result.events).toEqual([{ type: "tool_result", callId: "t1", output: "3 passed", isError: false }]);
   });
@@ -42,7 +45,9 @@ describe("Codex exec --json", () => {
       { type: "tool_call", callId: "c1", name: "shell", input: { command: "ls" } },
     ]);
     expect(
-      parseCodexLine(JSON.stringify({ type: "item.completed", item: { id: "c1", type: "command_execution", aggregated_output: "boom", exit_code: 1, status: "failed" } })).events,
+      parseCodexLine(
+        JSON.stringify({ type: "item.completed", item: { id: "c1", type: "command_execution", aggregated_output: "boom", exit_code: 1, status: "failed" } }),
+      ).events,
     ).toEqual([{ type: "tool_result", callId: "c1", output: "boom", isError: true }]);
     expect(parseCodexLine(JSON.stringify({ type: "item.completed", item: { id: "m1", type: "agent_message", text: "Done." } })).events).toEqual([
       { type: "agent_message", text: "Done.", partial: false },
@@ -66,18 +71,23 @@ describe("ACP translation", () => {
       { type: "agent_message", text: "Hello", partial: false },
       { type: "tool_call", callId: "x", name: "Read file", input: { path: "a" } },
     ]);
-    expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "x", status: "completed", content: [{ type: "content", content: { type: "text", text: "ok" } }] })).toEqual([
-      { type: "tool_result", callId: "x", output: "ok", isError: false },
-    ]);
+    expect(
+      t.update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "x",
+        status: "completed",
+        content: [{ type: "content", content: { type: "text", text: "ok" } }],
+      }),
+    ).toEqual([{ type: "tool_result", callId: "x", output: "ok", isError: false }]);
     expect(t.finish()).toEqual([]);
   });
 
   it("holds a pending call until it starts, keeping the latest input and the first name", () => {
     const t = new AcpTranslator();
     expect(t.update({ sessionUpdate: "tool_call", toolCallId: "b", title: "bash", kind: "execute", status: "pending", rawInput: { cwd: "/w" } })).toEqual([]);
-    expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress", title: "node test.js", rawInput: { command: "node test.js" } })).toEqual([
-      { type: "tool_call", callId: "b", name: "bash", input: { command: "node test.js" } },
-    ]);
+    expect(
+      t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress", title: "node test.js", rawInput: { command: "node test.js" } }),
+    ).toEqual([{ type: "tool_call", callId: "b", name: "bash", input: { command: "node test.js" } }]);
     expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress", rawInput: { command: "node test.js" } })).toEqual([]);
     expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "failed", rawOutput: { exit: 1 } })).toEqual([
       { type: "tool_result", callId: "b", output: { exit: 1 }, isError: true },
@@ -93,7 +103,8 @@ describe("ACP translation", () => {
       { optionId: "no", kind: "reject_once" },
     ];
     const pick = (kind: string, autonomy: "full" | "edits") =>
-      (answerAgentRequest("session/request_permission", { options, toolCall: { kind } }, autonomy) as { result: { outcome: { optionId: string } } }).result.outcome.optionId;
+      (answerAgentRequest("session/request_permission", { options, toolCall: { kind } }, autonomy) as { result: { outcome: { optionId: string } } }).result
+        .outcome.optionId;
     expect(pick("execute", "full")).toBe("yes");
     expect(pick("edit", "edits")).toBe("yes");
     expect(pick("execute", "edits")).toBe("no");

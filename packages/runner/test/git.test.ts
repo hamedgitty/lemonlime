@@ -13,7 +13,10 @@ function tempDir(): string {
 }
 afterEach(() => dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })));
 
-const git = (dir: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir }).toString().trim();
+const git = (dir: string, ...args: string[]) =>
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir })
+    .toString()
+    .trim();
 
 describe("GitWorkspace", () => {
   it("branches from base, reports changes and commits them", async () => {

@@ -36,9 +36,7 @@ export function ThreadView(props: ThreadViewProps) {
     );
   }
   const target: SessionTarget =
-    entry.mode === "local"
-      ? { mode: "local", meta: entry.meta, runnerPath: props.runnerPath }
-      : { mode: "cloud", thread: entry.thread, api: cloudApi! };
+    entry.mode === "local" ? { mode: "local", meta: entry.meta, runnerPath: props.runnerPath } : { mode: "cloud", thread: entry.thread, api: cloudApi! };
   return <ThreadSessionView {...props} target={target} />;
 }
 
@@ -68,8 +66,7 @@ function ThreadSessionView({
 
   const connected = session.state === "live" || session.state === "reconnecting";
   // While connected the runner is the source of truth; otherwise the control plane (cloud) is.
-  const liveStatus: ThreadStatus | null =
-    entry.mode === "cloud" ? (connected ? (session.status ?? entry.thread.status) : entry.thread.status) : session.status;
+  const liveStatus: ThreadStatus | null = entry.mode === "cloud" ? (connected ? (session.status ?? entry.thread.status) : entry.thread.status) : session.status;
   const working = liveStatus === "running" && connected;
   const composerDisabled = session.state === "starting" || session.state === "offline" || session.state === "error";
 
@@ -80,14 +77,15 @@ function ThreadSessionView({
 
   // A cloud sandbox that is still starting has no endpoint yet: check again shortly.
   const cloudStatus = entry.mode === "cloud" ? entry.thread.status : null;
+  const { state: sessionState, restart: restartSession } = session;
   useEffect(() => {
-    if (session.state !== "offline" || cloudStatus !== "provisioning") return;
+    if (sessionState !== "offline" || cloudStatus !== "provisioning") return;
     const t = setTimeout(() => {
       onCloudRefresh();
-      session.restart();
+      restartSession();
     }, 3000);
     return () => clearTimeout(t);
-  }, [session.state, cloudStatus, onCloudRefresh, session.restart]);
+  }, [sessionState, cloudStatus, onCloudRefresh, restartSession]);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -140,14 +138,13 @@ function ThreadSessionView({
           <h1 className="truncate text-[19px] font-semibold text-ink">{summary.title}</h1>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-ink-soft">
             <span className="inline-flex items-center gap-1.5">
-              {summary.mode === "local" ? (
-                <Laptop aria-hidden="true" className="size-3.5" />
-              ) : (
-                <Cloud aria-hidden="true" className="size-3.5" />
-              )}
+              {summary.mode === "local" ? <Laptop aria-hidden="true" className="size-3.5" /> : <Cloud aria-hidden="true" className="size-3.5" />}
               {summary.mode === "local" ? "This computer" : "Cloud"}
             </span>
-            <span>{AGENT_LABELS[summary.agent.kind]}{summary.agent.model ? ` · ${summary.agent.model}` : ""}</span>
+            <span>
+              {AGENT_LABELS[summary.agent.kind]}
+              {summary.agent.model ? ` · ${summary.agent.model}` : ""}
+            </span>
             <span className="truncate" title={summary.repo}>
               {repoName(summary.repo)}
             </span>
@@ -240,22 +237,11 @@ function ThreadSessionView({
   );
 }
 
-function EmptyThread({
-  state,
-  mode,
-  branch,
-  cloudStatus,
-}: {
-  state: SessionState;
-  mode: "local" | "cloud";
-  branch: string;
-  cloudStatus: ThreadStatus | null;
-}) {
+function EmptyThread({ state, mode, branch, cloudStatus }: { state: SessionState; mode: "local" | "cloud"; branch: string; cloudStatus: ThreadStatus | null }) {
   let heading = "Tell the agent what to work on";
   let body = (
     <>
-      Everything it changes lands on <span className="font-mono text-[12.5px] text-ink">{branch}</span>, so your other branches stay
-      as they are.
+      Everything it changes lands on <span className="font-mono text-[12.5px] text-ink">{branch}</span>, so your other branches stay as they are.
     </>
   );
   if (state === "starting") {

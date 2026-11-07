@@ -18,7 +18,19 @@ afterEach(async () => {
 
 function thread(id: string): Thread {
   const now = new Date().toISOString();
-  return { id, title: "", agent: { kind: "claude-code" }, repo: { url: "local", baseBranch: "main" }, branch: branchForThread(id), mode: "local", status: "provisioning", sandboxSize: "small", latestSeq: 0, createdAt: now, updatedAt: now };
+  return {
+    id,
+    title: "",
+    agent: { kind: "claude-code" },
+    repo: { url: "local", baseBranch: "main" },
+    branch: branchForThread(id),
+    mode: "local",
+    status: "provisioning",
+    sandboxSize: "small",
+    latestSeq: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 function repo(): string {
@@ -43,13 +55,26 @@ const asking: AgentAdapter = {
 };
 
 async function boot(id: string, extra: Partial<ConstructorParameters<typeof ThreadRunner>[0]> = {}, dir = repo()) {
-  const runner = new ThreadRunner({ thread: thread(id), workdir: dir, dataDir: join(dir, ".lemonlime"), adapter: asking, session: { autonomy: "edits" }, ...extra });
+  const runner = new ThreadRunner({
+    thread: thread(id),
+    workdir: dir,
+    dataDir: join(dir, ".lemonlime"),
+    adapter: asking,
+    session: { autonomy: "edits" },
+    ...extra,
+  });
   await runner.init();
   cleanups.push(() => runner.close());
   return runner;
 }
 
-const lastAnswer = (r: ThreadRunner) => (r.store.since(0).filter(e => e.type === "agent_message").at(-1) as { text: string } | undefined)?.text;
+const lastAnswer = (r: ThreadRunner) =>
+  (
+    r.store
+      .since(0)
+      .filter(e => e.type === "agent_message")
+      .at(-1) as { text: string } | undefined
+  )?.text;
 const results = (r: ThreadRunner) => r.store.since(0).filter(e => e.type === "approval_result");
 const until = async (check: () => boolean) => {
   const start = Date.now();
@@ -94,7 +119,13 @@ describe("approvals in the runner", () => {
     first.sendMessage("go");
     await until(() => first.store.since(0).some(e => e.type === "approval_request"));
     // Simulate the process dying: history keeps the open question.
-    const second = new ThreadRunner({ thread: thread("appr-thread-4"), workdir: dir, dataDir: join(dir, ".lemonlime"), adapter: asking, session: { autonomy: "edits" } });
+    const second = new ThreadRunner({
+      thread: thread("appr-thread-4"),
+      workdir: dir,
+      dataDir: join(dir, ".lemonlime"),
+      adapter: asking,
+      session: { autonomy: "edits" },
+    });
     await second.init();
     cleanups.push(() => second.close());
     expect(results(second).at(-1)).toMatchObject({ decision: "deny", by: "expired" });
@@ -125,7 +156,11 @@ describe("approval bridge and helper", () => {
     const bridge = await ApprovalBridge.start(async () => "allow");
     cleanups.push(() => bridge.close());
     const post = (auth: string) =>
-      fetch(bridge.url, { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ tool: "Bash", input: {} }) });
+      fetch(bridge.url, {
+        method: "POST",
+        headers: { authorization: auth, "content-type": "application/json" },
+        body: JSON.stringify({ tool: "Bash", input: {} }),
+      });
     expect((await post("Bearer wrong")).status).toBe(404);
     expect(await (await post(`Bearer ${bridge.token}`)).json()).toEqual({ decision: "allow" });
   });

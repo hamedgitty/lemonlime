@@ -41,7 +41,10 @@ async function ask(args) {
   } catch {
     decision = "deny";
   }
-  const answer = decision === "allow" ? { behavior: "allow", updatedInput: input } : { behavior: "deny", message: "The user did not allow this. Ask them, or try another way." };
+  const answer =
+    decision === "allow"
+      ? { behavior: "allow", updatedInput: input }
+      : { behavior: "deny", message: "The user did not allow this. Ask them, or try another way." };
   return { content: [{ type: "text", text: JSON.stringify(answer) }] };
 }
 
@@ -55,7 +58,10 @@ createInterface({ input: process.stdin }).on("line", async line => {
   if (!("id" in msg)) return; // notifications need no answer
   switch (msg.method) {
     case "initialize":
-      return send({ id: msg.id, result: { protocolVersion: msg.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "lemonlime", version: "1" } } });
+      return send({
+        id: msg.id,
+        result: { protocolVersion: msg.params?.protocolVersion ?? "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "lemonlime", version: "1" } },
+      });
     case "tools/list":
       return send({ id: msg.id, result: { tools: [TOOL] } });
     case "tools/call":

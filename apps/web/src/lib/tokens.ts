@@ -23,9 +23,7 @@ export async function issueClientToken(opts: {
   return { token, expiresAt: new Date(exp * 1000).toISOString() };
 }
 
-export type RunnerAuthResult =
-  | { ok: true; threadId: string }
-  | { ok: false; status: 401 | 403; error: string };
+export type RunnerAuthResult = { ok: true; threadId: string } | { ok: false; status: 401 | 403; error: string };
 
 /**
  * Checks `Authorization: Bearer <runner token>` for a heartbeat about `threadId`.

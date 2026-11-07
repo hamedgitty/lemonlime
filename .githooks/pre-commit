@@ -1,0 +1,9 @@
+#!/bin/sh
+# Turn on with `pnpm hooks`. Stops a commit that would leak a secret or reach outside
+# this repository. Install gitleaks (https://github.com/gitleaks/gitleaks) for the
+# full secret scan; without it only the boundary check runs.
+set -e
+node scripts/check-boundary.mjs
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks protect --staged --redact --no-banner
+fi

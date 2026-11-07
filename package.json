@@ -16,10 +16,18 @@
     "test:watch": "vitest",
     "dev:web": "pnpm --filter @lemonlime/web dev",
     "dev:desktop": "pnpm --filter @lemonlime/desktop dev",
-    "runner": "pnpm --filter @lemonlime/runner start"
+    "runner": "pnpm --filter @lemonlime/runner start",
+    "lint": "oxlint -c .oxlintrc.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "boundary": "node scripts/check-boundary.mjs",
+    "check": "pnpm boundary && pnpm lint && pnpm format:check && pnpm typecheck && pnpm test",
+    "hooks": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "oxlint": "1.92.0",
+    "prettier": "3.9.10",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
   }

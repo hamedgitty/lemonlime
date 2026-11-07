@@ -75,8 +75,7 @@ export function NewThreadDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const firstRef = useRef<HTMLButtonElement>(null);
 
-  const FOCUSABLE =
-    'button:not([disabled]), input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [href]';
+  const FOCUSABLE = 'button:not([disabled]), input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled]), [href]';
 
   // Focus the first control on open and give focus back on close.
   useEffect(() => {
@@ -156,11 +155,7 @@ export function NewThreadDialog({
     };
     setSubmitting(true);
     try {
-      await onCreate(
-        mode === "local"
-          ? { mode, ...common, repoPath }
-          : { mode, ...common, repoUrl: repoUrl.trim(), sandboxSize },
-      );
+      await onCreate(mode === "local" ? { mode, ...common, repoPath } : { mode, ...common, repoUrl: repoUrl.trim(), sandboxSize });
     } catch (err) {
       if (err instanceof DeniedError) setDenial(err.denial);
       else setError(err instanceof Error ? err.message : String(err));
@@ -298,14 +293,7 @@ export function NewThreadDialog({
                       agent === kind ? "border-leaf bg-lime-soft/60" : "border-line-strong hover:bg-cream",
                     )}
                   >
-                    <input
-                      type="radio"
-                      name="agent"
-                      value={kind}
-                      checked={agent === kind}
-                      onChange={() => setAgent(kind)}
-                      className="sr-only"
-                    />
+                    <input type="radio" name="agent" value={kind} checked={agent === kind} onChange={() => setAgent(kind)} className="sr-only" />
                     <span className="text-sm font-medium text-ink">{AGENT_LABELS[kind]}</span>
                     <span className="text-xs text-ink-soft">{AGENT_HINTS[kind]}</span>
                   </label>

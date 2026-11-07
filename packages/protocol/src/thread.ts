@@ -32,9 +32,7 @@ export const SANDBOX_RESOURCES: Record<SandboxSize, { vcpu: number; memoryGiB: n
 export const IDLE_PAUSE_AFTER_MS = 5 * 60 * 1000;
 
 /** Thread ids are lowercase, URL- and branch-safe. */
-export const ThreadId = z
-  .string()
-  .regex(/^[a-z0-9][a-z0-9-]{5,63}$/, "thread id must be 6-64 chars of a-z, 0-9 or -");
+export const ThreadId = z.string().regex(/^[a-z0-9][a-z0-9-]{5,63}$/, "thread id must be 6-64 chars of a-z, 0-9 or -");
 export type ThreadId = z.infer<typeof ThreadId>;
 
 export const RepoRef = z.object({

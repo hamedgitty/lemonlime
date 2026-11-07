@@ -24,13 +24,7 @@ export interface EmailSender {
 
 /** The subset of Cloudflare's `send_email` binding this app uses (see `wrangler.jsonc`). */
 export interface SendEmailBinding {
-  send(message: {
-    to: string | string[];
-    from: string | { email: string; name?: string };
-    subject: string;
-    text?: string;
-    html?: string;
-  }): Promise<unknown>;
+  send(message: { to: string | string[]; from: string | { email: string; name?: string }; subject: string; text?: string; html?: string }): Promise<unknown>;
 }
 
 export interface EmailEnv {

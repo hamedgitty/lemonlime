@@ -129,13 +129,16 @@ export type DiffLineKind = "add" | "del" | "hunk" | "meta" | "context";
 
 /** Classify the lines of a unified diff for display. */
 export function diffLines(diff: string): Array<{ kind: DiffLineKind; text: string }> {
-  return diff.replace(/\n$/, "").split("\n").map(text => {
-    if (text.startsWith("+++") || text.startsWith("---") || text.startsWith("diff ") || text.startsWith("index ")) {
-      return { kind: "meta" as const, text };
-    }
-    if (text.startsWith("@@")) return { kind: "hunk" as const, text };
-    if (text.startsWith("+")) return { kind: "add" as const, text };
-    if (text.startsWith("-")) return { kind: "del" as const, text };
-    return { kind: "context" as const, text };
-  });
+  return diff
+    .replace(/\n$/, "")
+    .split("\n")
+    .map(text => {
+      if (text.startsWith("+++") || text.startsWith("---") || text.startsWith("diff ") || text.startsWith("index ")) {
+        return { kind: "meta" as const, text };
+      }
+      if (text.startsWith("@@")) return { kind: "hunk" as const, text };
+      if (text.startsWith("+")) return { kind: "add" as const, text };
+      if (text.startsWith("-")) return { kind: "del" as const, text };
+      return { kind: "context" as const, text };
+    });
 }

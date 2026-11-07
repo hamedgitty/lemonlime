@@ -59,7 +59,11 @@ export class AgentError extends Error {
  * otherwise `agent_failed`.
  */
 export function classifyAgentFailure(reason: string): string {
-  if (/not logged in|log ?in expired|please (run )?\/?login|run \/login|invalid api key|not authenticated|authentication (failed|required)|unauthori[sz]ed|\b401\b/i.test(reason)) {
+  if (
+    /not logged in|log ?in expired|please (run )?\/?login|run \/login|invalid api key|not authenticated|authentication (failed|required)|unauthori[sz]ed|\b401\b/i.test(
+      reason,
+    )
+  ) {
     return "auth_required";
   }
   if (/requires a newer version|please upgrade|update (the )?(cli|app) and try again/i.test(reason)) return "agent_outdated";
@@ -75,5 +79,9 @@ export function turnFailure(reason: string | null, processError?: unknown): Erro
 /** Notice for an output line the agent printed that was too long to keep. */
 export function oversizeNotice(bytes: number): NewEvent {
   const mb = (bytes / (1024 * 1024)).toFixed(1);
-  return { type: "notice", code: "output_too_large", message: `The agent printed one piece of output of ${mb} MB, too large to keep, so it was left out of the history.` };
+  return {
+    type: "notice",
+    code: "output_too_large",
+    message: `The agent printed one piece of output of ${mb} MB, too large to keep, so it was left out of the history.`,
+  };
 }

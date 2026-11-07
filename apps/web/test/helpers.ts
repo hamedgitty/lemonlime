@@ -59,7 +59,15 @@ export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}
     },
   };
   const plugin: ResolvedPlugin = { ...defaultPlugin, usagePolicy: { ...defaultPlugin.usagePolicy, ...opts.policy } };
-  const ctx = createAppContext({ runtime: "node", env: { ...TEST_ENV }, db, production: false, plugin, email, sandbox: () => sandbox as unknown as SandboxProvider });
+  const ctx = createAppContext({
+    runtime: "node",
+    env: { ...TEST_ENV },
+    db,
+    production: false,
+    plugin,
+    email,
+    sandbox: () => sandbox as unknown as SandboxProvider,
+  });
   return { ctx, db, sandbox, emails };
 }
 

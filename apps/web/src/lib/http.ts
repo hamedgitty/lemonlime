@@ -46,12 +46,19 @@ export function route<C>(handler: Handler<C>): Handler<C> {
 
 function errorCode(status: number): string {
   switch (status) {
-    case 400: return "bad_request";
-    case 401: return "unauthorized";
-    case 403: return "forbidden";
-    case 404: return "not_found";
-    case 409: return "conflict";
-    case 502: return "sandbox_error";
-    default: return "error";
+    case 400:
+      return "bad_request";
+    case 401:
+      return "unauthorized";
+    case 403:
+      return "forbidden";
+    case 404:
+      return "not_found";
+    case 409:
+      return "conflict";
+    case 502:
+      return "sandbox_error";
+    default:
+      return "error";
   }
 }

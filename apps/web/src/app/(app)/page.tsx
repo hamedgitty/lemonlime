@@ -17,7 +17,9 @@ export default async function HomePage() {
     <main className="mx-auto grid max-w-6xl gap-10 px-5 py-10 lg:grid-cols-[1fr_380px]">
       <section aria-labelledby="threads-heading">
         <div className="flex items-baseline justify-between">
-          <h1 id="threads-heading" className="text-3xl font-semibold">Threads</h1>
+          <h1 id="threads-heading" className="text-3xl font-semibold">
+            Threads
+          </h1>
           <span className="text-sm text-muted">{threads.length === 1 ? "1 thread" : `${threads.length} threads`}</span>
         </div>
 
@@ -58,7 +60,9 @@ export default async function HomePage() {
 
       <aside aria-labelledby="new-thread-heading">
         <div className="card p-5 lg:sticky lg:top-20">
-          <h2 id="new-thread-heading" className="text-xl font-semibold">New thread</h2>
+          <h2 id="new-thread-heading" className="text-xl font-semibold">
+            New thread
+          </h2>
           <p className="mt-1 text-sm text-muted">Pick an agent and a repository. It works on a new branch.</p>
           <NewThreadForm />
         </div>

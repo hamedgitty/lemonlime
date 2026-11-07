@@ -138,11 +138,7 @@ export function SettingsView({ settings, onSave }: { settings: Settings; onSave:
                 {test.actionUrl && (
                   <>
                     {" "}
-                    <button
-                      type="button"
-                      onClick={() => void openExternal(test.actionUrl!)}
-                      className="font-medium text-ink underline underline-offset-2"
-                    >
+                    <button type="button" onClick={() => void openExternal(test.actionUrl!)} className="font-medium text-ink underline underline-offset-2">
                       {test.actionLabel || "Learn more"}
                     </button>
                   </>

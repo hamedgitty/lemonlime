@@ -26,14 +26,20 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             <Logo />
           </Link>
           <nav className="flex items-center gap-1 text-sm">
-            <Link href="/" className="rounded-md px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink">Threads</Link>
-            <Link href="/settings" className="rounded-md px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink">Settings</Link>
+            <Link href="/" className="rounded-md px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink">
+              Threads
+            </Link>
+            <Link href="/settings" className="rounded-md px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink">
+              Settings
+            </Link>
           </nav>
           <div className="ml-auto flex items-center gap-3">
             {renderSlot(billingUI.headerBadge, { workspaceId })}
             {user.email && <span className="hidden text-sm text-muted sm:inline">{user.email}</span>}
             <form action="/auth/signout" method="post">
-              <button type="submit" className="btn-ghost h-8 px-3">Sign out</button>
+              <button type="submit" className="btn-ghost h-8 px-3">
+                Sign out
+              </button>
             </form>
           </div>
         </div>

@@ -1,10 +1,4 @@
-import {
-  CreateThreadRequest,
-  PolicyDenied,
-  Thread,
-  ThreadWithEndpoint,
-  type CreateThreadRequest as CreateThreadRequestT,
-} from "@lemonlime/protocol";
+import { CreateThreadRequest, PolicyDenied, Thread, ThreadWithEndpoint, type CreateThreadRequest as CreateThreadRequestT } from "@lemonlime/protocol";
 import { z } from "zod";
 import { isTauri } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";

@@ -15,8 +15,7 @@ const thread = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
-const respond = (status: number, body: unknown) => async () =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const respond = (status: number, body: unknown) => async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 describe("parseThreadList", () => {
   it("accepts arrays, wrapped lists and endpoint items", () => {

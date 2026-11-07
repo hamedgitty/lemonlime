@@ -28,10 +28,7 @@ describe("authenticateRunner", () => {
     const other = await runnerToken("thread-bbbbbb");
     expect(await authenticateRunner(`Bearer ${other}`, THREAD, MASTER, NOW)).toMatchObject({ ok: false, status: 401 });
     // Even signed with the right secret, the claims must name this thread.
-    const mismatched = await signToken(
-      { threadId: "thread-bbbbbb", scope: "runner", exp: NOW + 600 },
-      await deriveThreadSecret(MASTER, THREAD),
-    );
+    const mismatched = await signToken({ threadId: "thread-bbbbbb", scope: "runner", exp: NOW + 600 }, await deriveThreadSecret(MASTER, THREAD));
     expect(await authenticateRunner(`Bearer ${mismatched}`, THREAD, MASTER, NOW)).toMatchObject({ ok: false, status: 403 });
   });
 

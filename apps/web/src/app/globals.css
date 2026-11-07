@@ -32,7 +32,9 @@
     font-family: var(--font-sans);
     min-height: 100dvh;
   }
-  h1, h2, h3 {
+  h1,
+  h2,
+  h3 {
     font-family: var(--font-display);
     letter-spacing: -0.01em;
     text-wrap: balance;

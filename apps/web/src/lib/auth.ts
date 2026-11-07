@@ -46,6 +46,8 @@ const SAME_SITE = "http://lemonlime.invalid";
  */
 export function safeNext(next: string | null | undefined): string {
   if (!next || !next.startsWith("/")) return "/";
+  // Control characters and backslashes can turn "/x" into another site; refuse them.
+  // oxlint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f\\]/.test(next)) return "/";
   try {
     const url = new URL(next, SAME_SITE);

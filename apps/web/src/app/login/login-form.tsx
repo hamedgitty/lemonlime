@@ -25,17 +25,7 @@ function describe(error: AuthError, fallback: string): string {
   }
 }
 
-export function LoginForm({
-  github,
-  error,
-  next,
-  codeLength,
-}: {
-  github: boolean;
-  error: string | null;
-  next: string;
-  codeLength: number;
-}) {
+export function LoginForm({ github, error, next, codeLength }: { github: boolean; error: string | null; next: string; codeLength: number }) {
   const [step, setStep] = useState<"email" | "code">("email");
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -130,8 +120,7 @@ export function LoginForm({
         <div className="card p-5">
           <h2 className="text-lg font-semibold">Check your email</h2>
           <p className="mt-1 text-sm text-muted">
-            We sent a {codeLength}-digit code to <span className="font-medium text-ink">{email.trim()}</span>. It expires in
-            10 minutes.
+            We sent a {codeLength}-digit code to <span className="font-medium text-ink">{email.trim()}</span>. It expires in 10 minutes.
           </p>
           <form
             className="mt-4 space-y-3"
@@ -141,7 +130,9 @@ export function LoginForm({
             }}
           >
             <div>
-              <label htmlFor="code" className="label">Sign-in code</label>
+              <label htmlFor="code" className="label">
+                Sign-in code
+              </label>
               <input
                 ref={codeRef}
                 id="code"
@@ -207,7 +198,9 @@ export function LoginForm({
       {alert}
       <form onSubmit={submitEmail} className="space-y-3">
         <div>
-          <label htmlFor="email" className="label">Email</label>
+          <label htmlFor="email" className="label">
+            Email
+          </label>
           <input
             id="email"
             type="email"

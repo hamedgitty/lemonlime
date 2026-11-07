@@ -32,7 +32,7 @@ describe("shellQuote", () => {
     expect(() => shellQuote("a\0b")).toThrow();
   });
 
-  it.each(["a b", "it's", "$(whoami)", "`id`", "x;y|z&w", "line1\nline2", "\"double\"", "back\\slash", "*?[]{}", "~user", "#hash", "'"])(
+  it.each(["a b", "it's", "$(whoami)", "`id`", "x;y|z&w", "line1\nline2", '"double"', "back\\slash", "*?[]{}", "~user", "#hash", "'"])(
     "round-trips %j through sh",
     value => {
       expect(shellSplit(shellQuote(value))).toEqual([value]);
@@ -53,9 +53,15 @@ describe("runner command", () => {
       agent: { kind: "acp", command: ["gemini", "--experimental-acp", "it's"], model: "pro model" },
     });
     expect(args.slice(0, 9)).toEqual([
-      "lemonlime-runner", "--thread", "abc123-thread", "--agent", "acp",
-      "--agent-command", "gemini --experimental-acp 'it'\\''s'",
-      "--model", "pro model",
+      "lemonlime-runner",
+      "--thread",
+      "abc123-thread",
+      "--agent",
+      "acp",
+      "--agent-command",
+      "gemini --experimental-acp 'it'\\''s'",
+      "--model",
+      "pro model",
     ]);
     const command = buildRunnerCommand({ ...base, agent: { kind: "acp", command: ["gemini", "--experimental-acp", "it's"], model: "pro model" } });
     expect(shellSplit(command)).toEqual(args);

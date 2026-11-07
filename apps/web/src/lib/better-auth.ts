@@ -48,9 +48,7 @@ export function createAuth(ctx: AppContext) {
     advanced: {
       ipAddress: { ipAddressHeaders: ctx.runtime === "workers" ? ["cf-connecting-ip"] : ["x-forwarded-for"] },
     },
-    socialProviders: githubEnabled(ctx.vars)
-      ? { github: { clientId: ctx.vars.GITHUB_CLIENT_ID!, clientSecret: ctx.vars.GITHUB_CLIENT_SECRET! } }
-      : {},
+    socialProviders: githubEnabled(ctx.vars) ? { github: { clientId: ctx.vars.GITHUB_CLIENT_ID!, clientSecret: ctx.vars.GITHUB_CLIENT_SECRET! } } : {},
     plugins: [
       emailOTP({
         otpLength: SIGN_IN_CODE_LENGTH,

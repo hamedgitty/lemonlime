@@ -84,9 +84,7 @@ export function Composer({
             title="Send (Enter)"
             className={cx(
               "inline-flex size-9.5 shrink-0 items-center justify-center rounded-xl border transition-colors",
-              canSend
-                ? "border-[#e9c900] bg-lemon text-ink hover:bg-[#ffe84f]"
-                : "border-line bg-cream-deep text-ink-faint",
+              canSend ? "border-[#e9c900] bg-lemon text-ink hover:bg-[#ffe84f]" : "border-line bg-cream-deep text-ink-faint",
             )}
           >
             <ArrowUp aria-hidden="true" className="size-4.5" strokeWidth={2.4} />

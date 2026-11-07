@@ -6,15 +6,7 @@ import { ThreadView } from "./components/ThreadView.tsx";
 import { SettingsView } from "./components/SettingsView.tsx";
 import { DeniedError, NewThreadDialog, type NewThreadInput } from "./components/NewThreadDialog.tsx";
 import { Button, LogoMark } from "./components/ui.tsx";
-import {
-  forgetEvents,
-  loadLocalThreads,
-  loadSettings,
-  saveLocalThreads,
-  saveSettings,
-  type LocalThreadMeta,
-  type Settings,
-} from "./lib/storage.ts";
+import { forgetEvents, loadLocalThreads, loadSettings, saveLocalThreads, saveSettings, type LocalThreadMeta, type Settings } from "./lib/storage.ts";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { inDesktopShell, listLocalRunners, removeLocalThread, stopLocalRunner } from "./lib/native.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
@@ -99,14 +91,10 @@ export function App() {
   }, []);
 
   const onLocalProgress = useCallback(
-    (id: string, lastSeq: number) =>
-      patchLocal(id, m => (m.lastSeq === lastSeq ? null : { ...m, lastSeq, updatedAt: new Date().toISOString() })),
+    (id: string, lastSeq: number) => patchLocal(id, m => (m.lastSeq === lastSeq ? null : { ...m, lastSeq, updatedAt: new Date().toISOString() })),
     [patchLocal],
   );
-  const onLocalStatus = useCallback(
-    (id: string, status: ThreadStatus) => patchLocal(id, m => (m.status === status ? null : { ...m, status })),
-    [patchLocal],
-  );
+  const onLocalStatus = useCallback((id: string, status: ThreadStatus) => patchLocal(id, m => (m.status === status ? null : { ...m, status })), [patchLocal]);
   const onLocalPromptSent = useCallback(
     (id: string) =>
       patchLocal(id, m => {
@@ -208,10 +196,7 @@ export function App() {
     () => sortByActivity(localThreads.map(meta => summarize({ mode: "local", meta }, running.has(meta.id)))),
     [localThreads, running],
   );
-  const cloudSummaries = useMemo(
-    () => sortByActivity(cloudThreads.map(thread => summarize({ mode: "cloud", thread }, true))),
-    [cloudThreads],
-  );
+  const cloudSummaries = useMemo(() => sortByActivity(cloudThreads.map(thread => summarize({ mode: "cloud", thread }, true))), [cloudThreads]);
 
   const selectedEntry: ThreadEntry | null = useMemo(() => {
     if (!selection) return null;
@@ -270,9 +255,7 @@ export function App() {
         <Home onNew={() => setNewOpen(true)} hasThreads={localThreads.length + cloudThreads.length > 0} />
       )}
 
-      {newOpen && (
-        <NewThreadDialog cloudAvailable={cloudConfigured} onCancel={() => setNewOpen(false)} onCreate={createThread} />
-      )}
+      {newOpen && <NewThreadDialog cloudAvailable={cloudConfigured} onCancel={() => setNewOpen(false)} onCreate={createThread} />}
     </div>
   );
 }
@@ -284,12 +267,9 @@ function Home({ onNew, hasThreads }: { onNew: () => void; hasThreads: boolean })
     <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-10">
       <div className="flex max-w-[520px] flex-col items-center text-center">
         <LogoMark size={56} />
-        <h1 className="mt-6 text-[34px] leading-tight font-semibold text-ink">
-          Your coding agents keep working after you close your laptop.
-        </h1>
+        <h1 className="mt-6 text-[34px] leading-tight font-semibold text-ink">Your coding agents keep working after you close your laptop.</h1>
         <p className="mt-3 text-[15px] text-ink-soft">
-          Start a thread with Claude Code, Codex, OpenCode or any ACP agent. Each thread works on its own branch, with your own
-          model accounts.
+          Start a thread with Claude Code, Codex, OpenCode or any ACP agent. Each thread works on its own branch, with your own model accounts.
         </p>
         <div className="mt-7 flex items-center gap-3">
           <Button variant="primary" onClick={onNew}>

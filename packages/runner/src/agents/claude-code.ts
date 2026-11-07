@@ -161,7 +161,11 @@ function flattenToolContent(content: unknown): unknown {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
-      .map(c => (c && typeof c === "object" && (c as { type?: string }).type === "text" ? String((c as { text?: unknown }).text ?? "") : `[${(c as { type?: string })?.type ?? "data"}]`))
+      .map(c =>
+        c && typeof c === "object" && (c as { type?: string }).type === "text"
+          ? String((c as { text?: unknown }).text ?? "")
+          : `[${(c as { type?: string })?.type ?? "data"}]`,
+      )
       .join("\n");
   }
   return content;

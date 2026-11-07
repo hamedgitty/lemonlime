@@ -130,12 +130,7 @@ async function notify(what: string, fn: () => Promise<void>): Promise<void> {
  * (`resolveWorkspace`). Cloud threads get a sandbox (after the usage policy
  * agrees); local ones are metadata only.
  */
-export async function createThread(
-  ctx: AppContext,
-  userId: string,
-  workspaceId: string,
-  req: CreateThreadRequest,
-): Promise<ThreadResponse> {
+export async function createThread(ctx: AppContext, userId: string, workspaceId: string, req: CreateThreadRequest): Promise<ThreadResponse> {
   const id = newThreadId();
   const base = {
     id,
@@ -152,7 +147,10 @@ export async function createThread(
 
   if (req.mode === "local") {
     // The desktop app runs the runner itself; the control plane only keeps the record.
-    const [row] = await ctx.db.insert(threads).values({ ...base, status: "idle" }).returning();
+    const [row] = await ctx.db
+      .insert(threads)
+      .values({ ...base, status: "idle" })
+      .returning();
     return threadResponse(ctx, row!, userId);
   }
 
@@ -198,7 +196,12 @@ export async function createThread(
 function defaultTitle(req: CreateThreadRequest): string {
   const firstLine = req.prompt?.trim().split("\n")[0]?.trim();
   if (firstLine) return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine;
-  const repo = req.repo.url.replace(/\.git$/, "").split(/[/:]/).filter(Boolean).pop() ?? "repo";
+  const repo =
+    req.repo.url
+      .replace(/\.git$/, "")
+      .split(/[/:]/)
+      .filter(Boolean)
+      .pop() ?? "repo";
   return `${req.agent.kind} on ${repo}`;
 }
 

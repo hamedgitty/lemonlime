@@ -45,11 +45,7 @@ export async function userWorkspaceIds(db: Db, userId: string, email?: string | 
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(eq(workspaceMembers.userId, userId))
-    .orderBy(
-      desc(sql`(${workspaces.personal} AND ${workspaces.createdBy} = ${userId})`),
-      asc(workspaceMembers.createdAt),
-      asc(workspaceMembers.workspaceId),
-    );
+    .orderBy(desc(sql`(${workspaces.personal} AND ${workspaces.createdBy} = ${userId})`), asc(workspaceMembers.createdAt), asc(workspaceMembers.workspaceId));
   if (rows.length) return rows.map(r => r.workspaceId);
   // Normally created at sign-up (see better-auth.ts); this covers anything created before that hook ran.
   return [await createPersonalWorkspace(db, userId, email)];
@@ -85,10 +81,7 @@ export async function findThreadForUser(db: Db, userId: string, threadId: string
   const row = await db
     .select({ thread: threads })
     .from(threads)
-    .innerJoin(
-      workspaceMembers,
-      and(eq(workspaceMembers.workspaceId, threads.workspaceId), eq(workspaceMembers.userId, userId)),
-    )
+    .innerJoin(workspaceMembers, and(eq(workspaceMembers.workspaceId, threads.workspaceId), eq(workspaceMembers.userId, userId)))
     .where(eq(threads.id, threadId))
     .get();
   return row?.thread ?? null;
@@ -104,12 +97,7 @@ export async function getThreadForUser(db: Db, userId: string, threadId: string)
 /** Threads in a workspace, newest activity first. 403 unless the user is a member. */
 export async function listThreadsForUser(db: Db, userId: string, workspaceId: string, limit = 200): Promise<ThreadRow[]> {
   await requireWorkspaceMember(db, userId, workspaceId);
-  return db
-    .select()
-    .from(threads)
-    .where(eq(threads.workspaceId, workspaceId))
-    .orderBy(desc(threads.updatedAt))
-    .limit(limit);
+  return db.select().from(threads).where(eq(threads.workspaceId, workspaceId)).orderBy(desc(threads.updatedAt)).limit(limit);
 }
 
 // ─── Personal access tokens ──────────────────────────────────────────────────
@@ -130,11 +118,7 @@ const tokenInfo = {
 
 /** The user's tokens, newest first. Never their hashes. */
 export function listAccessTokens(db: Db, userId: string): Promise<AccessTokenInfo[]> {
-  return db
-    .select(tokenInfo)
-    .from(accessTokens)
-    .where(eq(accessTokens.userId, userId))
-    .orderBy(desc(accessTokens.createdAt));
+  return db.select(tokenInfo).from(accessTokens).where(eq(accessTokens.userId, userId)).orderBy(desc(accessTokens.createdAt));
 }
 
 export async function createAccessTokenRow(db: Db, userId: string, name: string, tokenHash: string): Promise<AccessTokenInfo> {
@@ -162,7 +146,10 @@ export async function findUserByTokenHash(db: Db, tokenHash: string, nowMs: numb
   const last = row.lastUsedAt ? Date.parse(row.lastUsedAt) : 0;
   if (nowMs - last > 60_000) {
     try {
-      await db.update(accessTokens).set({ lastUsedAt: new Date(nowMs).toISOString() }).where(eq(accessTokens.id, row.id));
+      await db
+        .update(accessTokens)
+        .set({ lastUsedAt: new Date(nowMs).toISOString() })
+        .where(eq(accessTokens.id, row.id));
     } catch (err) {
       console.error("[lemonlime] could not record token use:", err);
     }

@@ -22,7 +22,19 @@ function repo(): string {
 
 function thread(id: string): Thread {
   const now = new Date().toISOString();
-  return { id, title: "", agent: { kind: "claude-code" }, repo: { url: "local", baseBranch: "main" }, branch: branchForThread(id), mode: "local", status: "provisioning", sandboxSize: "small", latestSeq: 0, createdAt: now, updatedAt: now };
+  return {
+    id,
+    title: "",
+    agent: { kind: "claude-code" },
+    repo: { url: "local", baseBranch: "main" },
+    branch: branchForThread(id),
+    mode: "local",
+    status: "provisioning",
+    sandboxSize: "small",
+    latestSeq: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 async function boot(adapter: AgentAdapter, id: string, extra: Partial<ConstructorParameters<typeof ThreadRunner>[0]> = {}) {
@@ -35,7 +47,10 @@ async function boot(adapter: AgentAdapter, id: string, extra: Partial<Constructo
 describe("lineSplitter", () => {
   it("splits across chunks, handles CRLF and a last line without a newline", () => {
     const lines: string[] = [];
-    const s = lineSplitter(l => lines.push(l), () => undefined);
+    const s = lineSplitter(
+      l => lines.push(l),
+      () => undefined,
+    );
     s.write(Buffer.from('{"a":1}\r\n{"b"'));
     s.write(Buffer.from(':2}\n\n  \n{"c":3}'));
     s.end();
@@ -45,7 +60,11 @@ describe("lineSplitter", () => {
   it("drops a line that is too long without buffering it, and keeps going", () => {
     const lines: string[] = [];
     const dropped: number[] = [];
-    const s = lineSplitter(l => lines.push(l), b => dropped.push(b), 10);
+    const s = lineSplitter(
+      l => lines.push(l),
+      b => dropped.push(b),
+      10,
+    );
     s.write(Buffer.from("short\n" + "x".repeat(8)));
     s.write(Buffer.from("y".repeat(50)));
     s.write(Buffer.from("z\nafter\n"));

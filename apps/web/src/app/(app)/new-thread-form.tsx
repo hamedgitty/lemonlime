@@ -90,16 +90,22 @@ export function NewThreadForm() {
   return (
     <form onSubmit={submit} className="mt-5 space-y-4">
       <div>
-        <label htmlFor="agent" className="label">Agent</label>
+        <label htmlFor="agent" className="label">
+          Agent
+        </label>
         <select id="agent" className="field" value={agent} onChange={e => setAgent(e.target.value as AgentKind)}>
           {AGENTS.map(a => (
-            <option key={a.value} value={a.value}>{a.label}</option>
+            <option key={a.value} value={a.value}>
+              {a.label}
+            </option>
           ))}
         </select>
       </div>
       {agent === "acp" && (
         <div>
-          <label htmlFor="acp-command" className="label">Agent command</label>
+          <label htmlFor="acp-command" className="label">
+            Agent command
+          </label>
           <input
             id="acp-command"
             required
@@ -117,7 +123,9 @@ export function NewThreadForm() {
         <input id="model" className="field" placeholder="Agent default" value={model} onChange={e => setModel(e.target.value)} />
       </div>
       <div>
-        <label htmlFor="repo" className="label">Repository</label>
+        <label htmlFor="repo" className="label">
+          Repository
+        </label>
         <input
           id="repo"
           required
@@ -128,7 +136,9 @@ export function NewThreadForm() {
         />
       </div>
       <div>
-        <label htmlFor="base" className="label">Base branch</label>
+        <label htmlFor="base" className="label">
+          Base branch
+        </label>
         <input id="base" required className="field font-mono" value={baseBranch} onChange={e => setBaseBranch(e.target.value)} />
       </div>
       <div>
@@ -158,7 +168,9 @@ export function NewThreadForm() {
         </div>
       )}
       <div>
-        <label htmlFor="prompt" className="label">First message</label>
+        <label htmlFor="prompt" className="label">
+          First message
+        </label>
         <textarea
           id="prompt"
           rows={4}
@@ -169,7 +181,9 @@ export function NewThreadForm() {
         />
       </div>
       {error && (
-        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
+        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {error}
+        </p>
       )}
       {denied && <DeniedNotice denied={denied} onDismiss={() => setDenied(null)} />}
       <button type="submit" className="btn-lemon w-full" disabled={busy}>

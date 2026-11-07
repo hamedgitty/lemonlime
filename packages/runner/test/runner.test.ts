@@ -167,7 +167,11 @@ describe("runner end to end", () => {
     expect(runner.sendMessage("second", "b").result).toBe("queued");
     expect(runner.sendMessage("third", "c").result).toBe("queued");
     expect(runner.queued.map(q => q.clientMsgId)).toEqual(["b", "c"]);
-    const lastQueue = () => runner.store.since(0).filter(e => e.type === "queue_update").at(-1) as { queue: { clientMsgId: string }[] };
+    const lastQueue = () =>
+      runner.store
+        .since(0)
+        .filter(e => e.type === "queue_update")
+        .at(-1) as { queue: { clientMsgId: string }[] };
     expect(lastQueue().queue.map(q => q.clientMsgId)).toEqual(["b", "c"]);
 
     // Interrupting stops only the current turn; the queue carries on.
@@ -180,7 +184,10 @@ describe("runner end to end", () => {
     releases[2]!();
     await runner.settled();
 
-    const users = runner.store.since(0).filter(e => e.type === "user_message").map(e => (e as { clientMsgId?: string }).clientMsgId);
+    const users = runner.store
+      .since(0)
+      .filter(e => e.type === "user_message")
+      .map(e => (e as { clientMsgId?: string }).clientMsgId);
     expect(users).toEqual(["a", "b", "c"]);
     expect(lastQueue().queue).toEqual([]);
     expect(runner.store.since(0).filter(e => e.type === "status_change" && e.to === "idle" && e.reason === "interrupted")).toHaveLength(1);
@@ -212,7 +219,10 @@ describe("runner end to end", () => {
     await first.init();
     first.store.append({ type: "user_message", text: "interrupted work", clientMsgId: "lost" });
     await first.close();
-    writeFileSync(join(dataDir, "state.json"), JSON.stringify({ agentState: {}, status: "running", queue: [{ clientMsgId: "next", text: "queued work", queuedAt: new Date().toISOString() }] }));
+    writeFileSync(
+      join(dataDir, "state.json"),
+      JSON.stringify({ agentState: {}, status: "running", queue: [{ clientMsgId: "next", text: "queued work", queuedAt: new Date().toISOString() }] }),
+    );
     writeFileSync(join(dir, "half-done.txt"), "partial\n");
 
     const prompts: string[] = [];
@@ -245,7 +255,10 @@ describe("runner end to end", () => {
     runner.sendMessage("hello there");
     await runner.settled();
     const events = runner.store.since(0);
-    const text = events.filter(e => e.type === "agent_message").map(e => (e as { text: string }).text).join("");
+    const text = events
+      .filter(e => e.type === "agent_message")
+      .map(e => (e as { text: string }).text)
+      .join("");
     expect(text).toBe("You said: hello there");
     expect(events.find(e => e.type === "tool_call")).toMatchObject({ name: "Run tests", input: { command: "npm test" } });
     expect(events.find(e => e.type === "approval_request")).toMatchObject({ tool: "Run tests", summary: "npm test" });
@@ -294,4 +307,3 @@ describe("local threads in their own worktree", () => {
     expect(existsSync(join(home, "threads", "wt-thread-1", "events.jsonl"))).toBe(true);
   });
 });
-

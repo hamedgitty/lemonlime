@@ -14,9 +14,7 @@ function loadRun(): Promise<Run> {
       new Error("The docker sandbox provider needs Node.js next to a Docker daemon and cannot run on Cloudflare Workers. Use daytona or e2b there."),
     );
   }
-  runner ??= Promise.all([import("node:child_process"), import("node:util")]).then(
-    ([cp, util]) => util.promisify(cp.execFile) as unknown as Run,
-  );
+  runner ??= Promise.all([import("node:child_process"), import("node:util")]).then(([cp, util]) => util.promisify(cp.execFile) as unknown as Run);
   return runner;
 }
 
@@ -54,16 +52,24 @@ export class DockerProvider implements SandboxProvider {
     const res = SANDBOX_RESOURCES[o.size];
     const labels = { "lemonlime.thread": o.threadId, ...o.labels };
     const args = [
-      "run", "-d",
-      "--name", `lemonlime-${o.threadId}`,
-      "--cpus", String(res.vcpu),
-      "--memory", `${res.memoryGiB}g`,
-      "--restart", "no",
-      "-p", `${this.bindHost}::${o.runner.port}`,
+      "run",
+      "-d",
+      "--name",
+      `lemonlime-${o.threadId}`,
+      "--cpus",
+      String(res.vcpu),
+      "--memory",
+      `${res.memoryGiB}g`,
+      "--restart",
+      "no",
+      "-p",
+      `${this.bindHost}::${o.runner.port}`,
       ...Object.entries(labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
       ...Object.entries(o.runner.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
       this.opts.image,
-      "sh", "-c", o.runner.command,
+      "sh",
+      "-c",
+      o.runner.command,
     ];
     const id = await this.exec(args);
     return this.info(id, o.runner.port);

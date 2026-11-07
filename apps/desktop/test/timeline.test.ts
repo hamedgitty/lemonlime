@@ -82,7 +82,13 @@ describe("buildTimeline", () => {
     const items = buildTimeline(
       [
         ev({ type: "user_message", text: "working on it", clientMsgId: "m1" }),
-        ev({ type: "queue_update", queue: [{ clientMsgId: "q1", text: "mine, queued", queuedAt: at }, { clientMsgId: "q2", text: "from my phone", queuedAt: at }] }),
+        ev({
+          type: "queue_update",
+          queue: [
+            { clientMsgId: "q1", text: "mine, queued", queuedAt: at },
+            { clientMsgId: "q2", text: "from my phone", queuedAt: at },
+          ],
+        }),
       ],
       pending,
     );
@@ -101,7 +107,12 @@ describe("buildTimeline", () => {
       ],
       pending,
     );
-    expect(later.filter(i => i.kind === "user").map(i => (i.kind === "user" ? i.text : ""))).toEqual(["working on it", "mine, queued", "from my phone", "mine, still sending"]);
+    expect(later.filter(i => i.kind === "user").map(i => (i.kind === "user" ? i.text : ""))).toEqual([
+      "working on it",
+      "mine, queued",
+      "from my phone",
+      "mine, still sending",
+    ]);
   });
 
   it("keeps a streaming message whole when the queue changes mid-stream", () => {
@@ -155,11 +166,6 @@ describe("contiguousSeq / latestStatus", () => {
 
   it("reads the latest status change", () => {
     seq = 0;
-    expect(
-      latestStatus([
-        ev({ type: "status_change", from: "idle", to: "running" }),
-        ev({ type: "status_change", from: "running", to: "idle" }),
-      ]),
-    ).toBe("idle");
+    expect(latestStatus([ev({ type: "status_change", from: "idle", to: "running" }), ev({ type: "status_change", from: "running", to: "idle" })])).toBe("idle");
   });
 });

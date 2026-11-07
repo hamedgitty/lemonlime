@@ -160,7 +160,16 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
         break;
       case "approval_request":
         approvalIndex.set(ev.requestId, items.length);
-        items.push({ kind: "approval", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, requestId: ev.requestId, tool: ev.tool, summary: ev.summary, state: "waiting" });
+        items.push({
+          kind: "approval",
+          key: `e${ev.seq}`,
+          seq: ev.seq,
+          at: ev.at,
+          requestId: ev.requestId,
+          tool: ev.tool,
+          summary: ev.summary,
+          state: "waiting",
+        });
         break;
       case "approval_result": {
         const i = approvalIndex.get(ev.requestId);

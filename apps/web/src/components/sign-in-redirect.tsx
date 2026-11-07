@@ -16,7 +16,10 @@ export function SignInRedirect() {
   return (
     <main className="flex min-h-dvh items-center justify-center text-sm text-muted">
       <p>
-        Taking you to sign in… <a href="/login" className="underline">Continue</a>
+        Taking you to sign in…{" "}
+        <a href="/login" className="underline">
+          Continue
+        </a>
       </p>
     </main>
   );

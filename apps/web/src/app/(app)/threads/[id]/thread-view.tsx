@@ -144,9 +144,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   }
 
   async function closeThread() {
-    const message = isCloud
-      ? "Close this thread and delete its sandbox? Work that was not pushed from the sandbox is lost."
-      : "Close this thread?";
+    const message = isCloud ? "Close this thread and delete its sandbox? Work that was not pushed from the sandbox is lost." : "Close this thread?";
     if (!window.confirm(message)) return;
     setBusy("close");
     const res = await apiFetch<ThreadResponse>(`/api/threads/${id}`, { method: "DELETE" });
@@ -199,13 +197,18 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   return (
     <main className="mx-auto flex min-h-[calc(100dvh-3.5rem)] max-w-3xl flex-col px-5">
       <header className="border-b border-line py-6">
-        <Link href="/" className="text-sm text-muted hover:text-ink">Threads</Link>
+        <Link href="/" className="text-sm text-muted hover:text-ink">
+          Threads
+        </Link>
         <div className="mt-2 flex flex-wrap items-start gap-3">
           <h1 className="min-w-0 flex-1 text-2xl font-semibold leading-tight">{thread.title || "Untitled thread"}</h1>
           <StatusPill status={thread.status} />
         </div>
         <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
-          <span>{AGENT_LABELS[thread.agent.kind] ?? thread.agent.kind}{thread.agent.model ? ` · ${thread.agent.model}` : ""}</span>
+          <span>
+            {AGENT_LABELS[thread.agent.kind] ?? thread.agent.kind}
+            {thread.agent.model ? ` · ${thread.agent.model}` : ""}
+          </span>
           <span aria-hidden>·</span>
           <span>{repoName(thread.repo.url)}</span>
           <span aria-hidden>·</span>
@@ -252,8 +255,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
         <section className="card my-8 p-6">
           <h2 className="text-lg font-semibold">This thread runs on your computer</h2>
           <p className="mt-1 text-sm text-muted">
-            Open it in the LemonLime desktop app to watch and talk to the agent. The desktop app runs the runner locally
-            and keeps the history on your machine.
+            Open it in the LemonLime desktop app to watch and talk to the agent. The desktop app runs the runner locally and keeps the history on your machine.
           </p>
         </section>
       ) : (
@@ -269,7 +271,9 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
 
           {!closed && (
             <form onSubmit={send} className="sticky bottom-0 -mx-5 border-t border-line bg-cream/95 px-5 pb-5 pt-3 backdrop-blur">
-              <label htmlFor="composer" className="sr-only">Message the agent</label>
+              <label htmlFor="composer" className="sr-only">
+                Message the agent
+              </label>
               <div className="flex items-end gap-2 rounded-xl border border-control bg-paper p-2 transition-[border-color,box-shadow] duration-150 focus-within:border-leaf focus-within:shadow-[0_0_0_1px_var(--color-leaf)]">
                 <textarea
                   id="composer"

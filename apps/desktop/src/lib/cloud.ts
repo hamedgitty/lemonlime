@@ -80,6 +80,19 @@ export class CloudApi {
     return r.success ? r.data : null;
   }
 
+  /** The deployment's usage banner (e.g. running low on cloud hours), or null. */
+  async usageNotice(): Promise<{ level: "info" | "warning" | "blocked"; message: string; actionUrl?: string; actionLabel?: string } | null> {
+    const body = (await this.request("GET", "/api/usage")) as { notice?: unknown } | null;
+    const n = body?.notice as { level?: string; message?: string; actionUrl?: string; actionLabel?: string } | null | undefined;
+    if (!n || typeof n.message !== "string" || !["info", "warning", "blocked"].includes(n.level ?? "")) return null;
+    return {
+      level: n.level as "info" | "warning" | "blocked",
+      message: n.message,
+      ...(n.actionUrl ? { actionUrl: n.actionUrl } : {}),
+      ...(n.actionLabel ? { actionLabel: n.actionLabel } : {}),
+    };
+  }
+
   /** Stored history after `after`; works while the sandbox is paused, without waking it. */
   async history(id: string, after: number): Promise<ThreadHistoryResponse> {
     const body = await this.request("GET", `/api/threads/${encodeURIComponent(id)}/events?after=${after}`);

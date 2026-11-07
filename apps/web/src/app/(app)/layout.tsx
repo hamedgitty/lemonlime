@@ -6,6 +6,8 @@ import { resolveWorkspace } from "@/lib/access.ts";
 import { getUser } from "@/lib/auth.ts";
 import { SignInRedirect } from "@/components/sign-in-redirect.tsx";
 import { getAppContext } from "@/lib/env.ts";
+import { UsageBanner } from "@/components/usage-banner.tsx";
+import { usageNotice } from "@/lib/usage.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const user = await getUser(ctx);
   if (!user) return <SignInRedirect />;
   const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const notice = await usageNotice(ctx, user.userId, workspaceId);
   const { billingUI } = ctx.plugin;
 
   return (
@@ -44,6 +47,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
       </header>
+      <UsageBanner notice={notice} />
       <div className="flex-1">{children}</div>
     </div>
   );

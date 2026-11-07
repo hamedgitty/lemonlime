@@ -39,6 +39,17 @@ export type PolicyDecision =
     };
 
 /**
+ * Something the deployment wants people to see about their usage, shown as a banner in
+ * the dashboard and the desktop app. `blocked` means cloud threads can't start right now.
+ */
+export interface UsageNotice {
+  level: "info" | "warning" | "blocked";
+  message: string;
+  actionUrl?: string;
+  actionLabel?: string;
+}
+
+/**
  * Decides whether sandboxes may run, and is told when they start and stop.
  *
  * The control plane calls this for every cloud thread. It must never be bypassed,
@@ -53,6 +64,8 @@ export interface UsagePolicy {
   onSandboxStarted(sandbox: RunningSandbox): Promise<void>;
   /** After a sandbox pauses, stops or dies, with the runtime of that stretch. */
   onSandboxStopped(run: SandboxRun): Promise<void>;
+  /** Optional banner for a workspace (e.g. running low). Null or absent shows nothing. */
+  notice?(subject: PolicySubject): Promise<UsageNotice | null>;
 }
 
 const ALLOW: PolicyDecision = { allow: true };

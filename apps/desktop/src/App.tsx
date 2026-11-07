@@ -5,7 +5,7 @@ import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { SettingsView } from "./components/SettingsView.tsx";
 import { DeniedError, NewThreadDialog, type NewThreadInput } from "./components/NewThreadDialog.tsx";
-import { Button, LogoMark } from "./components/ui.tsx";
+import { Button, LogoMark, cx, openExternal } from "./components/ui.tsx";
 import { forgetEvents, loadLocalThreads, loadSettings, saveLocalThreads, saveSettings, type LocalThreadMeta, type Settings } from "./lib/storage.ts";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { inDesktopShell, listLocalRunners, removeLocalThread, stopLocalRunner } from "./lib/native.ts";
@@ -74,6 +74,19 @@ export function App() {
     const t = setInterval(refreshCloud, CLOUD_REFRESH_MS);
     return () => clearInterval(t);
   }, [cloudApi, refreshCloud]);
+
+  // The deployment's usage banner (e.g. running low on cloud hours), refreshed with the thread list.
+  const [usage, setUsage] = useState<Awaited<ReturnType<CloudApi["usageNotice"]>>>(null);
+  useEffect(() => {
+    if (!cloudApi) {
+      setUsage(null);
+      return;
+    }
+    const load = () => void cloudApi.usageNotice().then(setUsage, () => setUsage(null));
+    load();
+    const t = setInterval(load, 5 * 60_000);
+    return () => clearInterval(t);
+  }, [cloudApi]);
 
   // ── Local thread metadata updates from the session ───────
   const patchLocal = useCallback((id: string, patch: (m: LocalThreadMeta) => LocalThreadMeta | null) => {
@@ -234,26 +247,50 @@ export function App() {
         onRefreshCloud={refreshCloud}
       />
 
-      {view === "settings" ? (
-        <SettingsView settings={settings} onSave={saveAll} />
-      ) : view === "thread" && selectedEntry ? (
-        <ThreadView
-          key={`${selectedEntry.mode}:${selection?.id}`}
-          entry={selectedEntry}
-          runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
-          runnerPath={settings.runnerPath}
-          cloudApi={cloudApi}
-          onLocalProgress={onLocalProgress}
-          onLocalStatus={onLocalStatus}
-          onLocalPromptSent={onLocalPromptSent}
-          onStopLocal={onStopLocal}
-          onRemoveLocal={onRemoveLocal}
-          onCloudRefresh={refreshCloud}
-          onRunnersChanged={refreshRunners}
-        />
-      ) : (
-        <Home onNew={() => setNewOpen(true)} hasThreads={localThreads.length + cloudThreads.length > 0} />
-      )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {usage && (
+          <div
+            role={usage.level === "info" ? "status" : "alert"}
+            className={cx(
+              "flex items-center gap-3 border-b px-5 py-2 text-[13.5px]",
+              usage.level === "blocked"
+                ? "border-danger/25 bg-danger-soft"
+                : usage.level === "warning"
+                  ? "border-[#f0d95c] bg-lemon-soft"
+                  : "border-line bg-cream-deep/60",
+            )}
+          >
+            <p className="min-w-0 flex-1 text-ink">{usage.message}</p>
+            {usage.actionUrl && (
+              <Button size="sm" variant="primary" onClick={() => void openExternal(usage.actionUrl!)}>
+                {usage.actionLabel ?? "Continue"}
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1">
+          {view === "settings" ? (
+            <SettingsView settings={settings} onSave={saveAll} />
+          ) : view === "thread" && selectedEntry ? (
+            <ThreadView
+              key={`${selectedEntry.mode}:${selection?.id}`}
+              entry={selectedEntry}
+              runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
+              runnerPath={settings.runnerPath}
+              cloudApi={cloudApi}
+              onLocalProgress={onLocalProgress}
+              onLocalStatus={onLocalStatus}
+              onLocalPromptSent={onLocalPromptSent}
+              onStopLocal={onStopLocal}
+              onRemoveLocal={onRemoveLocal}
+              onCloudRefresh={refreshCloud}
+              onRunnersChanged={refreshRunners}
+            />
+          ) : (
+            <Home onNew={() => setNewOpen(true)} hasThreads={localThreads.length + cloudThreads.length > 0} />
+          )}
+        </div>
+      </div>
 
       {newOpen && <NewThreadDialog cloudAvailable={cloudConfigured} onCancel={() => setNewOpen(false)} onCreate={createThread} />}
     </div>

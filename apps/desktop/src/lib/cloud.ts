@@ -102,7 +102,7 @@ export class CloudApi {
       title: s.title,
       detail: s.detail,
       ...(typeof s.progress === "number" ? { progress: Math.min(1, Math.max(0, s.progress)) } : {}),
-      ...(typeof s.actionUrl === "string" && /^https:\/\//.test(s.actionUrl) ? { actionUrl: s.actionUrl } : {}),
+      ...(typeof s.actionUrl === "string" && s.actionUrl.startsWith("https://") ? { actionUrl: s.actionUrl } : {}),
       ...(typeof s.actionLabel === "string" ? { actionLabel: s.actionLabel } : {}),
     };
   }

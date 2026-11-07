@@ -1,5 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bot, Cloud, Ellipsis, ExternalLink, FileDiff, GitBranch, Laptop, PanelRight, Pause, Play, Power, RotateCw, Trash2, X } from "lucide-react";
+import {
+  Bot,
+  Cloud,
+  Ellipsis,
+  ExternalLink,
+  FileDiff,
+  GitBranch,
+  Laptop,
+  PanelRight,
+  Pause,
+  Play,
+  Power,
+  RotateCw,
+  SquareTerminal,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
@@ -10,6 +26,7 @@ import { CloudError, type CloudApi } from "../lib/cloud.ts";
 import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Composer } from "./Composer.tsx";
+import { TerminalPanel } from "./TerminalPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { Menu, MenuItem, Tip } from "./primitives.tsx";
 import { Button, StatusDot, cx, openExternal } from "./ui.tsx";
@@ -147,6 +164,7 @@ function ThreadSessionView({
   }, []);
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
+  const [panelTab, setPanelTab] = useState<"changes" | "terminal">("changes");
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -215,10 +233,10 @@ function ThreadSessionView({
               </MenuItem>
             </Menu>
           )}
-          <Tip label={panelOpen ? "Hide changes" : "Show changes"} side="bottom">
+          <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
             <button
               type="button"
-              aria-label={panelOpen ? "Hide changes" : "Show changes"}
+              aria-label={panelOpen ? "Hide panel" : "Show changes and terminal"}
               aria-pressed={panelOpen}
               onClick={() => setPanelOpen(o => !o)}
               className={cx(
@@ -296,28 +314,46 @@ function ThreadSessionView({
           </div>
         </div>
       </section>
-      {panelOpen && <ChangesPanel events={session.events} onClose={() => setPanelOpen(false)} />}
+      {panelOpen && <SidePanel tab={panelTab} onTab={setPanelTab} session={session} onClose={() => setPanelOpen(false)} />}
     </div>
   );
 }
 
-/** The right panel: every file the agent changed in this thread, latest diff first. */
-function ChangesPanel({ events, onClose }: { events: ReturnType<typeof useThreadSession>["events"]; onClose: () => void }) {
-  const files = useMemo(() => {
-    const latest = new Map<string, Extract<(typeof events)[number], { type: "file_diff" }>>();
-    for (const e of events) if (e.type === "file_diff") latest.set(e.path, e);
-    return [...latest.values()].reverse();
-  }, [events]);
-  const [open, setOpen] = useState<string | null>(null);
-  const shown = files.find(f => f.path === open);
+/** The right panel: the files the agent changed, and the thread's terminal. */
+function SidePanel({
+  tab,
+  onTab,
+  session,
+  onClose,
+}: {
+  tab: "changes" | "terminal";
+  onTab: (t: "changes" | "terminal") => void;
+  session: ReturnType<typeof useThreadSession>;
+  onClose: () => void;
+}) {
+  const changed = useMemo(() => new Set(session.events.filter(e => e.type === "file_diff").map(e => (e as { path: string }).path)).size, [session.events]);
+  // Mounted once opened, so switching tabs doesn't drop the terminal's screen.
+  const [terminalSeen, setTerminalSeen] = useState(tab === "terminal");
+  useEffect(() => {
+    if (tab === "terminal") setTerminalSeen(true);
+  }, [tab]);
+  const tabClass = (on: boolean) =>
+    cx(
+      "inline-flex h-[30px] items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium",
+      on ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60 hover:text-ink",
+    );
   return (
-    <aside aria-label="Changes" className="flex w-[380px] shrink-0 flex-col border-l border-line bg-cream">
-      <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3">
-        <span className="inline-flex h-[30px] items-center gap-2 rounded-lg bg-cream-deep px-2.5 text-[14px] font-medium">
+    <aside aria-label="Thread panel" className="flex w-[440px] shrink-0 flex-col border-l border-line bg-cream">
+      <div role="tablist" aria-label="Panel" className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3">
+        <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => onTab("changes")} className={tabClass(tab === "changes")}>
           <FileDiff aria-hidden="true" className="size-3.5" />
           Changes
-          {files.length > 0 && <span className="text-ink-faint tabular-nums">{files.length}</span>}
-        </span>
+          {changed > 0 && <span className="text-ink-faint tabular-nums">{changed}</span>}
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "terminal"} onClick={() => onTab("terminal")} className={tabClass(tab === "terminal")}>
+          <SquareTerminal aria-hidden="true" className="size-3.5" />
+          Terminal
+        </button>
         <span className="flex-1" />
         <button
           type="button"
@@ -328,6 +364,27 @@ function ChangesPanel({ events, onClose }: { events: ReturnType<typeof useThread
           <X aria-hidden="true" className="size-4" />
         </button>
       </div>
+      {tab === "changes" && <ChangesList events={session.events} />}
+      {terminalSeen && (
+        <div className={cx("min-h-0 flex-1 flex-col", tab === "terminal" ? "flex" : "hidden")}>
+          <TerminalPanel connection={session.connection} />
+        </div>
+      )}
+    </aside>
+  );
+}
+
+/** Every file the agent changed in this thread, latest diff first. */
+function ChangesList({ events }: { events: ReturnType<typeof useThreadSession>["events"] }) {
+  const files = useMemo(() => {
+    const latest = new Map<string, Extract<(typeof events)[number], { type: "file_diff" }>>();
+    for (const e of events) if (e.type === "file_diff") latest.set(e.path, e);
+    return [...latest.values()].reverse();
+  }, [events]);
+  const [open, setOpen] = useState<string | null>(null);
+  const shown = files.find(f => f.path === open);
+  return (
+    <div role="tabpanel" aria-label="Changes" className="flex min-h-0 flex-1 flex-col">
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-2">
         {files.length === 0 ? (
           <p className="rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
@@ -365,7 +422,7 @@ function ChangesPanel({ events, onClose }: { events: ReturnType<typeof useThread
           </ul>
         )}
       </div>
-    </aside>
+    </div>
   );
 }
 

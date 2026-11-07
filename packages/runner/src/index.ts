@@ -16,3 +16,4 @@ export { runApprovalMcp } from "./approval-mcp.ts";
 export { BUNDLED_SKILLS_DIR, installSkills, listSkills, skillsDirFor } from "./skills.ts";
 export * from "./agents/index.ts";
 export { MemoryGuard, descendants, listProcesses, type Proc } from "./memory-guard.ts";
+export { TerminalSession, loadPty, shellEnv, type Pty, type SpawnPty } from "./terminal.ts";

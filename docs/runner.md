@@ -74,6 +74,21 @@ Environment:
   restart it commits whatever the agent left behind, records an error with code
   `turn_outcome_unknown`, then carries on with the queue.
 
+## Terminal
+
+Each thread has one shell, at `/terminal` on the runner's port (same client token as
+`/ws`; messages in `packages/protocol/src/terminal.ts`). It runs in the thread's working
+folder on the machine or sandbox where the agent runs, starts on first use and keeps
+running when nobody is connected. Every app that opens it sees the same shell. The runner
+keeps the last 1 MB of output, so a client that reconnects gets only what it missed (or
+the whole kept screen if that's gone). Input is capped at 64 KB per message, output is
+sent in 64 KB pieces, and a client more than 4 MB behind for 10 seconds is dropped and
+reconnects. The shell doesn't get the runner's thread secret or approval token.
+
+The PTY comes from `@lydell/node-pty` (prebuilt, no compiler needed). The desktop app's
+single-file runner can't hold a native module, so `build:sea` copies it next to the
+executable and the app passes `LEMONLIME_NODE_PTY_DIR`.
+
 ## Memory on your computer
 
 Local threads share your computer, so the runner watches the memory used by everything

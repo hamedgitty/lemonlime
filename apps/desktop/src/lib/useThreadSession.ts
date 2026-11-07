@@ -32,7 +32,7 @@ export interface SessionCallbacks {
   onPromptSent?: (threadId: string) => void;
 }
 
-interface Connection {
+export interface Connection {
   url: string;
   token: () => Promise<string>;
 }
@@ -50,6 +50,8 @@ export interface ThreadSession {
   interrupt: () => void;
   /** Answer the agent's request for permission. */
   approve: (requestId: string, decision: "allow" | "deny") => void;
+  /** Where the runner is, while connected (the terminal opens its own socket there). */
+  connection: Connection | null;
   /** Change a message waiting in the queue. */
   editQueued: EditQueuedFn;
   /** Tear down and connect again (starting the local runner if needed). */
@@ -68,6 +70,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<ThreadStatus | null>(null);
   const [generation, setGeneration] = useState(0);
+  const [connection, setConnection] = useState<Connection | null>(null);
 
   const eventsRef = useRef(events);
   eventsRef.current = events;
@@ -169,6 +172,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         setEvents(cached.filter(e => e.seq <= resumeFrom));
       }
 
+      setConnection(conn);
       client = new RunnerClient({
         url: conn.url,
         token: conn.token,
@@ -199,6 +203,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
               .then(alive => {
                 if (cancelled || alive) return;
                 client?.close();
+                setConnection(null);
                 setState("offline");
                 setError("The runner for this thread has stopped.");
               })
@@ -241,6 +246,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
 
     return () => {
       cancelled = true;
+      setConnection(null);
       removeWakeListeners();
       if (flushHandle) clearTimeout(flushHandle);
       if (buffer.length > 0) {
@@ -285,11 +291,12 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     disconnectedRef.current = true;
     clientRef.current?.close();
     clientRef.current = null;
+    setConnection(null);
     setState("offline");
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, send, interrupt, approve, editQueued, restart, disconnect };
+  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, restart, disconnect };
 }
 
 function newClientMsgId(): string {

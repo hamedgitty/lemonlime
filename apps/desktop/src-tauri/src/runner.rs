@@ -234,6 +234,12 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         if let Some(b) = non_empty(req.base_branch) {
             cmd.arg("--base").arg(b);
         }
+        // The terminal's native PTY module ships next to the bundled runner, which can't carry it.
+        if let Ok(pty) = app.path().resolve("node-pty", tauri::path::BaseDirectory::Resource) {
+            if pty.join("node_modules").is_dir() {
+                cmd.env("LEMONLIME_NODE_PTY_DIR", pty);
+            }
+        }
         // Skills ship as an app resource; the bundled runner can't find them on its own.
         if let Ok(skills) = app.path().resolve("skills", tauri::path::BaseDirectory::Resource) {
             if skills.is_dir() {

@@ -8,9 +8,10 @@
 // target defaults to this machine's (from `rustc -vV`). Build on each platform you ship;
 // a Node SEA can't be cross-built.
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -40,7 +41,34 @@ await build({
   banner: { js: 'const __lemonlimeUrl = require("node:url").pathToFileURL(__filename).href;' },
   legalComments: "none",
   logLevel: "warning",
+  // A native module can't live inside the executable; it's shipped next to it (below).
+  external: ["@lydell/node-pty"],
 });
+
+// The terminal's PTY: node-pty and its prebuilt binary for this target, in a folder the
+// app ships as a resource and points the runner at (LEMONLIME_NODE_PTY_DIR).
+const PTY_PLATFORMS = {
+  "aarch64-apple-darwin": "darwin-arm64",
+  "x86_64-apple-darwin": "darwin-x64",
+  "x86_64-unknown-linux-gnu": "linux-x64",
+  "aarch64-unknown-linux-gnu": "linux-arm64",
+  "x86_64-pc-windows-msvc": "win32-x64",
+  "aarch64-pc-windows-msvc": "win32-arm64",
+};
+const ptyOut = join(outDir, "node-pty");
+rmSync(ptyOut, { recursive: true, force: true });
+mkdirSync(join(ptyOut, "node_modules", "@lydell"), { recursive: true });
+writeFileSync(join(ptyOut, "README.md"), "node-pty for the thread terminal, copied here by packages/runner/scripts/build-sea.mjs.\n");
+const requireHere = createRequire(join(pkg, "package.json"));
+const ptyName = `node-pty-${PTY_PLATFORMS[target] ?? "unknown"}`;
+try {
+  const ptyDir = dirname(requireHere.resolve("@lydell/node-pty/package.json"));
+  const platformDir = dirname(createRequire(join(ptyDir, "package.json")).resolve(`@lydell/${ptyName}/package.json`));
+  cpSync(ptyDir, join(ptyOut, "node_modules", "@lydell", "node-pty"), { recursive: true, dereference: true });
+  cpSync(platformDir, join(ptyOut, "node_modules", "@lydell", ptyName), { recursive: true, dereference: true });
+} catch (err) {
+  console.warn(`No prebuilt PTY for ${target} (${err instanceof Error ? err.message : err}); the terminal won't be available in this build.`);
+}
 
 // 2. The SEA blob, then 3. a copy of Node with the blob injected.
 writeFileSync(

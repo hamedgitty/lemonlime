@@ -209,3 +209,4 @@ function newId(): string {
   if (c?.randomUUID) return c.randomUUID();
   return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+export { TerminalClient, terminalUrl, type TerminalClientOptions, type TerminalState } from "./terminal.ts";

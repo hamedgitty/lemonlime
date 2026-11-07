@@ -12,6 +12,7 @@ import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
 import type { AgentCredential } from "./login.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { formatGb, MemoryGuard } from "./memory-guard.ts";
+import { loadPty } from "./terminal.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { RUNNER_VERSION } from "./version.ts";
@@ -210,7 +211,13 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   // Sign-ins the user made in earlier sandboxes arrive as files to put back in place.
   for (const credential of writeAgentFiles()) runner.useCredential(credential);
   await runner.init();
-  const server = await startServer(runner, { host: values.host!, port, threadSecret: secret, version: RUNNER_VERSION });
+  const server = await startServer(runner, {
+    host: values.host!,
+    port,
+    threadSecret: secret,
+    version: RUNNER_VERSION,
+    terminal: { cwd: workdir, spawn: await loadPty() },
+  });
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
   // Machine-readable line for parent processes (e.g. the desktop app) that asked for port 0.
   process.stdout.write(JSON.stringify({ event: "ready", port: server.port }) + "\n");

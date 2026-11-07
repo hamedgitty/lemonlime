@@ -47,7 +47,8 @@
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/lemonlime-runner"],
     "resources": {
-      "../../../packages/runner/skills/": "skills/"
+      "../../../packages/runner/skills/": "skills/",
+      "binaries/node-pty/": "node-pty/"
     }
   },
   "plugins": {

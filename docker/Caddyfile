@@ -3,7 +3,7 @@
 #
 # Public site: the dashboard, plus each cloud thread's runner under
 # /sandbox/<container>/, so apps reach runners over the same HTTPS address. Only the
-# runner's WebSocket and health check are passed through, from containers named
+# runner's WebSockets (thread and terminal) and health check are passed through, from containers named
 # lemonlime-<thread id> on the runner port. Code in a sandbox controls what its port
 # serves, so nothing else from it may reach a browser on the dashboard's origin.
 #
@@ -15,7 +15,7 @@
 {$LEMONLIME_SITE_ADDRESS::80} {
 	encode zstd gzip
 
-	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/ws|/healthz)$
+	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/ws|/terminal|/healthz)$
 	handle @runner {
 		rewrite * {re.runner.2}
 		reverse_proxy {re.runner.1}:7420 {

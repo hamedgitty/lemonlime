@@ -220,7 +220,7 @@ docker compose up -d
 ```
 
 How runners are reached: each sandbox joins the `lemonlime-sandboxes` network and opens
-no port on the host. Caddy forwards `/sandbox/lemonlime-<thread id>/ws` (and `/healthz`)
+no port on the host. Caddy forwards `/sandbox/lemonlime-<thread id>/ws` (and `/terminal`, `/healthz`)
 to that container's runner, so apps talk to runners over the same HTTPS address as the
 dashboard. Nothing else a sandbox serves is passed through, since code in a sandbox
 controls its port and a page from it would run on the dashboard's origin. The dashboard

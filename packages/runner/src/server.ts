@@ -1,7 +1,8 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
-import { parseClientMessage, verifyToken, type ServerMessage } from "@lemonlime/protocol";
+import { parseClientMessage, parseTerminalClientMessage, verifyToken, type ServerMessage, type TerminalServerMessage } from "@lemonlime/protocol";
+import { TerminalSession, type SpawnPty } from "./terminal.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 
 export interface ServerOptions {
@@ -10,6 +11,8 @@ export interface ServerOptions {
   /** The thread's secret; client tokens must be signed with it. */
   threadSecret: string;
   version: string;
+  /** The thread's terminal: a shell in `cwd`. Without `spawn` (no PTY support), it says so. */
+  terminal?: { cwd: string; spawn: SpawnPty | null };
 }
 
 export interface RunningServer {
@@ -19,6 +22,12 @@ export interface RunningServer {
 
 const HELLO_TIMEOUT_MS = 10_000;
 const MAX_FRAME_BYTES = 1024 * 1024;
+const TERMINAL_FRAME_BYTES = 256 * 1024;
+/** Output sent at once to a terminal client; bigger bursts are split. */
+const TERMINAL_CHUNK_CHARS = 64 * 1024;
+/** A terminal client this far behind for this long is dropped; it reconnects and resumes. */
+const TERMINAL_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+const TERMINAL_SLOW_MS = 10_000;
 
 /** HTTP health endpoint + the thread's WebSocket. */
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
@@ -44,13 +53,13 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
+  const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_FRAME_BYTES });
+  const terminal = opts.terminal?.spawn ? new TerminalSession(opts.terminal.spawn, opts.terminal.cwd) : null;
   http.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
-    if (path !== "/ws") {
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
+    if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
+    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminal));
+    else socket.destroy();
   });
 
   return new Promise((resolve, reject) => {
@@ -61,8 +70,10 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
         port,
         close: () =>
           new Promise<void>(done => {
-            for (const c of wss.clients) c.terminate();
+            for (const c of [...wss.clients, ...terminalWss.clients]) c.terminate();
             wss.close();
+            terminalWss.close();
+            terminal?.close();
             http.close(() => done());
           }),
       });
@@ -183,4 +194,80 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
     unsubscribe?.();
   });
   ws.on("error", () => ws.terminate());
+}
+
+function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminal: TerminalSession | null): void {
+  let slowSince: number | null = null;
+  const send = (m: TerminalServerMessage) => {
+    if (ws.readyState !== ws.OPEN) return;
+    // A client that can't keep up is dropped rather than buffered without limit.
+    if (ws.bufferedAmount > TERMINAL_MAX_BUFFERED_BYTES) {
+      slowSince ??= Date.now();
+      if (Date.now() - slowSince > TERMINAL_SLOW_MS) ws.close(4408, "too slow");
+      if (m.type === "output") return;
+    } else slowSince = null;
+    ws.send(JSON.stringify(m));
+  };
+  const sendOutput = (data: string, end: number) => {
+    for (let i = 0; i < data.length; i += TERMINAL_CHUNK_CHARS) {
+      const part = data.slice(i, i + TERMINAL_CHUNK_CHARS);
+      send({ type: "output", data: part, end: end - data.length + i + part.length });
+    }
+  };
+  let authed = false;
+  let unsubscribe: (() => void) | null = null;
+  const helloTimer = setTimeout(() => {
+    if (!authed) ws.close(4401, "unauthorized");
+  }, HELLO_TIMEOUT_MS);
+
+  ws.on("message", async raw => {
+    const msg = parseTerminalClientMessage(raw.toString());
+    if (!msg) return send({ type: "error", code: "bad_request", message: "Invalid message" });
+    if (!authed) {
+      if (msg.type !== "hello") {
+        send({ type: "error", code: "unauthorized", message: "Send hello first" });
+        return ws.close(4401, "unauthorized");
+      }
+      const result = await verifyToken(msg.token, opts.threadSecret);
+      if (!result.ok || result.claims.scope !== "client" || result.claims.threadId !== runner.thread.id) {
+        send({ type: "error", code: "unauthorized", message: "Token is not valid for this thread" });
+        return ws.close(4401, "unauthorized");
+      }
+      authed = true;
+      clearTimeout(helloTimer);
+      if (!terminal) {
+        send({ type: "error", code: "unavailable", message: "This runner can't open a terminal on this computer." });
+        return ws.close(1011, "unavailable");
+      }
+      terminal.resize(msg.cols, msg.rows);
+      terminal.start();
+      const { reset, data } = terminal.replay(msg.resumeFrom, msg.shell);
+      send({ type: "ready", reset, running: terminal.running, shell: terminal.generation });
+      if (data) sendOutput(data, terminal.end);
+      unsubscribe = terminal.subscribe({
+        output: sendOutput,
+        exit: code => send({ type: "exit", code }),
+        restarted: shell => send({ type: "restarted", shell }),
+      });
+      return;
+    }
+    if (!terminal) return;
+    switch (msg.type) {
+      case "input":
+        terminal.write(msg.data);
+        break;
+      case "resize":
+        terminal.resize(msg.cols, msg.rows);
+        break;
+      case "restart":
+        terminal.start();
+        break;
+      case "hello":
+        break;
+    }
+  });
+  ws.on("close", () => {
+    clearTimeout(helloTimer);
+    unsubscribe?.();
+  });
 }

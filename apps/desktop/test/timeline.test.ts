@@ -73,6 +73,48 @@ describe("buildTimeline", () => {
     ]);
   });
 
+  it("shows the runner's queue, including messages sent from another device", () => {
+    seq = 0;
+    const pending = [
+      { clientMsgId: "q1", text: "mine, queued", at },
+      { clientMsgId: "s1", text: "mine, still sending", at },
+    ];
+    const items = buildTimeline(
+      [
+        ev({ type: "user_message", text: "working on it", clientMsgId: "m1" }),
+        ev({ type: "queue_update", queue: [{ clientMsgId: "q1", text: "mine, queued", queuedAt: at }, { clientMsgId: "q2", text: "from my phone", queuedAt: at }] }),
+      ],
+      pending,
+    );
+    expect(items.map(i => (i.kind === "user" ? [i.text, i.pending, i.queued ?? false] : null))).toEqual([
+      ["working on it", false, false],
+      ["mine, queued", true, true],
+      ["from my phone", true, true],
+      ["mine, still sending", true, false],
+    ]);
+    // Once a queued message starts it shows as a normal message, once.
+    const later = buildTimeline(
+      [
+        ev({ type: "user_message", text: "working on it", clientMsgId: "m1" }),
+        ev({ type: "queue_update", queue: [{ clientMsgId: "q2", text: "from my phone", queuedAt: at }] }),
+        ev({ type: "user_message", text: "mine, queued", clientMsgId: "q1" }),
+      ],
+      pending,
+    );
+    expect(later.filter(i => i.kind === "user").map(i => (i.kind === "user" ? i.text : ""))).toEqual(["working on it", "mine, queued", "from my phone", "mine, still sending"]);
+  });
+
+  it("keeps a streaming message whole when the queue changes mid-stream", () => {
+    seq = 0;
+    const items = buildTimeline([
+      ev({ type: "agent_message", text: "Work", partial: true }),
+      ev({ type: "queue_update", queue: [] }),
+      ev({ type: "agent_message", text: "ing", partial: true }),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "agent", text: "Working", streaming: true });
+  });
+
   it("ignores duplicate and stale seqs", () => {
     seq = 0;
     const a = ev({ type: "user_message", text: "one" });

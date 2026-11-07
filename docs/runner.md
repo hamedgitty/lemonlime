@@ -59,6 +59,21 @@ Environment:
 - `GET /ws` → WebSocket. First message must be `hello` with a `client` token.
   See `packages/protocol/src/wire.ts` for every message.
 
+## Messages, queueing and retries
+
+- A message sent while the agent is working joins a queue instead of failing. The
+  runner sends a `queue_update` event with the whole queue whenever it changes, and
+  starts queued messages in order once the agent is free. Interrupting stops only the
+  current turn.
+- `send_message.clientMsgId` is a request id. The runner remembers every id it has
+  accepted (in history and in the saved queue), so sending the same id again is
+  acknowledged as a `duplicate` and never starts a second turn. `RunnerClient` resends
+  unacknowledged messages after a reconnect for this reason.
+- Every `send_message` gets an `ack` with `started`, `queued` or `duplicate`.
+- If the runner stops in the middle of a turn, it never runs that message again. On
+  restart it commits whatever the agent left behind, records an error with code
+  `turn_outcome_unknown`, then carries on with the queue.
+
 ## Tokens
 
 The control plane derives a per-thread secret with `deriveThreadSecret(master, threadId)`

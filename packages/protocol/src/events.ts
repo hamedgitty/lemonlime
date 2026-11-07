@@ -67,6 +67,25 @@ export const ErrorEvent = z.object({
   fatal: z.boolean().default(false),
 });
 
+/** A message waiting for the agent to finish its current turn. */
+export const QueuedMessage = z.object({
+  clientMsgId: z.string(),
+  text: z.string(),
+  queuedAt: z.string().datetime(),
+});
+export type QueuedMessage = z.infer<typeof QueuedMessage>;
+
+/**
+ * The whole message queue, sent whenever it changes. Queued messages start in order
+ * once the agent is idle; each one becomes a `user_message` with the same `clientMsgId`
+ * when it starts.
+ */
+export const QueueUpdateEvent = z.object({
+  ...base,
+  type: z.literal("queue_update"),
+  queue: z.array(QueuedMessage),
+});
+
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
@@ -75,6 +94,7 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   FileDiffEvent,
   StatusChangeEvent,
   ErrorEvent,
+  QueueUpdateEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

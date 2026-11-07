@@ -41,6 +41,19 @@ describe("buildTimeline", () => {
 });
 
 describe("addEvent", () => {
+  it("shows queued messages without breaking a message that is still streaming", () => {
+    seq = 0;
+    const events = [
+      ev({ type: "agent_message", text: "Work", partial: true }),
+      ev({ type: "queue_update", queue: [{ clientMsgId: "q1", text: "next please", queuedAt: at }] }),
+      ev({ type: "agent_message", text: "ing", partial: true }),
+    ];
+    const items = buildTimeline(events, [{ clientMsgId: "q1", text: "next please", at }]);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ kind: "agent", text: "Working", streaming: true });
+    expect(items[1]).toMatchObject({ kind: "user", text: "next please", pending: true, queued: true });
+  });
+
   it("keeps events sorted and drops duplicates", () => {
     seq = 0;
     const [a, b, c] = [ev({ type: "agent_message", text: "a", partial: false }), ev({ type: "agent_message", text: "b", partial: false }), ev({ type: "agent_message", text: "c", partial: false })];

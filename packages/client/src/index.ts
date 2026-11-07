@@ -15,6 +15,8 @@ export interface RunnerClientOptions {
   onWelcome?: (thread: Thread, latestSeq: number) => void;
   onState?: (state: ConnectionState) => void;
   onError?: (message: string, code?: string) => void;
+  /** The runner accepted a message: it started a turn, was queued, or was a repeat. */
+  onAck?: (clientMsgId: string, result: "started" | "queued" | "duplicate") => void;
   /** Max delay between reconnect attempts. */
   maxBackoffMs?: number;
 }
@@ -30,6 +32,8 @@ export class RunnerClient {
   private closedByUser = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private pending: ClientMessage[] = [];
+  /** Messages sent but not yet acknowledged; resent after a reconnect (the runner ignores repeats). */
+  private readonly unacked = new Map<string, ClientMessage>();
   private live = false;
 
   constructor(private readonly opts: RunnerClientOptions) {
@@ -46,9 +50,16 @@ export class RunnerClient {
     void this.open();
   }
 
-  /** Send a user message. Queued if the connection is not live yet. */
-  send(text: string, clientMsgId?: string): void {
-    this.post({ type: "send_message", text, ...(clientMsgId ? { clientMsgId } : {}) });
+  /**
+   * Send a user message and return its id. Held until the connection is live, and
+   * resent after a reconnect until the runner acknowledges it. The runner never runs the
+   * same id twice, and queues messages that arrive while the agent is busy.
+   */
+  send(text: string, clientMsgId: string = newId()): string {
+    const msg: ClientMessage = { type: "send_message", text, clientMsgId };
+    this.unacked.set(clientMsgId, msg);
+    this.post(msg);
+    return clientMsgId;
   }
 
   /** Stop the agent's current turn. */
@@ -99,12 +110,23 @@ export class RunnerClient {
         case "event":
           if (msg.event.seq <= this.lastSeq) return; // already have it
           this.lastSeq = msg.event.seq;
+          // A recorded message is as good as an ack, in case the ack itself was lost.
+          if (msg.event.type === "user_message" && msg.event.clientMsgId) this.unacked.delete(msg.event.clientMsgId);
+          if (msg.event.type === "queue_update") for (const q of msg.event.queue) this.unacked.delete(q.clientMsgId);
           this.opts.onEvent?.(msg.event);
           break;
-        case "caught_up":
+        case "caught_up": {
           this.live = true;
           this.setState("live");
-          for (const m of this.pending.splice(0)) ws.send(JSON.stringify(m));
+          // Resend anything the runner may not have received, then whatever else was waiting.
+          const waiting = this.pending.splice(0).filter(m => m.type !== "send_message");
+          for (const m of this.unacked.values()) ws.send(JSON.stringify(m));
+          for (const m of waiting) ws.send(JSON.stringify(m));
+          break;
+        }
+        case "ack":
+          this.unacked.delete(msg.clientMsgId);
+          this.opts.onAck?.(msg.clientMsgId, msg.result);
           break;
         case "error":
           this.opts.onError?.(msg.message, msg.code);
@@ -133,4 +155,10 @@ export class RunnerClient {
     this.setState("reconnecting");
     this.timer = setTimeout(() => void this.open(), delay);
   }
+}
+
+function newId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c?.randomUUID) return c.randomUUID();
+  return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

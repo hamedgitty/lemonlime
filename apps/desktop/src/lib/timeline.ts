@@ -8,7 +8,7 @@ export interface PendingMessage {
 }
 
 export type TimelineItem =
-  | { kind: "user"; key: string; seq: number | null; at: string; text: string; pending: boolean }
+  | { kind: "user"; key: string; seq: number | null; at: string; text: string; pending: boolean; queued?: boolean }
   | { kind: "agent"; key: string; seq: number; at: string; text: string; streaming: boolean }
   | {
       kind: "tool";
@@ -38,7 +38,8 @@ export type TimelineItem =
  * - streaming `agent_message` chunks (`partial: true`) are joined into one message,
  *   and a whole message (`partial: false`) that follows them replaces the chunks;
  * - each `tool_result` is attached to the `tool_call` with the same `callId`;
- * - user messages the runner has not confirmed yet are appended as pending.
+ * - messages waiting in the runner's queue (the latest `queue_update`) are appended as
+ *   queued, and messages the runner has not received yet as pending.
  *
  * Events must be in seq order. Duplicate seqs are ignored.
  */
@@ -46,6 +47,7 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
   const confirmed = new Set<string>();
+  let queue: EventOf<"queue_update">["queue"] = [];
   let lastSeq = 0;
   // Index of the agent item still receiving chunks, or -1.
   let openAgent = -1;
@@ -64,6 +66,12 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
       }
       items.push({ kind: "agent", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, text: ev.text, streaming: ev.partial });
       openAgent = ev.partial ? items.length - 1 : -1;
+      continue;
+    }
+
+    // The queue changing doesn't interrupt what the agent is writing.
+    if (ev.type === "queue_update") {
+      queue = ev.queue;
       continue;
     }
 
@@ -147,8 +155,14 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
     }
   }
 
+  const queuedIds = new Set<string>();
+  for (const q of queue) {
+    if (confirmed.has(q.clientMsgId)) continue;
+    queuedIds.add(q.clientMsgId);
+    items.push({ kind: "user", key: `p${q.clientMsgId}`, seq: null, at: q.queuedAt, text: q.text, pending: true, queued: true });
+  }
   for (const p of pending) {
-    if (confirmed.has(p.clientMsgId)) continue;
+    if (confirmed.has(p.clientMsgId) || queuedIds.has(p.clientMsgId)) continue;
     items.push({ kind: "user", key: `p${p.clientMsgId}`, seq: null, at: p.at, text: p.text, pending: true });
   }
   return items;

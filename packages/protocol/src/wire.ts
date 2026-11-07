@@ -18,7 +18,11 @@ export const ClientHello = z.object({
 export const ClientSendMessage = z.object({
   type: z.literal("send_message"),
   text: z.string().min(1).max(200_000),
-  clientMsgId: z.string().max(100).optional(),
+  /**
+   * Request id chosen by the client. Sending the same id again never starts a second
+   * turn, so clients can safely resend anything not yet acknowledged after a reconnect.
+   */
+  clientMsgId: z.string().min(1).max(100).optional(),
 });
 
 export const ClientInterrupt = z.object({ type: z.literal("interrupt") });
@@ -41,13 +45,24 @@ export const ServerCaughtUp = z.object({ type: z.literal("caught_up"), latestSeq
 
 export const ServerPong = z.object({ type: z.literal("pong"), t: z.number().optional() });
 
+/**
+ * Reply to `send_message`: the message started a turn, joined the queue, or was a
+ * repeat of one the runner already has (nothing new happens).
+ */
+export const ServerAck = z.object({
+  type: z.literal("ack"),
+  clientMsgId: z.string(),
+  result: z.enum(["started", "queued", "duplicate"]),
+});
+
 export const ServerError = z.object({
   type: z.literal("error"),
+  /** `busy` is no longer sent (messages queue instead); kept so older clients still parse. */
   code: z.enum(["unauthorized", "bad_request", "busy", "internal"]),
   message: z.string(),
 });
 
-export const ServerMessage = z.discriminatedUnion("type", [ServerWelcome, ServerEvent, ServerCaughtUp, ServerPong, ServerError]);
+export const ServerMessage = z.discriminatedUnion("type", [ServerWelcome, ServerEvent, ServerCaughtUp, ServerPong, ServerError, ServerAck]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
 /** Parse a raw WebSocket frame. Returns null instead of throwing on bad input. */

@@ -80,6 +80,7 @@ function connect(port: number, tok: Promise<string> | string, resumeFrom = 0) {
   const events: ThreadEvent[] = [];
   const errors: string[] = [];
   const states: string[] = [];
+  const acks: string[] = [];
   const client = new RunnerClient({
     url: `ws://127.0.0.1:${port}/ws`,
     token: async () => tok,
@@ -88,11 +89,12 @@ function connect(port: number, tok: Promise<string> | string, resumeFrom = 0) {
     onEvent: e => events.push(e),
     onError: m => errors.push(m),
     onState: s => states.push(s),
+    onAck: (id, r) => acks.push(`${id}:${r}`),
     maxBackoffMs: 200,
   });
   client.connect();
   cleanups.push(() => client.close());
-  return { client, events, errors, states };
+  return { client, events, errors, states, acks };
 }
 
 async function until(check: () => boolean, ms = 8000): Promise<void> {
@@ -144,14 +146,16 @@ describe("runner end to end", () => {
     expect(runnerScope.events).toEqual([]);
   });
 
-  it("refuses a second message while busy and can be interrupted", async () => {
-    let release!: () => void;
+  it("queues messages sent while busy and runs them in order after the turn", async () => {
+    const prompts: string[] = [];
+    const releases: (() => void)[] = [];
     const slow: AgentAdapter = {
       kind: "claude-code",
       createSession: () => ({
         runTurn: ctx =>
           new Promise<void>(resolve => {
-            release = resolve;
+            prompts.push(ctx.prompt);
+            releases.push(resolve);
             ctx.signal.addEventListener("abort", () => resolve());
           }),
         saveState: () => ({}),
@@ -159,13 +163,76 @@ describe("runner end to end", () => {
       }),
     };
     const { runner } = await boot(slow, "test-thread-4");
-    runner.sendMessage("long task");
-    expect(() => runner.sendMessage("another")).toThrow(/still working/);
+    expect(runner.sendMessage("long task", "a").result).toBe("started");
+    expect(runner.sendMessage("second", "b").result).toBe("queued");
+    expect(runner.sendMessage("third", "c").result).toBe("queued");
+    expect(runner.queued.map(q => q.clientMsgId)).toEqual(["b", "c"]);
+    const lastQueue = () => runner.store.since(0).filter(e => e.type === "queue_update").at(-1) as { queue: { clientMsgId: string }[] };
+    expect(lastQueue().queue.map(q => q.clientMsgId)).toEqual(["b", "c"]);
+
+    // Interrupting stops only the current turn; the queue carries on.
     runner.interrupt();
+    await until(() => prompts.length === 2);
+    expect(prompts).toEqual(["long task", "second"]);
+    expect(lastQueue().queue.map(q => q.clientMsgId)).toEqual(["c"]);
+    releases[1]!();
+    await until(() => prompts.length === 3);
+    releases[2]!();
     await runner.settled();
-    const last = runner.store.since(0).at(-1)!;
-    expect(last).toMatchObject({ type: "status_change", to: "idle", reason: "interrupted" });
-    void release;
+
+    const users = runner.store.since(0).filter(e => e.type === "user_message").map(e => (e as { clientMsgId?: string }).clientMsgId);
+    expect(users).toEqual(["a", "b", "c"]);
+    expect(lastQueue().queue).toEqual([]);
+    expect(runner.store.since(0).filter(e => e.type === "status_change" && e.to === "idle" && e.reason === "interrupted")).toHaveLength(1);
+  });
+
+  it("never starts a turn twice for the same request id", async () => {
+    const { runner, server } = await boot(fakeAdapter, "test-thread-7");
+    expect(runner.sendMessage("once", "same-id").result).toBe("started");
+    expect(runner.sendMessage("once", "same-id").result).toBe("duplicate");
+    await runner.settled();
+
+    // Over the wire too: a retry is acknowledged as a duplicate and nothing runs.
+    const c = connect(server.port, token(runner.thread.id));
+    await until(() => c.states.includes("live"));
+    c.client.send("once", "same-id");
+    c.client.send("new one", "other-id");
+    await until(() => c.acks.length === 2);
+    expect(c.acks).toEqual(["same-id:duplicate", "other-id:started"]);
+    await runner.settled();
+    expect(runner.store.since(0).filter(e => e.type === "user_message")).toHaveLength(2);
+  });
+
+  it("after a crash mid-turn, keeps the changes, says so, never re-runs it, then runs the queue", async () => {
+    const dir = tempRepo();
+    const dataDir = join(dir, ".lemonlime");
+    const thread = makeThread("crash-thread-1");
+    // Pretend a previous runner died while working on "interrupted work", with one message queued.
+    const first = new ThreadRunner({ thread, workdir: dir, dataDir, adapter: fakeAdapter, session: { autonomy: "edits" } });
+    await first.init();
+    first.store.append({ type: "user_message", text: "interrupted work", clientMsgId: "lost" });
+    await first.close();
+    writeFileSync(join(dataDir, "state.json"), JSON.stringify({ agentState: {}, status: "running", queue: [{ clientMsgId: "next", text: "queued work", queuedAt: new Date().toISOString() }] }));
+    writeFileSync(join(dir, "half-done.txt"), "partial\n");
+
+    const prompts: string[] = [];
+    const recording: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => ({ runTurn: async ctx => void prompts.push(ctx.prompt), saveState: () => ({}), dispose: async () => {} }),
+    };
+    const second = new ThreadRunner({ thread, workdir: dir, dataDir, adapter: recording, session: { autonomy: "edits" } });
+    cleanups.push(() => second.close());
+    await second.init();
+    await second.settled();
+
+    expect(prompts).toEqual(["queued work"]);
+    const events = second.store.since(0);
+    expect(events.find(e => e.type === "error" && e.code === "turn_outcome_unknown")).toBeDefined();
+    expect(events.find(e => e.type === "file_diff" && e.path === "half-done.txt")).toBeDefined();
+    const log = execFileSync("git", ["log", "--format=%s"], { cwd: dir }).toString();
+    expect(log).toContain("Unfinished changes from a turn the runner did not finish");
+    // The interrupted message is never sent again, even if a client retries it.
+    expect(second.sendMessage("interrupted work", "lost").result).toBe("duplicate");
   });
 
   it("drives an ACP agent over stdio, including permission requests", async () => {

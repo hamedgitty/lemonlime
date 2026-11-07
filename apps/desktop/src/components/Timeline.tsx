@@ -79,7 +79,7 @@ export function Timeline({ items, working, empty }: { items: TimelineItem[]; wor
 const Item = memo(function Item({ item }: { item: TimelineItem }) {
   switch (item.kind) {
     case "user":
-      return <UserMessage text={item.text} at={item.at} pending={item.pending} />;
+      return <UserMessage text={item.text} at={item.at} pending={item.pending} queued={item.queued ?? false} />;
     case "agent":
       return <AgentMessage text={item.text} streaming={item.streaming} />;
     case "tool":
@@ -93,7 +93,7 @@ const Item = memo(function Item({ item }: { item: TimelineItem }) {
   }
 });
 
-function UserMessage({ text, at, pending }: { text: string; at: string; pending: boolean }) {
+function UserMessage({ text, at, pending, queued }: { text: string; at: string; pending: boolean; queued: boolean }) {
   return (
     <div className="flex animate-rise justify-end">
       <div className="max-w-[78%]">
@@ -105,7 +105,7 @@ function UserMessage({ text, at, pending }: { text: string; at: string; pending:
         >
           <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
         </div>
-        <p className="mt-1 pr-1 text-right text-xs text-ink-faint">{pending ? "Sending…" : clockTime(at)}</p>
+        <p className="mt-1 pr-1 text-right text-xs text-ink-faint">{queued ? "Queued, runs when the agent finishes" : pending ? "Sending…" : clockTime(at)}</p>
       </div>
     </div>
   );

@@ -51,10 +51,11 @@ function Item({ item }: { item: TimelineItem }) {
   switch (item.kind) {
     case "user":
       return (
-        <div className="flex justify-end">
+        <div className="flex flex-col items-end">
           <div className={`max-w-[85%] rounded-2xl rounded-br-md bg-ink px-4 py-2.5 text-sm leading-relaxed text-cream ${item.pending ? "opacity-60" : ""}`}>
             <p className="whitespace-pre-wrap break-words">{item.text}</p>
           </div>
+          {item.queued ? <p className="mt-1 pr-1 text-[13.5px] text-ink-3">Queued, runs when the agent finishes</p> : null}
         </div>
       );
     case "agent":

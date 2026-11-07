@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseClientMessage, verifyToken, type ServerMessage } from "@lemonlime/protocol";
-import { BusyError, type ThreadRunner } from "./thread-runner.ts";
+import type { ThreadRunner } from "./thread-runner.ts";
 
 export interface ServerOptions {
   host: string;
@@ -116,9 +116,10 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
     switch (msg.type) {
       case "send_message":
         try {
-          runner.sendMessage(msg.text, msg.clientMsgId);
+          const r = runner.sendMessage(msg.text, msg.clientMsgId);
+          send({ type: "ack", clientMsgId: r.clientMsgId, result: r.result });
         } catch (err) {
-          send({ type: "error", code: err instanceof BusyError ? "busy" : "internal", message: err instanceof Error ? err.message : String(err) });
+          send({ type: "error", code: "internal", message: err instanceof Error ? err.message : String(err) });
         }
         break;
       case "interrupt":

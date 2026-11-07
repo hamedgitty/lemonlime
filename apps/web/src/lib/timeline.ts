@@ -2,7 +2,7 @@ import type { EventOf, ThreadEvent } from "@lemonlime/protocol";
 
 /** What the thread view renders, built from the raw event history. */
 export type TimelineItem =
-  | { kind: "user"; key: string; text: string; at: string; pending?: boolean }
+  | { kind: "user"; key: string; text: string; at: string; pending?: boolean; queued?: boolean }
   | { kind: "agent"; key: string; text: string; at: string; streaming: boolean }
   | { kind: "tool"; key: string; call: EventOf<"tool_call">; result: EventOf<"tool_result"> | null }
   | { kind: "diff"; key: string; event: EventOf<"file_diff"> }
@@ -19,7 +19,8 @@ export interface PendingMessage {
  * Turn events (sorted by seq) into timeline items:
  * - streaming `agent_message` chunks are joined; a whole message replaces the chunks before it,
  * - each `tool_result` is attached to its `tool_call`,
- * - optimistic messages show until the runner echoes them back.
+ * - messages in the runner's queue show as queued, other optimistic messages as pending,
+ *   until the runner echoes them back.
  */
 export function buildTimeline(events: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
   const items: TimelineItem[] = [];
@@ -27,7 +28,13 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
   const echoed = new Set<string>();
   let streaming: Extract<TimelineItem, { kind: "agent" }> | null = null;
 
+  let queue: EventOf<"queue_update">["queue"] = [];
   for (const e of events) {
+    // The queue changing doesn't interrupt what the agent is writing.
+    if (e.type === "queue_update") {
+      queue = e.queue;
+      continue;
+    }
     if (e.type !== "agent_message") streaming = null;
     switch (e.type) {
       case "user_message":
@@ -81,8 +88,14 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
     }
   }
 
+  const queued = new Set<string>();
+  for (const q of queue) {
+    if (echoed.has(q.clientMsgId)) continue;
+    queued.add(q.clientMsgId);
+    items.push({ kind: "user", key: `p${q.clientMsgId}`, text: q.text, at: q.queuedAt, pending: true, queued: true });
+  }
   for (const p of pending) {
-    if (!echoed.has(p.clientMsgId)) items.push({ kind: "user", key: `p${p.clientMsgId}`, text: p.text, at: p.at, pending: true });
+    if (!echoed.has(p.clientMsgId) && !queued.has(p.clientMsgId)) items.push({ kind: "user", key: `p${p.clientMsgId}`, text: p.text, at: p.at, pending: true });
   }
   return items;
 }

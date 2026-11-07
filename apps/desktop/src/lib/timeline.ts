@@ -40,7 +40,7 @@ export type TimelineItem =
     }
   | { kind: "status"; key: string; seq: number; at: string; from: ThreadStatus; to: ThreadStatus; reason?: string }
   | { kind: "error"; key: string; seq: number; at: string; message: string; code?: string; fatal: boolean }
-  | { kind: "notice"; key: string; seq: number; at: string; message: string; code: string }
+  | { kind: "notice"; key: string; seq: number; at: string; message: string; code: string; untilAt?: string }
   | {
       kind: "approval";
       key: string;
@@ -164,7 +164,15 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
         });
         break;
       case "notice":
-        items.push({ kind: "notice", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, message: ev.message, code: ev.code });
+        items.push({
+          kind: "notice",
+          key: `e${ev.seq}`,
+          seq: ev.seq,
+          at: ev.at,
+          message: ev.message,
+          code: ev.code,
+          ...(ev.untilAt ? { untilAt: ev.untilAt } : {}),
+        });
         break;
       case "approval_request":
         approvalIndex.set(ev.requestId, items.length);

@@ -11,6 +11,8 @@ import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
 
 export interface ThreadRunnerOptions {
+  /** Shortest wait before continuing after a usage limit (default 5 s; tests use less). */
+  limitMinWaitMs?: number;
   thread: Thread;
   workdir: string;
   /** Where history and state are kept. null keeps everything in memory (tests). */
@@ -96,7 +98,20 @@ interface SavedState {
   agentState: Record<string, string>;
   status: ThreadStatus;
   queue?: QueuedMessage[];
+  /** The agent hit the user's plan limit; continue at `resetAt` (or after a while). */
+  usageLimit?: { resetAt: string | null };
+  /** When the runner continued a thread on its own after a limit (ISO), for the daily cap. */
+  autoContinues?: string[];
 }
+
+/** What the runner says on the user's behalf when a usage limit lifts. */
+export const CONTINUE_AFTER_LIMIT = "Continue where you left off. (Sent by LemonLime after your plan's usage limit reset.)";
+/** Most automatic continues per thread in a day, so a stuck limit can't loop. */
+const MAX_AUTO_CONTINUES_PER_DAY = 3;
+/** When the agent didn't say when its limit lifts, try again after this long. */
+const LIMIT_RETRY_MS = 30 * 60_000;
+/** Never wait longer than this for one (weekly limits); the user can always send a message. */
+const LIMIT_MAX_WAIT_MS = 7 * 24 * 3_600_000;
 
 /** Commit subject for changes an interrupted turn left behind. */
 const UNFINISHED_SUBJECT = "Unfinished changes from a turn the runner did not finish";
@@ -184,6 +199,11 @@ export class ThreadRunner {
     for (const requestId of open) this.store.append({ type: "approval_result", requestId, decision: "deny", by: "expired" });
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
     for (const q of this.queue) this.seen.add(q.clientMsgId);
+    this.autoContinues = saved?.autoContinues ?? [];
+    if (saved?.usageLimit) {
+      this.usageLimit = saved.usageLimit;
+      this.scheduleLimitContinue();
+    }
 
     if (saved?.status === "running") {
       // The runner died mid-turn. We can't know how far the agent got, so we never run
@@ -226,6 +246,8 @@ export class ThreadRunner {
     if (!this.initialised) throw new Error("runner not initialised");
     if (this.seen.has(clientMsgId)) return { clientMsgId, result: "duplicate" };
     this.seen.add(clientMsgId);
+    // The user carried on themselves: no automatic continue on top.
+    if (!clientMsgId.startsWith("auto-continue-")) this.clearUsageLimit();
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
     if (this.status === "running" || this.current || this.queue.length > 0) {
@@ -299,6 +321,73 @@ export class ThreadRunner {
     } else {
       for (const [i, value] of tokensIn(credential.value).entries()) this.redactions[`${credential.name}#${i + 1}`] = value;
     }
+    // Signed in again (perhaps to an account with room left): carry on now, once.
+    if (this.usageLimit && this.initialised) this.continueAfterLimit();
+  }
+
+  private usageLimit: { resetAt: string | null } | null = null;
+  private autoContinues: string[] = [];
+  private limitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** The thread is waiting for the user's plan limit to lift, if so. */
+  get usageLimited(): { resetAt: string | null } | null {
+    return this.usageLimit;
+  }
+
+  private onUsageLimit(resetAt: string | null): void {
+    const dayAgo = Date.now() - 24 * 3_600_000;
+    this.autoContinues = this.autoContinues.filter(t => Date.parse(t) > dayAgo);
+    if (this.autoContinues.length >= MAX_AUTO_CONTINUES_PER_DAY) {
+      this.clearUsageLimit();
+      this.store.append({
+        type: "notice",
+        code: "usage_limit_no_retry",
+        message: `LemonLime already continued this thread ${MAX_AUTO_CONTINUES_PER_DAY} times today after usage limits, so it won't again. Send a message when your plan has room.`,
+      });
+      return;
+    }
+    this.usageLimit = { resetAt };
+    this.saveState();
+    this.store.append({
+      type: "notice",
+      code: "usage_limited",
+      message: resetAt
+        ? "Your plan's usage limit for this agent is reached. The thread will continue on its own when it resets."
+        : "Your plan's usage limit for this agent is reached. The thread will try again in 30 minutes, or sooner if you sign in to another account.",
+      ...(resetAt ? { untilAt: resetAt } : {}),
+    });
+    this.scheduleLimitContinue();
+  }
+
+  private scheduleLimitContinue(): void {
+    if (this.limitTimer) clearTimeout(this.limitTimer);
+    if (!this.usageLimit) return;
+    const at = this.usageLimit.resetAt ? Date.parse(this.usageLimit.resetAt) + 60_000 : Date.now() + LIMIT_RETRY_MS;
+    const wait = Math.min(LIMIT_MAX_WAIT_MS, Math.max(this.opts.limitMinWaitMs ?? 5_000, at - Date.now()));
+    this.limitTimer = setTimeout(() => this.continueAfterLimit(), wait);
+    this.limitTimer.unref?.();
+  }
+
+  private continueAfterLimit(): void {
+    if (this.limitTimer) clearTimeout(this.limitTimer);
+    this.limitTimer = null;
+    if (!this.usageLimit || this.closing) return;
+    this.usageLimit = null;
+    // Something is already happening (the user wrote, or a queued message runs): nothing to add.
+    if (this.status === "running" || this.current || this.queue.length > 0) return this.saveState();
+    const now = new Date().toISOString();
+    this.autoContinues.push(now);
+    this.saveState();
+    this.sendMessage(CONTINUE_AFTER_LIMIT, `auto-continue-${Date.now()}`);
+  }
+
+  private clearUsageLimit(): void {
+    if (this.limitTimer) clearTimeout(this.limitTimer);
+    this.limitTimer = null;
+    if (this.usageLimit) {
+      this.usageLimit = null;
+      this.saveState();
+    }
   }
 
   /** Answer an approval request. Returns false if it was already decided or doesn't exist. */
@@ -360,6 +449,7 @@ export class ThreadRunner {
 
   async close(): Promise<void> {
     this.closing = true;
+    if (this.limitTimer) clearTimeout(this.limitTimer);
     this.interrupt();
     await this.current?.catch(() => undefined);
     await this.session?.dispose();
@@ -428,6 +518,7 @@ export class ThreadRunner {
     );
     watchdog.unref?.();
 
+    let usageLimitAt: { resetAt: string | null } | null = null;
     try {
       if (!this.session) this.session = this.newSession();
       const requestApproval = async (req: ApprovalRequest): Promise<ApprovalDecision> => {
@@ -445,7 +536,11 @@ export class ThreadRunner {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
       if (code === "agent_crashed") await this.handleCrash(message, emit);
-      else {
+      else if (code === "usage_limit") {
+        this.crashes = 0;
+        emit({ type: "error", message, code, fatal: false });
+        usageLimitAt = { resetAt: (err as { resetAt?: string }).resetAt ?? null };
+      } else {
         this.crashes = 0;
         const hint = fixHint(code, this.opts.adapter.kind);
         emit({ type: "error", message: hint ? `${message}\n\n${hint}` : message, ...(code ? { code } : {}), fatal: false });
@@ -470,6 +565,7 @@ export class ThreadRunner {
     this.abort = null;
     this.idleSince = new Date().toISOString();
     this.setStatus("idle", timedOut ? "timed out" : abort.signal.aborted ? "interrupted" : undefined);
+    if (usageLimitAt) this.onUsageLimit(usageLimitAt.resetAt);
   }
 
   /** Record an approval request and wait for the user, a timeout, or the turn ending. */
@@ -572,7 +668,13 @@ export class ThreadRunner {
     const f = this.stateFile();
     if (!f) return;
     mkdirSync(this.opts.dataDir!, { recursive: true });
-    const state: SavedState = { agentState: this.session?.saveState() ?? this.agentState, status: this.status, queue: this.queue };
+    const state: SavedState = {
+      agentState: this.session?.saveState() ?? this.agentState,
+      status: this.status,
+      queue: this.queue,
+      ...(this.usageLimit ? { usageLimit: this.usageLimit } : {}),
+      ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
+    };
     writeFileSync(f, JSON.stringify(state, null, 2));
   }
 }

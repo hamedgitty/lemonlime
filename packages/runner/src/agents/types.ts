@@ -48,9 +48,39 @@ export class AgentError extends Error {
   constructor(
     message: string,
     readonly code = "agent_failed",
+    /** For `usage_limit`: when the user's plan allows more (ISO), if the agent said. */
+    readonly resetAt?: string,
   ) {
     super(message);
   }
+}
+
+const LIMIT = /usage limit|limit reached|hit your (usage )?limit|usage_limit_reached|out of (extra )?usage|rate limit exceeded|quota (exceeded|reached)/i;
+
+/**
+ * When a usage limit lifts, from what agents print: Claude's `…|1731000000`, "resets 3pm",
+ * "resets at 3:30 PM", "try again at 15:00", or "try again in 2 hours 5 minutes". Null if
+ * it doesn't say. Clock times are taken as local and as the next time that comes round.
+ */
+export function limitResetAt(reason: string, now = new Date()): string | null {
+  const epoch = /\|(\d{10})\b/.exec(reason);
+  if (epoch) return new Date(Number(epoch[1]) * 1000).toISOString();
+  const rel = /\bin\s+(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:ute)?s?)?)?/i.exec(reason);
+  if (rel && (rel[1] || rel[2])) return new Date(now.getTime() + (Number(rel[1] ?? 0) * 60 + Number(rel[2] ?? 0)) * 60_000).toISOString();
+  const clock = /\b(?:resets?|try again)(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(reason);
+  if (clock) {
+    let h = Number(clock[1]);
+    const m = Number(clock[2] ?? 0);
+    const ap = clock[3]?.toLowerCase();
+    if (ap === "pm" && h < 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    if (h > 23 || m > 59) return null;
+    const t = new Date(now);
+    t.setHours(h, m, 0, 0);
+    if (t.getTime() <= now.getTime()) t.setDate(t.getDate() + 1);
+    return t.toISOString();
+  }
+  return null;
 }
 
 /**
@@ -67,12 +97,16 @@ export function classifyAgentFailure(reason: string): string {
     return "auth_required";
   }
   if (/requires a newer version|please upgrade|update (the )?(cli|app) and try again/i.test(reason)) return "agent_outdated";
+  if (LIMIT.test(reason)) return "usage_limit";
   return "agent_failed";
 }
 
 /** The error to throw when a turn fails: the agent's own reason if it gave one, else what the process reported. */
-export function turnFailure(reason: string | null, processError?: unknown): Error | null {
-  if (reason) return new AgentError(reason, classifyAgentFailure(reason));
+export function turnFailure(reason: string | null, processError?: unknown, known?: { resetAt?: string | null }): Error | null {
+  if (reason) {
+    const code = known?.resetAt ? "usage_limit" : classifyAgentFailure(reason);
+    return new AgentError(reason, code, code === "usage_limit" ? (known?.resetAt ?? limitResetAt(reason) ?? undefined) : undefined);
+  }
   return processError instanceof Error ? processError : processError === undefined ? null : new AgentError(String(processError));
 }
 

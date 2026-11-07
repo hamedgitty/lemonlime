@@ -73,6 +73,7 @@ class ClaudeCodeSession implements AgentSession {
     }
 
     let failure: string | null = null;
+    let limitReset: string | null = null;
     let processError: unknown;
     await runLineProcess({
       command: this.opts.command?.[0] ?? "claude",
@@ -84,6 +85,7 @@ class ClaudeCodeSession implements AgentSession {
         const parsed = parseClaudeLine(line);
         if (parsed.sessionId) this.sessionId = parsed.sessionId;
         if (parsed.failure) failure = parsed.failure;
+        if (parsed.limitResetAt) limitReset = parsed.limitResetAt;
         parsed.events.forEach(e => ctx.emit(e));
       },
       onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
@@ -91,7 +93,7 @@ class ClaudeCodeSession implements AgentSession {
       .catch(err => (processError = err))
       .finally(() => (this.ask = null));
     // Claude exits non-zero after a failed result; its own reason beats "exited with code 1".
-    const err = turnFailure(failure, processError);
+    const err = turnFailure(failure, processError, { resetAt: failure ? limitReset : null });
     if (err) throw err;
   }
 
@@ -111,6 +113,8 @@ export interface ParsedLine {
   events: NewEvent[];
   sessionId?: string;
   failure?: string;
+  /** The account's usage limit was hit; it lifts at this time (ISO). */
+  limitResetAt?: string;
 }
 
 type ContentBlock =
@@ -125,6 +129,13 @@ export function parseClaudeLine(line: string): ParsedLine {
   if (!msg || typeof msg !== "object") return { events: [] };
   const sessionId = typeof msg.session_id === "string" ? msg.session_id : undefined;
   const events: NewEvent[] = [];
+  if (msg.type === "rate_limit_event") {
+    const info = msg.rate_limit_info as { status?: string; resetsAt?: number } | undefined;
+    if (info?.status === "rejected" && typeof info.resetsAt === "number") {
+      return { events, ...(sessionId ? { sessionId } : {}), limitResetAt: new Date(info.resetsAt * 1000).toISOString() };
+    }
+    return { events, ...(sessionId ? { sessionId } : {}) };
+  }
 
   if (msg.type === "assistant" || msg.type === "user") {
     // "<synthetic>" messages are written by the CLI itself (e.g. "Login expired"), not the model.

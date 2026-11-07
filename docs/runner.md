@@ -89,6 +89,15 @@ The PTY comes from `@lydell/node-pty` (prebuilt, no compiler needed). The deskto
 single-file runner can't hold a native module, so `build:sea` copies it next to the
 executable and the app passes `LEMONLIME_NODE_PTY_DIR`.
 
+## Usage limits
+
+When an agent stops because the user's plan limit is reached (Claude says when it
+resets; others usually print a time or "try again in …"), the thread gets a
+`usage_limited` notice with `untilAt`, and the runner sends "Continue where you left
+off" for the user once the limit lifts, or straight away when they sign in again. Without
+a reset time it tries again after 30 minutes. It does this at most 3 times a day per
+thread, and not at all once the user writes something themselves.
+
 ## Memory on your computer
 
 Local threads share your computer, so the runner watches the memory used by everything

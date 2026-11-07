@@ -126,7 +126,7 @@ const Item = memo(function Item({
     case "error":
       return <ErrorRow message={item.message} code={item.code} fatal={item.fatal} />;
     case "notice":
-      return <NoticeRow message={item.message} />;
+      return <NoticeRow message={item.untilAt ? `${item.message} ${resetsWhen(item.untilAt)}` : item.message} />;
     case "approval":
       return <ApprovalCard item={item} onApprove={onApprove} />;
   }
@@ -321,6 +321,14 @@ function QueuedMessage({
       </div>
     </div>
   );
+}
+
+/** "It resets at 3:00 PM." or, further off, "It resets on Mon 9 Nov at 3:00 PM." */
+function resetsWhen(iso: string): string {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? `It resets at ${time}.` : `It resets on ${d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} at ${time}.`;
 }
 
 const ordinal = (n: number) =>

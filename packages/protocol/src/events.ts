@@ -76,6 +76,8 @@ export const NoticeEvent = z.object({
   type: z.literal("notice"),
   code: z.string(),
   message: z.string(),
+  /** A time the notice is about (ISO), e.g. when a usage limit resets; apps show it in local time. */
+  untilAt: z.string().datetime().optional(),
 });
 
 /**

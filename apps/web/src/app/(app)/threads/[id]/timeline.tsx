@@ -134,7 +134,10 @@ function Item({ item, onApprove }: { item: TimelineItem; onApprove?: ApproveFn |
     case "notice":
       return (
         <div role="status" className="rounded-xl border border-line bg-cream px-4 py-2.5 text-[13.5px] text-muted">
-          <p className="whitespace-pre-wrap break-words">{item.event.message}</p>
+          <p className="whitespace-pre-wrap break-words">
+            {item.event.message}
+            {item.event.untilAt && <ResetTime iso={item.event.untilAt} />}
+          </p>
         </div>
       );
     case "error":
@@ -221,5 +224,20 @@ function DiffItem({ event }: { event: EventOf<"file_diff"> }) {
         {event.truncated && <p className="border-t border-line px-4 py-2 text-xs text-muted">Diff truncated: the file change is too large to show in full.</p>}
       </div>
     </details>
+  );
+}
+
+/** When a limit resets, in the reader's own time zone (rendered in the browser). */
+function ResetTime({ iso }: { iso: string }) {
+  const d = new Date(iso);
+  return (
+    <>
+      {" "}
+      It resets at{" "}
+      <time dateTime={iso} suppressHydrationWarning>
+        {d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}
+      </time>
+      .
+    </>
   );
 }

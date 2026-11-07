@@ -92,3 +92,14 @@ sandbox's `envdAccessToken` in `X-Access-Token`. The provider waits for the
 process running, the same as the E2B SDK's background commands.
 
 The runner URL is `https://<port>-<id>.e2b.app`.
+
+## Checking a provider for real
+
+With a provider's settings in the environment, this creates a small sandbox from the
+image, waits for the runner's `/healthz`, pauses, resumes, checks again and destroys it
+(it is destroyed even if a step fails):
+
+```sh
+LEMONLIME_SANDBOX_PROVIDER=daytona DAYTONA_API_KEY=... LEMONLIME_SANDBOX_IMAGE=ghcr.io/<owner>/lemonlime-sandbox:latest \
+  pnpm --filter @lemonlime/sandbox live-check
+```

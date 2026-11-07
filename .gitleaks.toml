@@ -1,0 +1,15 @@
+# gitleaks settings for CI and the pre-commit hook. Keep allowlists narrow: match the
+# exact made-up value or placeholder, never whole folders.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Made-up values in tests and placeholders in docs"
+regexTarget = "line"
+regexes = [
+  # Test-only thread secrets, e.g. "thread-secret-for-tests-0123456789".
+  '''[a-z-]+-secret-for-tests-0123456789''',
+  # Docs examples that read the secret from an environment variable.
+  '''Authorization: Bearer \$[A-Z_]+''',
+  '''Authorization: Bearer YOUR_[A-Z_]+''',
+]

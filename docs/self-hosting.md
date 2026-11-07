@@ -448,6 +448,10 @@ agent is mid-turn, the CPU in use and the busiest program. The runner measures t
 inside the sandbox, so a policy can use them to notice runaway or unwanted work but
 shouldn't treat them as proof.
 
+A plugin can also listen for `events`: `onUserCreated` after someone's first sign-in
+(with their new workspace) and `onThreadCreated` after each thread is created. A failing
+listener is logged and never blocks sign-up or the thread.
+
 ## The desktop app
 
 People create personal access tokens under **Settings** and paste one, with the

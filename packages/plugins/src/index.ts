@@ -1,3 +1,4 @@
+import type { AgentKind, ThreadMode } from "@lemonlime/protocol";
 import { allowAllPolicy, type UsagePolicy } from "./usage-policy.ts";
 import { emptyBillingUI, type BillingUI } from "./billing-ui.ts";
 
@@ -8,6 +9,8 @@ export * from "./billing-ui.ts";
 export interface PluginEvents {
   /** A person signed in for the first time and got their personal workspace. */
   onUserCreated?(user: { userId: string; email: string | null; workspaceId: string }): Promise<void>;
+  /** A thread was created (for cloud threads: once its sandbox started). */
+  onThreadCreated?(thread: { threadId: string; workspaceId: string; userId: string; mode: ThreadMode; agent: AgentKind }): Promise<void>;
 }
 
 /** A deployment's hooks. */

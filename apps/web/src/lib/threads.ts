@@ -183,6 +183,7 @@ export async function createThread(ctx: AppContext, userId: string, workspaceId:
       .insert(threads)
       .values({ ...base, status: "idle" })
       .returning();
+    await threadCreated(ctx, row!, userId);
     return threadResponse(ctx, row!, userId);
   }
 
@@ -222,7 +223,15 @@ export async function createThread(ctx: AppContext, userId: string, workspaceId:
     lastHeartbeatAt: null,
   });
   await notify("onSandboxStarted", () => usagePolicy.onSandboxStarted(runningSandbox(row)));
+  await threadCreated(ctx, row, userId);
   return threadResponse(ctx, row, userId);
+}
+
+/** Tell the deployment's plugin; it must never stop a thread being created. */
+async function threadCreated(ctx: AppContext, row: ThreadRow, userId: string): Promise<void> {
+  await ctx.plugin.events
+    .onThreadCreated?.({ threadId: row.id, workspaceId: row.workspaceId, userId, mode: row.mode, agent: row.agent.kind })
+    .catch(err => console.error("[lemonlime] onThreadCreated failed:", err));
 }
 
 function defaultTitle(req: CreateThreadRequest): string {

@@ -244,11 +244,76 @@ migrations in `packages/db/migrations/`, in the format
 | `threads` | One row per thread: agent, repo, branch, mode, status, sandbox id, runner URL, latest seq, idle and running times, first prompt. |
 | `sandbox_runs` | Neutral audit log: one row per stretch of sandbox running time, with its end reason. |
 | `access_tokens` | Personal access tokens for the desktop app. Only SHA-256 hashes are stored. |
+| `pending_messages` | Messages sent to a thread while its sandbox was paused, waiting for the runner. |
+| `secrets` | Workspace secrets passed to sandboxes, encrypted (AES-256-GCM). |
+| `agent_credentials` | Agent sign-ins saved from a sandbox, encrypted, so the next sandbox starts signed in. |
+| `github_installations` | GitHub App installations linked to a workspace. |
+| `rate_limit` | Counters for sign-in and API rate limits. |
+| `system_status` | Small service facts, such as when the idle sweep last ran (read by `/api/health`). |
 
 SQLite has no row-level security. Every query made on behalf of a person goes
 through `apps/web/src/lib/access.ts`, which checks that they belong to the
 workspace (threads) or own the row (tokens). Threads in other workspaces are
 reported as not found.
+
+## Health checks and logs
+
+`GET /api/health` is public and made for uptime monitors. It answers `200` when the
+database responds and the idle sweep ran in the last 5 minutes, and `503` otherwise,
+with the failing check named:
+
+```json
+{ "ok": true, "lastSweep": "2026-11-07T09:41:00.000Z", "checks": { "database": { "ok": true }, "sweep": { "ok": true }, "history": { "ok": true } } }
+```
+
+A stale sweep usually means the cron trigger (Workers) or the sweep service (Node,
+Compose) stopped, and idle sandboxes are no longer being paused. Missing history
+storage is reported but doesn't fail the check. Right after a fresh deploy the sweep
+check fails until the first sweep runs, about a minute.
+
+Logs: on Workers, `"observability": { "enabled": true }` in `wrangler.jsonc` keeps
+request logs and errors in the Cloudflare dashboard (Workers → lemonlime-web → Logs),
+and `wrangler tail` streams them live. On Node and Compose the dashboard logs to
+stdout (`docker compose logs -f web`).
+
+## Backups and restoring
+
+Two things hold state: the database, and the thread history store. Sandboxes don't need
+backing up; a thread whose sandbox is lost can be read from history and continued in a
+new one. Keep the encryption secret (`LEMONLIME_TOKEN_SECRET`) somewhere safe as well:
+without it, saved secrets and agent sign-ins can't be decrypted.
+
+**Workers + D1.** D1 keeps 30 days of point-in-time history on its own:
+
+```sh
+wrangler d1 time-travel info lemonlime                       # current bookmark
+wrangler d1 time-travel restore lemonlime --timestamp=2026-11-07T09:00:00Z
+wrangler d1 export lemonlime --remote --output=lemonlime.sql  # a copy you keep
+```
+
+History lives in the R2 bucket; turn on bucket versioning or copy it elsewhere on a
+schedule if you need more than one copy.
+
+**Node and Compose.** Copy the SQLite file with SQLite's own backup, which is safe while
+the dashboard runs, and the history folder:
+
+```sh
+docker compose exec web sqlite3 /data/lemonlime.db ".backup /data/backup.db"
+docker compose cp web:/data/backup.db ./lemonlime-$(date +%F).db
+docker compose cp web:/data/history ./history-$(date +%F)
+```
+
+To restore, stop the dashboard, put the files back at the same paths, and start it:
+
+```sh
+docker compose stop web sweep
+docker compose cp ./lemonlime-2026-11-07.db web:/data/lemonlime.db
+docker compose cp ./history-2026-11-07/. web:/data/history
+docker compose start web sweep
+```
+
+Try a restore on a spare machine now and then, and check `/api/health` and an old
+thread afterwards: a backup that has never been restored is only a hope.
 
 ## Thread history and paused sandboxes
 
@@ -401,4 +466,5 @@ All bodies are JSON and validated with the schemas in `packages/protocol`.
 | `POST /api/runner/heartbeat` | runner token | Runner status (`RunnerHeartbeat` → `HeartbeatResponse`). |
 | `POST /api/cron/sweep` | cron secret | Pause idle and disallowed sandboxes (Node deployments). |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | session (create), session or token (list, revoke) | Personal access tokens. The raw value is returned once, on create. |
+| `GET /api/health` | — | Health for uptime monitors: 200 or 503 with the failing check. |
 | `/api/auth/*` | — | Better Auth: sign-in codes, GitHub sign-in, sessions. |

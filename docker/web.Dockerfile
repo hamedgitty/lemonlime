@@ -15,7 +15,7 @@ RUN pnpm --filter @lemonlime/web build
 FROM node:22-bookworm-slim
 # The docker sandbox provider drives Docker through its CLI (with the host's socket mounted).
 COPY --from=docker:27-cli /usr/local/bin/docker /usr/local/bin/docker
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git sqlite3 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /src /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 LEMONLIME_DATABASE_URL=file:/data/lemonlime.db

@@ -11,7 +11,7 @@ import {
 } from "@lemonlime/protocol";
 import type { RunningSandbox } from "@lemonlime/plugins";
 import { runnerWsUrl } from "@lemonlime/sandbox";
-import { sandboxRuns, threads, type ThreadRow } from "@lemonlime/db";
+import { sandboxRuns, systemStatus, threads, type ThreadRow } from "@lemonlime/db";
 import { getThreadForUser, listThreadsForUser } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
@@ -417,6 +417,12 @@ export async function sweepRunningSandboxes(ctx: AppContext, nowMs: number = Dat
       .where(and(eq(threads.id, thread.id), isNull(threads.drainRequestedAt)));
     result.draining.push(thread.id);
   }
+  // For /api/health: a sweep that stops running means idle sandboxes stop pausing.
+  await ctx.db
+    .insert(systemStatus)
+    .values({ key: "sweep.last_run", value: nowIso, updatedAt: nowIso })
+    .onConflictDoUpdate({ target: systemStatus.key, set: { value: nowIso, updatedAt: nowIso } })
+    .catch(err => console.error("[lemonlime] could not record the sweep time:", err));
   for (const { thread, endReason } of decision.pause) {
     try {
       await endRun(ctx, thread.row, endReason, thread.row.status === "failed" ? { status: "failed" } : {});

@@ -300,6 +300,15 @@ export const pendingMessages = sqliteTable(
   t => [uniqueIndex("pending_messages_thread_msg_idx").on(t.threadId, t.clientMsgId)],
 );
 
+// ─── Health ──────────────────────────────────────────────────────────────────
+
+/** Small facts for /api/health, e.g. when the idle sweep last ran. */
+export const systemStatus = sqliteTable("system_status", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull().$defaultFn(nowIso),
+});
+
 // ─── Personal access tokens (desktop app) ────────────────────────────────────
 
 export const accessTokens = sqliteTable(

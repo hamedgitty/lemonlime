@@ -3,6 +3,8 @@ import { renderSlot } from "@lemonlime/plugins";
 import { listAccessTokens, resolveWorkspace } from "@/lib/access.ts";
 import { requirePageUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
+import { listSecrets } from "@/lib/secrets.ts";
+import { SecretsManager } from "./secrets-manager.tsx";
 import { TokensManager } from "./tokens-manager.tsx";
 
 export const metadata: Metadata = { title: "Settings" };
@@ -13,6 +15,7 @@ export default async function SettingsPage() {
   const workspaceId = await resolveWorkspace(ctx.db, user.userId);
   const { billingUI } = ctx.plugin;
   const tokens = await listAccessTokens(ctx.db, user.userId);
+  const secretList = await listSecrets(ctx, workspaceId);
   const controlPlaneUrl = ctx.vars.LEMONLIME_PUBLIC_URL ?? "";
 
   return (
@@ -38,6 +41,17 @@ export default async function SettingsPage() {
       </section>
 
       {renderSlot(billingUI.accountSection, { workspaceId })}
+
+      <section aria-labelledby="secrets-heading" className="card p-6">
+        <h2 id="secrets-heading" className="text-xl font-semibold">
+          Secrets
+        </h2>
+        <p className="mt-1 text-sm text-muted">
+          Keys and tokens your agents need in cloud sandboxes, such as NPM_TOKEN. Each one is encrypted, given to new cloud threads as an environment variable,
+          and removed from everything the thread records. Never paste secrets into the chat.
+        </p>
+        <SecretsManager initial={secretList} />
+      </section>
 
       <section aria-labelledby="tokens-heading" className="card p-6">
         <h2 id="tokens-heading" className="text-xl font-semibold">

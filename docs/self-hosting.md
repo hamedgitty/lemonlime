@@ -269,6 +269,19 @@ sandbox is paused:
   wakes the sandbox; the runner picks it up when it starts. The apps do this when you
   send to a paused thread.
 
+## Secrets
+
+People add secrets (keys and tokens their agents need, like `NPM_TOKEN`) under
+**Settings → Secrets** in the dashboard, never in the chat. Each value is encrypted with
+AES-256-GCM, bound to its workspace and name, and never returned by the API. New cloud
+sandboxes get the workspace's secrets as environment variables; the runner removes
+their values from every event before anything is stored or shown.
+
+The encryption key is derived from `LEMONLIME_TOKEN_SECRET`, or set
+`LEMONLIME_SECRETS_KEY` (32 random bytes, base64: `openssl rand -base64 32`) to keep it
+separate. Changing the key makes stored secrets unreadable, so people would have to
+enter them again.
+
 ## Choosing a sandbox provider
 
 Each cloud thread gets one sandbox: `small` (1 vCPU, 2 GB) or `large`

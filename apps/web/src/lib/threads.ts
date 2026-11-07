@@ -16,6 +16,7 @@ import { getThreadForUser, listThreadsForUser } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
 import { countPendingMessages } from "./history.ts";
+import { secretsForSandbox } from "./secrets.ts";
 import { RUNNER_PORT, buildRunnerLaunch, validateCloudLaunch } from "./runner-command.ts";
 import { decideSweep, runtimeSeconds, type EndReason, type SweepThread } from "./sweep.ts";
 import { issueClientToken, threadSecret } from "./tokens.ts";
@@ -107,13 +108,18 @@ export async function threadResponse(ctx: AppContext, row: ThreadRow, userId: st
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
-async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | "repo">) {
+/**
+ * How to start a thread's runner. Secrets are only added for a new sandbox: providers keep
+ * a sandbox's environment across pauses, and changing a secret applies to new threads.
+ */
+async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | "repo" | "workspaceId">, opts: { withSecrets?: boolean } = {}) {
   return buildRunnerLaunch({
     threadId: row.id,
     agent: row.agent,
     repo: row.repo,
     controlPlaneUrl: ctx.config.runnerControlPlaneUrl(),
     threadSecret: await threadSecret(ctx.config.tokenSecret(), row.id),
+    ...(opts.withSecrets ? { secrets: await secretsForSandbox(ctx, row.workspaceId) } : {}),
   });
 }
 
@@ -176,7 +182,7 @@ export async function createThread(ctx: AppContext, userId: string, workspaceId:
     .values({ ...base, status: "provisioning", sandboxProvider: provider.name })
     .returning();
 
-  const launch = await launchFor(ctx, inserted!);
+  const launch = await launchFor(ctx, inserted!, { withSecrets: true });
   let info;
   try {
     info = await provider.create({

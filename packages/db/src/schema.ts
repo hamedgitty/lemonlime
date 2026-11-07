@@ -220,6 +220,28 @@ export const sandboxRuns = sqliteTable(
   ],
 );
 
+// ─── Secrets (environment variables for cloud sandboxes) ─────────────────────
+
+export const secrets = sqliteTable(
+  "secrets",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** Environment variable name, e.g. NPM_TOKEN. */
+    name: text("name").notNull(),
+    /** AES-256-GCM, "v1:" + base64(iv + ciphertext + tag). Never returned by the API. */
+    ciphertext: text("ciphertext").notNull(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull().$defaultFn(nowIso),
+    updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
+  },
+  t => [uniqueIndex("secrets_workspace_name_idx").on(t.workspaceId, t.name)],
+);
+
 // ─── Messages sent while a sandbox was paused ────────────────────────────────
 
 export const pendingMessages = sqliteTable(

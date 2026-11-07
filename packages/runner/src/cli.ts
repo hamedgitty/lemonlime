@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { AgentKind, branchForThread, ThreadId, type Thread } from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { GitWorkspace } from "./git.ts";
+import { secretsFromEnv } from "./redact.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
@@ -42,6 +43,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
 Environment:
   LEMONLIME_THREAD_SECRET  The thread's secret (required)
   LEMONLIME_HOME           Where worktrees and local history live (default: ~/.lemonlime)
+  LEMONLIME_REDACT_ENV     Comma-separated names of variables holding secrets; their
+                           values are removed from every event
 `;
 
 /** Split a command string into args, honouring simple quotes. */
@@ -166,6 +169,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     ...(sourceRepo ? { sourceRepo } : {}),
     checkAgentVersion: true,
     bundledSkills: !values["no-bundled-skills"],
+    redact: secretsFromEnv(),
     extraSkillDirs: (values.skills ?? []).map(d => resolve(d)),
   });
 

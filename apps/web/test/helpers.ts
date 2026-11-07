@@ -18,10 +18,13 @@ export const TEST_ENV = {
 export class FakeSandboxProvider {
   readonly name = "fake";
   readonly calls: string[] = [];
+  /** Every sandbox created, with how its runner was launched. */
+  readonly created: CreateSandboxOptions[] = [];
   private n = 0;
 
   async create(opts: CreateSandboxOptions): Promise<SandboxInfo> {
     this.calls.push(`create:${opts.threadId}`);
+    this.created.push(opts);
     return this.info(`sb-${++this.n}`);
   }
   async get(id: string): Promise<SandboxInfo | null> {

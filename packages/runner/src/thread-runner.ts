@@ -6,6 +6,7 @@ import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type Ag
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
+import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
 
 export interface ThreadRunnerOptions {
@@ -36,6 +37,8 @@ export interface ThreadRunnerOptions {
   bundledSkills?: boolean;
   /** More skill folders (each with a SKILL.md inside) to copy into the thread. */
   extraSkillDirs?: string[];
+  /** Secret values (by name) to keep out of every event. */
+  redact?: Record<string, string>;
 }
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60_000;
@@ -110,7 +113,7 @@ export class ThreadRunner {
   private readonly seen = new Set<string>();
 
   constructor(private readonly opts: ThreadRunnerOptions) {
-    this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null);
+    this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(opts.redact ?? {}));
     this.status = opts.thread.status;
     this.git = opts.git === false ? null : new GitWorkspace(opts.workdir);
   }

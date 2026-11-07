@@ -17,6 +17,8 @@ export class EventStore {
   constructor(
     readonly threadId: string,
     private readonly file: string | null,
+    /** Applied to every new event before it is stored, e.g. to remove secrets. */
+    private readonly transform: (event: NewEvent) => NewEvent = e => e,
   ) {
     if (file) {
       mkdirSync(dirname(file), { recursive: true });
@@ -41,7 +43,7 @@ export class EventStore {
   /** Assign seq + timestamp, persist, then notify subscribers. */
   append(event: NewEvent): ThreadEvent {
     const full = ThreadEvent.parse({
-      ...capEvent(event),
+      ...capEvent(this.transform(event)),
       threadId: this.threadId,
       seq: this.events.length + 1,
       at: new Date().toISOString(),

@@ -1,0 +1,67 @@
+import { describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { secrets } from "@lemonlime/db";
+import { decryptSecret, deleteSecret, encryptSecret, listSecrets, setSecret, validateSecretName } from "../src/lib/secrets.ts";
+import { createThread, resumeThread, pauseThread } from "../src/lib/threads.ts";
+import { addUser, createTestApp } from "./helpers.ts";
+
+describe("secrets", () => {
+  it("encrypts with the workspace and name bound in, so values can't be moved", async () => {
+    const { ctx } = await createTestApp();
+    const sealed = await encryptSecret(ctx, "ws-1", "NPM_TOKEN", "npm_live_value");
+    expect(sealed).toMatch(/^v1:/);
+    expect(sealed).not.toContain("npm_live_value");
+    expect(await decryptSecret(ctx, "ws-1", "NPM_TOKEN", sealed)).toBe("npm_live_value");
+    await expect(decryptSecret(ctx, "ws-1", "OTHER", sealed)).rejects.toThrow();
+    await expect(decryptSecret(ctx, "ws-2", "NPM_TOKEN", sealed)).rejects.toThrow();
+    // Same value twice gives different ciphertext (fresh IV).
+    expect(await encryptSecret(ctx, "ws-1", "NPM_TOKEN", "npm_live_value")).not.toBe(sealed);
+  });
+
+  it("validates names and never lists values", async () => {
+    expect(validateSecretName("NPM_TOKEN")).toBeNull();
+    expect(validateSecretName("npm_token")).toMatch(/capital letters/);
+    expect(validateSecretName("LEMONLIME_X")).toMatch(/LemonLime itself/);
+    expect(validateSecretName("PATH")).toMatch(/set by the sandbox/);
+
+    const { ctx, db } = await createTestApp();
+    const alice = await addUser(db, "alice@example.com");
+    await setSecret(ctx, alice.userId, alice.workspaceId, "NPM_TOKEN", "first");
+    await setSecret(ctx, alice.userId, alice.workspaceId, "NPM_TOKEN", "second");
+    const listed = await listSecrets(ctx, alice.workspaceId);
+    expect(listed.map(s => s.name)).toEqual(["NPM_TOKEN"]);
+    expect(JSON.stringify(listed)).not.toContain("second");
+    const [row] = await db.select().from(secrets).where(eq(secrets.workspaceId, alice.workspaceId));
+    expect(row!.ciphertext).not.toContain("second");
+    await expect(setSecret(ctx, alice.userId, alice.workspaceId, "bad name", "x")).rejects.toMatchObject({ status: 400 });
+    expect(await deleteSecret(ctx, alice.workspaceId, "NPM_TOKEN")).toBe(true);
+    expect(await deleteSecret(ctx, alice.workspaceId, "NPM_TOKEN")).toBe(false);
+  });
+
+  it("are given to new sandboxes, marked for redaction, and never to other workspaces", async () => {
+    const { ctx, db, sandbox } = await createTestApp();
+    const alice = await addUser(db, "alice@example.com");
+    const bob = await addUser(db, "bob@example.com");
+    await setSecret(ctx, alice.userId, alice.workspaceId, "NPM_TOKEN", "npm_secret_value");
+    await setSecret(ctx, alice.userId, alice.workspaceId, "DEPLOY_KEY", "deploy_secret_value");
+    const req = {
+      agent: { kind: "codex" as const },
+      repo: { url: "https://github.com/acme/app.git", baseBranch: "main" },
+      mode: "cloud" as const,
+      sandboxSize: "small" as const,
+    };
+    const t = await createThread(ctx, alice.userId, alice.workspaceId, req);
+    const env = sandbox.created[0]!.runner.env;
+    expect(env).toMatchObject({ NPM_TOKEN: "npm_secret_value", DEPLOY_KEY: "deploy_secret_value", LEMONLIME_REDACT_ENV: "DEPLOY_KEY,NPM_TOKEN" });
+    expect(env.LEMONLIME_THREAD_SECRET).toBeTruthy();
+
+    await createThread(ctx, bob.userId, bob.workspaceId, req);
+    expect(sandbox.created[1]!.runner.env.NPM_TOKEN).toBeUndefined();
+    expect(sandbox.created[1]!.runner.env.LEMONLIME_REDACT_ENV).toBeUndefined();
+
+    // Resuming doesn't re-send them; the sandbox kept its environment.
+    await pauseThread(ctx, alice.userId, t.thread.id);
+    await resumeThread(ctx, alice.userId, t.thread.id);
+    expect(sandbox.created).toHaveLength(2);
+  });
+});

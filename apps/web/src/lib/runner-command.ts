@@ -67,11 +67,18 @@ export function buildRunnerCommand(input: RunnerCommandInput): string {
 }
 
 /** Everything a SandboxProvider needs to start (or restart) the runner for a thread. */
-export function buildRunnerLaunch(input: RunnerCommandInput & { threadSecret: string }): RunnerLaunch {
+export function buildRunnerLaunch(input: RunnerCommandInput & { threadSecret: string; secrets?: Record<string, string> }): RunnerLaunch {
+  const secrets = input.secrets ?? {};
+  const names = Object.keys(secrets).sort();
   return {
     command: buildRunnerCommand(input),
     port: input.port ?? RUNNER_PORT,
-    env: { LEMONLIME_THREAD_SECRET: input.threadSecret },
+    env: {
+      ...secrets,
+      // Which variables hold secrets, so the runner keeps their values out of every event.
+      ...(names.length ? { LEMONLIME_REDACT_ENV: names.join(",") } : {}),
+      LEMONLIME_THREAD_SECRET: input.threadSecret,
+    },
   };
 }
 

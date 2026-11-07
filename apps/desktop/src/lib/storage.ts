@@ -119,7 +119,7 @@ export function forgetEvents(threadId: string): void {
 
 const KEY_UI = "lemonlime:ui";
 
-export const NAV_ITEMS = ["new", "search"] as const;
+export const NAV_ITEMS = ["new", "search", "automations"] as const;
 export type NavItem = (typeof NAV_ITEMS)[number];
 
 export const UiPrefs = z.object({

@@ -70,6 +70,24 @@ export class CloudApi {
     return parseWithEndpoint(await this.request("POST", "/api/threads", body));
   }
 
+  /** The workspace's automations (scheduled prompts that start cloud threads), with recent runs. */
+  async listAutomations(): Promise<AutomationInfo[]> {
+    const body = (await this.request("GET", "/api/automations")) as { automations?: AutomationInfo[] } | null;
+    return Array.isArray(body?.automations) ? body.automations : [];
+  }
+
+  async createAutomation(input: Omit<AutomationInfo, "id" | "enabled" | "nextRunAt" | "recentRuns"> & { enabled?: boolean }): Promise<AutomationInfo> {
+    return ((await this.request("POST", "/api/automations", input)) as { automation: AutomationInfo }).automation;
+  }
+
+  async updateAutomation(id: string, patch: Partial<Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name">>): Promise<AutomationInfo> {
+    return ((await this.request("PATCH", `/api/automations/${encodeURIComponent(id)}`, patch)) as { automation: AutomationInfo }).automation;
+  }
+
+  async deleteAutomation(id: string): Promise<void> {
+    await this.request("DELETE", `/api/automations/${encodeURIComponent(id)}`);
+  }
+
   async pauseThread(id: string): Promise<void> {
     await this.request("POST", `/api/threads/${encodeURIComponent(id)}/pause`);
   }
@@ -121,7 +139,7 @@ export class CloudApi {
     return r.success ? r.data : null;
   }
 
-  private async request(method: "GET" | "POST", path: string, body?: unknown): Promise<unknown> {
+  private async request(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<unknown> {
     if (!this.base) throw new CloudError("Add a control plane URL in Settings first.", 0);
     let res: Response;
     try {
@@ -198,4 +216,18 @@ function parseWithEndpoint(body: unknown): ThreadWithEndpoint {
   const t = Thread.safeParse(body);
   if (t.success) return { thread: t.data, endpoint: null };
   throw new CloudError("The control plane sent a thread this app does not understand.", 200);
+}
+
+export interface AutomationInfo {
+  id: string;
+  name: string;
+  schedule: string;
+  timezone: string;
+  agent: { kind: "claude-code" | "codex" | "opencode" | "acp"; model?: string; reasoning?: string };
+  repo: { url: string; baseBranch: string };
+  sandboxSize?: "small" | "large";
+  prompt: string;
+  enabled: boolean;
+  nextRunAt: string | null;
+  recentRuns?: { id: string; status: "started" | "skipped" | "failed"; ranAt: string; threadId: string | null; detail: string | null }[];
 }

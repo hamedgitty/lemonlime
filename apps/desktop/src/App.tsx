@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
 import { branchForThread, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
+import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
 import { TipProvider } from "./components/primitives.tsx";
 import { SettingsSidebar, SettingsView, type SettingsPage } from "./components/SettingsView.tsx";
@@ -41,7 +42,7 @@ import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from 
 
 type Selection = { mode: "local" | "cloud"; id: string };
 /** Where the app is. Back and forward move through these. */
-type Place = { view: "home" } | { view: "thread"; selection: Selection } | { view: "settings"; page: SettingsPage };
+type Place = { view: "home" } | { view: "thread"; selection: Selection } | { view: "settings"; page: SettingsPage } | { view: "automations" };
 
 const CLOUD_REFRESH_MS = 15_000;
 const RUNNER_POLL_MS = 5_000;
@@ -503,6 +504,7 @@ export function App() {
         onPrefs={onPrefs}
         onSelect={(t: ThreadSummary) => go({ view: "thread", selection: { mode: t.mode, id: t.id } })}
         onNew={() => go({ view: "home" })}
+        onAutomations={() => go({ view: "automations" })}
         onSettings={page => go({ view: "settings", page: (page as SettingsPage) ?? "account" })}
         onBack={back}
         onForward={forward}
@@ -570,7 +572,16 @@ export function App() {
             </div>
           )}
           <div className="flex min-h-0 flex-1">
-            {place.view === "settings" ? (
+            {place.view === "automations" ? (
+              <AutomationsView
+                cloudApi={cloudApi}
+                onConnectCloud={() => go({ view: "settings", page: "account" })}
+                onOpenThread={id => {
+                  void refreshCloud();
+                  go({ view: "thread", selection: { mode: "cloud", id } });
+                }}
+              />
+            ) : place.view === "settings" ? (
               <SettingsView page={place.page} settings={settings} onSave={saveAll} prefs={prefs} onPrefs={onPrefs} justSignedIn={signedIn} />
             ) : place.view === "thread" && selectedEntry ? (
               <ThreadView

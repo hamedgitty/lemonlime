@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
+  AlarmClock,
   Archive,
   ArchiveRestore,
   ArrowDownUp,
@@ -25,7 +26,7 @@ import {
 } from "lucide-react";
 import type { ThreadSummary } from "../lib/threads.ts";
 import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/format.ts";
-import type { NavItem, UiPrefs } from "../lib/storage.ts";
+import { NAV_ITEMS, type NavItem, type UiPrefs } from "../lib/storage.ts";
 import { Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip } from "./primitives.tsx";
 import { LogoMark, Spinner, StatusDot, cx } from "./ui.tsx";
 
@@ -39,6 +40,7 @@ export interface AppSidebarProps {
   onPrefs: (patch: Partial<UiPrefs>) => void;
   onSelect: (t: ThreadSummary) => void;
   onNew: () => void;
+  onAutomations: () => void;
   onSettings: (page?: string) => void;
   onBack: (() => void) | null;
   onForward: (() => void) | null;
@@ -54,6 +56,7 @@ export interface AppSidebarProps {
 const NAV: Record<NavItem, { label: string; icon: typeof SquarePen; shortcut: string }> = {
   new: { label: "New thread", icon: SquarePen, shortcut: "⌘ N" },
   search: { label: "Search threads", icon: Search, shortcut: "⌘ K" },
+  automations: { label: "Automations", icon: AlarmClock, shortcut: "" },
 };
 
 const ROW = "flex h-[30px] w-full items-center gap-2.5 rounded-lg px-2 text-left text-[14px] text-ink transition-colors duration-100 hover:bg-cream-hover";
@@ -62,7 +65,9 @@ export function AppSidebar(p: AppSidebarProps) {
   const [customizing, setCustomizing] = useState(false);
   const [query, setQuery] = useState("");
   const [threadsOpen, setThreadsOpen] = useState(true);
-  const visibleNav = p.prefs.navOrder.filter(i => !p.prefs.hiddenNav.includes(i));
+  // Items added since the order was saved go at the end.
+  const order = [...p.prefs.navOrder, ...NAV_ITEMS.filter(i => !p.prefs.navOrder.includes(i))];
+  const visibleNav = order.filter(i => !p.prefs.hiddenNav.includes(i));
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -81,7 +86,7 @@ export function AppSidebar(p: AppSidebarProps) {
     [filtered, p.prefs],
   );
 
-  const navAction = (item: NavItem) => (item === "new" ? p.onNew() : p.onSearchOpen(!p.searchOpen));
+  const navAction = (item: NavItem) => (item === "new" ? p.onNew() : item === "automations" ? p.onAutomations() : p.onSearchOpen(!p.searchOpen));
 
   return (
     <nav aria-label="LemonLime" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">

@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ArrowLeft, BookOpen, Bot, Check, Cloud, Eye, EyeOff, Keyboard, Package, Palette, Search, Settings as SettingsIcon, UserRound } from "lucide-react";
-import { CloudApi, CloudError, normalizeBaseUrl } from "../lib/cloud.ts";
+import { CloudApi, CloudError, normalizeBaseUrl, type CloudWorkspace } from "../lib/cloud.ts";
 import { AGENT_LABELS } from "../lib/format.ts";
 import { startBrowserSignIn } from "../lib/desktopAuth.ts";
 import { checkForUpdate, type AvailableUpdate } from "../lib/updates.ts";
 import { addSkillFromFolder, confirmAction, inDesktopShell, listSkills, removeSkill, skillsFolder, type SkillInfo } from "../lib/native.ts";
 import { NAV_ITEMS, type Settings, type UiPrefs } from "../lib/storage.ts";
 import { Kbd, Toggle } from "./primitives.tsx";
-import { Button, SegmentedControl, Spinner, TextInput, cx, openExternal } from "./ui.tsx";
+import { Button, SegmentedControl, Spinner, TextInput, cx, inputClass, openExternal } from "./ui.tsx";
 
 export type SettingsPage = "account" | "general" | "agents" | "skills" | "appearance" | "keyboard" | "updates";
 
@@ -220,6 +220,41 @@ function useSaved(): [boolean, () => void] {
 
 // ── Pages ────────────────────────────────────────────────────
 
+/** For people in more than one workspace (their own and a team's): which one cloud threads use. */
+function WorkspacePicker({ settings, onSave }: { settings: Settings; onSave: (s: Settings) => void }) {
+  const [workspaces, setWorkspaces] = useState<CloudWorkspace[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    new CloudApi({ url: settings.controlPlaneUrl, token: settings.accessToken })
+      .listWorkspaces()
+      .then(list => live && setWorkspaces(list))
+      .catch(() => live && setWorkspaces([]));
+    return () => {
+      live = false;
+    };
+  }, [settings.controlPlaneUrl, settings.accessToken]);
+  if (!workspaces || workspaces.length < 2) return null;
+  const current = workspaces.some(w => w.id === settings.cloudWorkspaceId) ? settings.cloudWorkspaceId : workspaces[0]!.id;
+  return (
+    <Section title="Workspace" description="Cloud threads, automations, secrets and repositories belong to a workspace. Teammates in the same one share them.">
+      <Row label="Work in" htmlFor="cloud-workspace">
+        <select
+          id="cloud-workspace"
+          className={cx(inputClass, "w-[280px]")}
+          value={current}
+          onChange={e => onSave({ ...settings, cloudWorkspaceId: e.target.value === workspaces[0]!.id ? "" : e.target.value })}
+        >
+          {workspaces.map(w => (
+            <option key={w.id} value={w.id}>
+              {w.personal ? `${w.name} (personal)` : w.name}
+            </option>
+          ))}
+        </select>
+      </Row>
+    </Section>
+  );
+}
+
 function AccountPage({ settings, onSave, justSignedIn }: { settings: Settings; onSave: (s: Settings) => void; justSignedIn: boolean }) {
   const [url, setUrl] = useState(settings.controlPlaneUrl);
   const [token, setToken] = useState(settings.accessToken);
@@ -276,6 +311,7 @@ function AccountPage({ settings, onSave, justSignedIn }: { settings: Settings; o
           )}
         </p>
       </div>
+      {connected && <WorkspacePicker settings={settings} onSave={onSave} />}
       <Section title="Sign in" description="The quickest way: approve this computer in your browser, and LemonLime keeps the sign-in in your system keychain.">
         <Row
           label="Sign in with your browser"

@@ -37,6 +37,24 @@ describe("CloudApi", () => {
     expect(auth).toBe("Bearer tok");
   });
 
+  it("works in the chosen workspace, and lists workspaces without one", async () => {
+    const urls: string[] = [];
+    const fetcher = async (url: string) => {
+      urls.push(url);
+      return new Response(
+        JSON.stringify(url.includes("/api/workspaces") ? { workspaces: [{ id: "w1", name: "Me", personal: true, role: "owner" }] } : { threads: [] }),
+        { status: 200 },
+      );
+    };
+    const api = new CloudApi({ url: "http://cp.test", token: "tok", workspaceId: "team 1" }, fetcher);
+    await api.listThreads();
+    await api.history("thread-0001", 5).catch(() => undefined);
+    expect(await api.listWorkspaces()).toEqual([{ id: "w1", name: "Me", personal: true, role: "owner" }]);
+    expect(urls[0]).toBe("http://cp.test/api/threads?workspace=team%201");
+    expect(urls[1]).toBe("http://cp.test/api/threads/thread-0001/events?after=5&workspace=team%201");
+    expect(urls[2]).toBe("http://cp.test/api/workspaces");
+  });
+
   it("turns a 402 into a policy denial", async () => {
     const api = new CloudApi(
       { url: "http://cp.test", token: "t" },

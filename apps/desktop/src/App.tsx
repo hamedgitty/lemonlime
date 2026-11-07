@@ -156,8 +156,11 @@ export function App() {
 
   const cloudConfigured = isCloudConfigured(settings);
   const cloudApi = useMemo(
-    () => (cloudConfigured ? new CloudApi({ url: settings.controlPlaneUrl, token: settings.accessToken }) : null),
-    [cloudConfigured, settings.controlPlaneUrl, settings.accessToken],
+    () =>
+      cloudConfigured
+        ? new CloudApi({ url: settings.controlPlaneUrl, token: settings.accessToken, workspaceId: settings.cloudWorkspaceId || undefined })
+        : null,
+    [cloudConfigured, settings.controlPlaneUrl, settings.accessToken, settings.cloudWorkspaceId],
   );
 
   useEffect(() => saveLocalThreads(localThreads), [localThreads]);

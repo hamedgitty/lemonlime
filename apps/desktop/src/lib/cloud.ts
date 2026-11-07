@@ -16,6 +16,15 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 export interface CloudConfig {
   url: string;
   token: string;
+  /** Which workspace to work in; unset means the account's personal one. */
+  workspaceId?: string;
+}
+
+export interface CloudWorkspace {
+  id: string;
+  name: string;
+  personal: boolean;
+  role: "owner" | "member";
 }
 
 export class CloudError extends Error {
@@ -54,6 +63,12 @@ export class CloudApi {
     private readonly fetchImpl: FetchLike = defaultFetch,
   ) {
     this.base = normalizeBaseUrl(cfg.url);
+  }
+
+  /** The workspaces this account belongs to, personal one first. */
+  async listWorkspaces(): Promise<CloudWorkspace[]> {
+    const body = (await this.request("GET", "/api/workspaces", undefined, false)) as { workspaces?: CloudWorkspace[] } | null;
+    return Array.isArray(body?.workspaces) ? body.workspaces : [];
   }
 
   async listThreads(): Promise<Thread[]> {
@@ -139,11 +154,13 @@ export class CloudApi {
     return r.success ? r.data : null;
   }
 
-  private async request(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<unknown> {
+  private async request(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, body?: unknown, inWorkspace = true): Promise<unknown> {
     if (!this.base) throw new CloudError("Add a control plane URL in Settings first.", 0);
+    // The control plane reads ?workspace= on every route that works in one.
+    const ws = inWorkspace && this.cfg.workspaceId ? `${path.includes("?") ? "&" : "?"}workspace=${encodeURIComponent(this.cfg.workspaceId)}` : "";
     let res: Response;
     try {
-      res = await this.fetchImpl(this.base + path, {
+      res = await this.fetchImpl(this.base + path + ws, {
         method,
         headers: {
           Authorization: `Bearer ${this.cfg.token}`,

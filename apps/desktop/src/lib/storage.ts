@@ -18,6 +18,8 @@ export const Settings = z.object({
   controlPlaneUrl: z.string().default(""),
   /** Personal access token for the control plane. */
   accessToken: z.string().default(""),
+  /** Which of the account's workspaces cloud threads live in. Empty means the personal one. */
+  cloudWorkspaceId: z.string().default(""),
 });
 export type Settings = z.infer<typeof Settings>;
 

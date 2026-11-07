@@ -43,6 +43,13 @@ export class GitWorkspace {
       await run("git", [...helper, "clone", "--no-single-branch", repoUrl, "."], { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
     } else if (!existsSync(join(this.dir, ".git"))) {
       await this.git(["init", "-q"]);
+      // Not empty (the runner's own data folder can be in here already), so clone by hand:
+      // `git clone` refuses a folder with anything in it.
+      if (repoUrl) {
+        await this.git(["remote", "add", "origin", repoUrl]);
+        await run("git", [...helper, "fetch", "-q", "origin"], { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
+        await this.git(["remote", "set-head", "origin", "--auto"], { allowFail: true });
+      }
     }
     // Later fetches and pushes, by the runner or the agent, use the same helper. The
     // empty value first clears any helper inherited from system or global config.
@@ -170,12 +177,13 @@ export class GitWorkspace {
       await this.git(["checkout", "-q", branch]);
       return;
     }
-    if (!(await this.hasCommits())) {
+    const from = await this.resolveBase(base);
+    if (from === "HEAD" && !(await this.hasCommits())) {
       // Brand-new repo: create the branch as an orphan so the first commit lands on it.
       await this.git(["checkout", "-q", "--orphan", branch]);
       return;
     }
-    await this.git(["checkout", "-q", "-b", branch, await this.resolveBase(base)]);
+    await this.git(["checkout", "-q", "-b", branch, from]);
   }
 
   /** Stage everything and describe what changed since the last commit. */

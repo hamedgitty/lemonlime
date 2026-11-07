@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -21,6 +21,31 @@ const git = (dir: string, ...a: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: dir })
     .toString()
     .trim();
+
+function thread(id: string): Thread {
+  const now = new Date().toISOString();
+  return {
+    id,
+    title: "",
+    agent: { kind: "claude-code" },
+    repo: { url: "x", baseBranch: "main" },
+    branch: branchForThread(id),
+    mode: "cloud",
+    status: "provisioning",
+    sandboxSize: "small",
+    latestSeq: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+const editing: AgentAdapter = {
+  kind: "claude-code",
+  createSession: opts => ({
+    runTurn: async ctx => writeFileSync(join(opts.cwd, "notes.md"), `${ctx.prompt}\n`),
+    saveState: () => ({}),
+    dispose: async () => {},
+  }),
+};
 
 describe("git credential helper", () => {
   it("hands git a fresh token from the control plane, and nothing when there is none", async () => {
@@ -62,31 +87,6 @@ describe("git credential helper", () => {
 });
 
 describe("pushing the thread branch", () => {
-  function thread(id: string): Thread {
-    const now = new Date().toISOString();
-    return {
-      id,
-      title: "",
-      agent: { kind: "claude-code" },
-      repo: { url: "x", baseBranch: "main" },
-      branch: branchForThread(id),
-      mode: "cloud",
-      status: "provisioning",
-      sandboxSize: "small",
-      latestSeq: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-  }
-  const editing: AgentAdapter = {
-    kind: "claude-code",
-    createSession: opts => ({
-      runTurn: async ctx => writeFileSync(join(opts.cwd, "notes.md"), `${ctx.prompt}\n`),
-      saveState: () => ({}),
-      dispose: async () => {},
-    }),
-  };
-
   it("pushes after every turn that commits, and says so when it can't", async () => {
     const origin = temp();
     git(origin, "init", "-q", "--bare", "-b", "main");
@@ -126,5 +126,31 @@ describe("pushing the thread branch", () => {
     const notice = runner.store.since(0).find(e => e.type === "notice" && e.code === "push_failed");
     expect(notice).toBeDefined();
     expect(git(work, "log", "-1", "--format=%s")).toBe("second");
+  });
+});
+
+describe("cloning the thread's repository", () => {
+  it("clones even when the runner's data folder is already in the working folder (as in a sandbox)", async () => {
+    const origin = temp();
+    git(origin, "init", "-q", "-b", "main");
+    writeFileSync(join(origin, "README.md"), "hello\n");
+    git(origin, "add", "-A");
+    git(origin, "commit", "-qm", "init");
+    const work = temp();
+    const runner = new ThreadRunner({
+      thread: { ...thread("clone-thread-1"), repo: { url: origin, baseBranch: "main" } },
+      workdir: work,
+      // The default for sandboxes: history and state inside the working folder.
+      dataDir: join(work, ".lemonlime"),
+      adapter: editing,
+      session: { autonomy: "full" },
+      repoUrl: origin,
+      bundledSkills: false,
+    });
+    await runner.init();
+    cleanups.push(() => runner.close());
+    expect(readFileSync(join(work, "README.md"), "utf8")).toBe("hello\n");
+    expect(git(work, "branch", "--show-current")).toBe("agent/clone-thread-1");
+    expect(git(work, "log", "-1", "--format=%s")).toBe("init");
   });
 });

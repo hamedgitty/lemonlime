@@ -79,10 +79,13 @@ execFileSync(process.execPath, ["--experimental-sea-config", join(work, "sea-con
 copyFileSync(process.execPath, out);
 const mac = process.platform === "darwin";
 if (mac) execFileSync("codesign", ["--remove-signature", out]);
-const postject = join(pkg, "node_modules", ".bin", process.platform === "win32" ? "postject.cmd" : "postject");
+// Run postject's script with node itself: Windows won't start the .bin/postject.cmd shim
+// without a shell (EINVAL), and this works the same everywhere.
+const postject = join(pkg, "node_modules", "postject", "dist", "cli.js");
 execFileSync(
-  postject,
+  process.execPath,
   [
+    postject,
     out,
     "NODE_SEA_BLOB",
     join(work, "sea.blob"),

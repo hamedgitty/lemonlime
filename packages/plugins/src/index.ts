@@ -4,11 +4,33 @@ import { emptyBillingUI, type BillingUI } from "./billing-ui.ts";
 export * from "./usage-policy.ts";
 export * from "./billing-ui.ts";
 
+/** Things that happen in the control plane a deployment may want to act on. */
+export interface PluginEvents {
+  /** A person signed in for the first time and got their personal workspace. */
+  onUserCreated?(user: { userId: string; email: string | null; workspaceId: string }): Promise<void>;
+}
+
 /** A deployment's hooks. */
 export interface LemonLimePlugin {
   name: string;
   usagePolicy?: UsagePolicy;
   billingUI?: BillingUI;
+  events?: PluginEvents;
+}
+
+/** An email a plugin can send through the control plane's own email setup. */
+export interface PluginEmail {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+}
+
+/** What the control plane offers plugins at runtime. */
+export interface PluginServices {
+  sendEmail(message: PluginEmail): Promise<void>;
+  /** A user's email address, or null. */
+  userEmail(userId: string): Promise<string | null>;
 }
 
 /**
@@ -19,6 +41,8 @@ export interface LemonLimePlugin {
  */
 export interface PluginContext {
   env: Record<string, unknown>;
+  /** Email and user lookups. Absent in contexts that can't provide them (e.g. some tests). */
+  services?: PluginServices;
 }
 
 /** A plugin module's default export: a plugin, or a factory that builds one from the runtime context. */
@@ -29,6 +53,7 @@ export interface ResolvedPlugin {
   name: string;
   usagePolicy: UsagePolicy;
   billingUI: BillingUI;
+  events: PluginEvents;
 }
 
 export function definePlugin<T extends PluginExport>(plugin: T): T {
@@ -39,6 +64,7 @@ export const defaultPlugin: ResolvedPlugin = {
   name: "default",
   usagePolicy: allowAllPolicy,
   billingUI: emptyBillingUI,
+  events: {},
 };
 
 /** Build the plugin (calling the factory if needed) and fill missing hooks with the free defaults. */
@@ -50,6 +76,7 @@ export function resolvePlugin(plugin: PluginExport | null | undefined, ctx: Plug
     name: p.name,
     usagePolicy: p.usagePolicy ?? allowAllPolicy,
     billingUI: p.billingUI ?? emptyBillingUI,
+    events: p.events ?? {},
   };
 }
 

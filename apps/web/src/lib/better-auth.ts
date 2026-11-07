@@ -86,7 +86,11 @@ export function createAuth(ctx: AppContext) {
       user: {
         create: {
           async after(created) {
-            await createPersonalWorkspace(ctx.db, created.id, created.email);
+            const workspaceId = await createPersonalWorkspace(ctx.db, created.id, created.email);
+            // A deployment's welcome email or similar; it must never stop someone signing up.
+            await ctx.plugin.events
+              .onUserCreated?.({ userId: created.id, email: created.email ?? null, workspaceId })
+              .catch(err => console.error("[lemonlime] onUserCreated failed:", err));
           },
         },
       },

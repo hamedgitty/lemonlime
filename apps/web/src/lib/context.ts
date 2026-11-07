@@ -1,5 +1,6 @@
-import { createD1Db, type D1Binding, type Db } from "@lemonlime/db";
-import { resolvePlugin, type ResolvedPlugin } from "@lemonlime/plugins";
+import { createD1Db, user, type D1Binding, type Db } from "@lemonlime/db";
+import { resolvePlugin, type PluginServices, type ResolvedPlugin } from "@lemonlime/plugins";
+import { eq } from "drizzle-orm";
 import { createSandboxProvider, type SandboxProvider } from "@lemonlime/sandbox";
 import pluginExport from "@lemonlime/deployment-plugin";
 import { createEmailSender, type EmailSender, type SendEmailBinding } from "./email.ts";
@@ -90,6 +91,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
   const vars = stringVars(opts.env);
   const production = opts.production ?? vars.NODE_ENV === "production";
   const binding = isSendEmailBinding(opts.env.EMAIL) ? opts.env.EMAIL : null;
+  const email = opts.email ?? createEmailSender({ vars, binding, production });
   let provider: SandboxProvider | null = null;
   return {
     runtime: opts.runtime,
@@ -97,8 +99,8 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
     env: opts.env,
     db: opts.db,
     production,
-    plugin: opts.plugin ?? resolvePlugin(pluginExport, { env: opts.env }),
-    email: opts.email ?? createEmailSender({ vars, binding, production }),
+    plugin: opts.plugin ?? resolvePlugin(pluginExport, { env: opts.env, services: pluginServices(opts.db, () => email) }),
+    email,
     sandbox:
       opts.sandbox ??
       (() => {
@@ -117,6 +119,20 @@ export function createWorkersContext(env: Record<string, unknown>): AppContext {
   // Treated as production unless NODE_ENV=development is set (e.g. in .dev.vars for `wrangler dev`).
   const production = env.NODE_ENV !== "development";
   return createAppContext({ runtime: "workers", env, db: createD1Db(binding), production });
+}
+
+const textToHtml = (text: string) =>
+  `<p>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
+
+/** Email and user lookups for plugins, using this deployment's own email setup. */
+function pluginServices(db: Db, email: () => EmailSender): PluginServices {
+  return {
+    sendEmail: m => email().send({ to: m.to, subject: m.subject, text: m.text, html: m.html ?? textToHtml(m.text) }),
+    async userEmail(userId) {
+      const [row] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId));
+      return row?.email ?? null;
+    },
+  };
 }
 
 function isSendEmailBinding(value: unknown): value is SendEmailBinding {

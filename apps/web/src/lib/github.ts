@@ -159,8 +159,10 @@ export function installUrl(cfg: GitHubAppConfig, state: string): string {
 
 /**
  * Link an installation to a workspace, but only if the person who came back from GitHub
- * can really see it: GitHub's redirect carries an installation id anyone could change,
- * so we exchange the OAuth `code` for their token and look the id up in their own list.
+ * administers it: GitHub's redirect carries an installation id anyone could change, so we
+ * exchange the OAuth `code` for their token and look the id up in their own list. Being in
+ * that list isn't enough (read-only org members are), so they must also own the account
+ * the app is installed on, or be an admin of that organization.
  */
 export async function linkInstallation(
   ctx: AppContext,
@@ -174,10 +176,25 @@ export async function linkInstallation(
   });
   const { access_token: userToken } = (await tokenRes.json().catch(() => ({}))) as { access_token?: string };
   if (!userToken) throw new HttpError(400, "GitHub didn't confirm who you are. Try connecting again.");
-  const mine = await gh<{ installations?: { id: number; account?: { login?: string } }[] }>(cfg, "/user/installations?per_page=100", `Bearer ${userToken}`);
+  const auth = `Bearer ${userToken}`;
+  const mine = await gh<{ installations?: { id: number; account?: { login?: string; id?: number; type?: string } }[] }>(
+    cfg,
+    "/user/installations?per_page=100",
+    auth,
+  );
   const found = mine.data.installations?.find(i => String(i.id) === opts.installationId);
-  if (!found) throw new HttpError(403, "That GitHub installation isn't one you can manage.");
-  const accountLogin = found.account?.login ?? "unknown";
+  const notYours = new HttpError(403, "That GitHub installation isn't one you can manage.");
+  if (!found?.account?.login) throw notYours;
+  const accountLogin = found.account.login;
+  if (found.account.type === "Organization") {
+    const m = await gh<{ role?: string; state?: string }>(cfg, `/user/memberships/orgs/${encodeURIComponent(accountLogin)}`, auth);
+    if (m.status !== 200 || m.data.role !== "admin" || m.data.state !== "active") {
+      throw new HttpError(403, `Only an owner of the ${accountLogin} organization on GitHub can connect it.`);
+    }
+  } else {
+    const me = await gh<{ id?: number }>(cfg, "/user", auth);
+    if (me.status !== 200 || me.data.id === undefined || me.data.id !== found.account.id) throw notYours;
+  }
   const [existing] = await ctx.db.select().from(githubInstallations).where(eq(githubInstallations.id, opts.installationId));
   if (existing && existing.workspaceId !== opts.workspaceId) throw new HttpError(409, "That GitHub installation is already connected to another workspace.");
   await ctx.db

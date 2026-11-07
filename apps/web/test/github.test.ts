@@ -81,7 +81,8 @@ describe("GitHub app", () => {
     const bob = await addUser(db, "bob@example.com");
     fakeGitHub({
       "POST /login/oauth/access_token": [200, { access_token: "ghu_user" }],
-      "GET /user/installations?per_page=100": [200, { installations: [{ id: 777, account: { login: "acme" } }] }],
+      "GET /user/installations?per_page=100": [200, { installations: [{ id: 777, account: { login: "acme", id: 50, type: "Organization" } }] }],
+      "GET /user/memberships/orgs/acme": [200, { role: "admin", state: "active" }],
     });
     await expect(linkInstallation(ctx, cfg, { workspaceId: alice.workspaceId, userId: alice.userId, installationId: "999", code: "c" })).rejects.toMatchObject({
       status: 403,
@@ -92,6 +93,32 @@ describe("GitHub app", () => {
     await expect(linkInstallation(ctx, cfg, { workspaceId: bob.workspaceId, userId: bob.userId, installationId: "777", code: "c" })).rejects.toMatchObject({
       status: 409,
     });
+  });
+
+  it("refuses people who can see an installation but don't administer its account", async () => {
+    const { ctx, db } = await createTestApp();
+    const cfg = githubAppConfig(VARS)!;
+    const mallory = await addUser(db, "mallory@example.com");
+    const link = (id: string) => linkInstallation(ctx, cfg, { workspaceId: mallory.workspaceId, userId: mallory.userId, installationId: id, code: "c" });
+    fakeGitHub({
+      "POST /login/oauth/access_token": [200, { access_token: "ghu_member" }],
+      "GET /user/installations?per_page=100": [
+        200,
+        {
+          installations: [
+            { id: 777, account: { login: "acme", id: 50, type: "Organization" } },
+            { id: 888, account: { login: "someone", id: 60, type: "User" } },
+            { id: 999, account: { login: "mallory", id: 70, type: "User" } },
+          ],
+        },
+      ],
+      // A plain member of acme, and a collaborator on someone's repos.
+      "GET /user/memberships/orgs/acme": [200, { role: "member", state: "active" }],
+      "GET /user": [200, { id: 70, login: "mallory" }],
+    });
+    await expect(link("777")).rejects.toMatchObject({ status: 403 });
+    await expect(link("888")).rejects.toMatchObject({ status: 403 });
+    expect(await link("999")).toEqual({ accountLogin: "mallory" });
   });
 
   it("mints repo-scoped tokens only for the workspace that linked the repo, and opens pull requests", async () => {
@@ -111,7 +138,8 @@ describe("GitHub app", () => {
 
     const calls = fakeGitHub({
       "POST /login/oauth/access_token": [200, { access_token: "ghu_user" }],
-      "GET /user/installations?per_page=100": [200, { installations: [{ id: 777, account: { login: "acme" } }] }],
+      "GET /user/installations?per_page=100": [200, { installations: [{ id: 777, account: { login: "acme", id: 50, type: "Organization" } }] }],
+      "GET /user/memberships/orgs/acme": [200, { role: "admin", state: "active" }],
       "GET /repos/acme/app/installation": [200, { id: 777 }],
       "POST /app/installations/777/access_tokens": [201, { token: "ghs_repo", expires_at: "2026-01-01T01:00:00Z" }],
       "POST /repos/acme/app/pulls": [422, { message: "Validation Failed", errors: [{ message: "A pull request already exists for acme:agent/x." }] }],

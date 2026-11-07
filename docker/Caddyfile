@@ -1,0 +1,20 @@
+# Reverse proxy for self-hosting with compose.yaml. Serves the dashboard and, under
+# /sandbox/<container>/, each cloud thread's runner, so apps reach runners over the
+# same HTTPS address. Only containers named lemonlime-<thread id> on the runner port
+# are reachable, never anything else on the network.
+#
+# LEMONLIME_SITE_ADDRESS: your domain (e.g. lemonlime.example.com) for automatic HTTPS,
+# or :80 for plain HTTP on a private network.
+{$LEMONLIME_SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/.*)$
+	handle @runner {
+		rewrite * {re.runner.2}
+		reverse_proxy {re.runner.1}:7420
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

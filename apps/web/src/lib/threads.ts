@@ -103,7 +103,7 @@ async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | 
     threadId: row.id,
     agent: row.agent,
     repo: row.repo,
-    controlPlaneUrl: ctx.config.publicUrl(),
+    controlPlaneUrl: ctx.config.runnerControlPlaneUrl(),
     threadSecret: await threadSecret(ctx.config.tokenSecret(), row.id),
   });
 }

@@ -14,7 +14,7 @@ browser / desktop ──(WebSocket + client token)──▶ runner (in the sandb
                           └──▶ SandboxProvider: docker | daytona | e2b
 ```
 
-It runs in one of two ways:
+It runs in one of two ways (plus a ready-made Docker Compose setup of B, section C):
 
 | | **A. Cloudflare Workers + D1** | **B. Any Node server + SQLite file** |
 | --- | --- | --- |
@@ -188,6 +188,45 @@ For example, a crontab entry:
 A systemd timer or a Kubernetes CronJob works just as well. The response lists
 what was checked and paused. (On Workers the cron trigger runs the same sweep
 directly; you do not need this route there.)
+
+## C. Docker Compose on one server
+
+`compose.yaml` runs everything on one machine: the dashboard on Node with a SQLite
+file, [Caddy](https://caddyserver.com) in front of it with automatic HTTPS, the idle
+sweep once a minute, and every cloud thread as a Docker container on the same host.
+
+On a fresh **Ubuntu 24.04** server, point a domain at it and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hamedgitty/lemonlime/main/scripts/install-ubuntu.sh -o install.sh
+less install.sh                                      # read it first
+sudo bash install.sh lemonlime.example.com sign-in@example.com
+```
+
+The script installs Docker, puts LemonLime in `/opt/lemonlime`, writes `.env` with
+freshly generated secrets, builds the images and starts everything. Then add a
+`RESEND_API_KEY` to `/opt/lemonlime/.env` so sign-in codes can be emailed, and run
+`docker compose up -d` again. Running the script again updates the code and keeps your
+`.env` and data.
+
+By hand, on any machine with Docker:
+
+```bash
+cp .env.example .env          # fill in the secrets; set LEMONLIME_PUBLIC_URL and
+                              # LEMONLIME_SITE_ADDRESS (your domain, or :80 for plain HTTP)
+docker compose --profile build build
+docker compose up -d
+```
+
+How runners are reached: each sandbox joins the `lemonlime-sandboxes` network and opens
+no port on the host. Caddy forwards `/sandbox/lemonlime-<thread id>/…` to that
+container's runner, so apps talk to runners over the same HTTPS address as the
+dashboard, and only those containers on the runner port can be reached. Runners send
+heartbeats to the dashboard over the internal network (`LEMONLIME_RUNNER_CONTROL_PLANE_URL`).
+
+The dashboard container has the host's Docker socket so it can start sandboxes, which
+gives it full control of Docker on the host: use a machine dedicated to LemonLime.
+`LEMONLIME_HTTP_PORT` and `LEMONLIME_HTTPS_PORT` change the ports Caddy listens on.
 
 ## Database
 

@@ -4,7 +4,7 @@ import { E2BProvider } from "./e2b.ts";
 import type { SandboxProvider } from "./types.ts";
 
 export * from "./types.ts";
-export { DockerProvider, mapDockerState } from "./docker.ts";
+export { containerName, DockerProvider, mapDockerState } from "./docker.ts";
 export { DaytonaProvider, mapDaytonaState } from "./daytona.ts";
 export { E2BProvider, mapE2BState } from "./e2b.ts";
 export { ProviderHttpError } from "./http.ts";
@@ -26,7 +26,12 @@ export function createSandboxProvider(env: Record<string, string | undefined>): 
   };
   switch (name) {
     case "docker":
-      return new DockerProvider({ image });
+      return new DockerProvider({
+        image,
+        bindHost: env.LEMONLIME_DOCKER_BIND_HOST || undefined,
+        network: env.LEMONLIME_DOCKER_NETWORK || undefined,
+        publicUrl: env.LEMONLIME_DOCKER_PUBLIC_URL || undefined,
+      });
     case "daytona":
       return new DaytonaProvider({
         apiKey: need("DAYTONA_API_KEY"),

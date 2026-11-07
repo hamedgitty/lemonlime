@@ -1,0 +1,11 @@
+**/node_modules
+**/.next
+**/.open-next
+**/.wrangler
+**/dist
+apps/desktop/src-tauri/target
+.git
+.env
+**/.env.local
+**/.dev.vars
+data

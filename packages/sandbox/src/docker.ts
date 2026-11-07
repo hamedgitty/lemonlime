@@ -23,8 +23,22 @@ export interface DockerProviderOptions {
   image: string;
   /** Path to the docker binary. */
   docker?: string;
-  /** Host interface the runner port is published on. */
+  /** Host interface the runner port is published on (when `publicUrl` is not set). */
   bindHost?: string;
+  /** Docker network to attach sandboxes to, e.g. the one a reverse proxy shares. */
+  network?: string;
+  /**
+   * Reach runners through a reverse proxy instead of published ports: each runner's URL
+   * becomes `<publicUrl>/<container name>`, and no port is opened on the host. The proxy
+   * must route `/<container name>/…` to `<container name>:<runner port>` on `network`
+   * (see docker/Caddyfile).
+   */
+  publicUrl?: string;
+}
+
+/** Container name for a thread's sandbox. Also the path segment behind a proxy. */
+export function containerName(threadId: string): string {
+  return `lemonlime-${threadId}`;
 }
 
 /**
@@ -55,15 +69,17 @@ export class DockerProvider implements SandboxProvider {
       "run",
       "-d",
       "--name",
-      `lemonlime-${o.threadId}`,
+      containerName(o.threadId),
       "--cpus",
       String(res.vcpu),
       "--memory",
       `${res.memoryGiB}g`,
       "--restart",
       "no",
-      "-p",
-      `${this.bindHost}::${o.runner.port}`,
+      ...(this.opts.publicUrl ? [] : ["-p", `${this.bindHost}::${o.runner.port}`]),
+      ...(this.opts.network ? ["--network", this.opts.network] : []),
+      "--label",
+      `lemonlime.runner-port=${o.runner.port}`,
       ...Object.entries(labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
       ...Object.entries(o.runner.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
       this.opts.image,
@@ -101,7 +117,10 @@ export class DockerProvider implements SandboxProvider {
     const status = await this.exec(["inspect", "-f", "{{.State.Status}}", id]);
     const state = mapDockerState(status);
     let runnerUrl: string | null = null;
-    if (state === "running") {
+    if (state === "running" && this.opts.publicUrl) {
+      const name = (await this.exec(["inspect", "-f", "{{.Name}}", id])).replace(/^\//, "");
+      runnerUrl = `${this.opts.publicUrl.replace(/\/+$/, "")}/${name}`;
+    } else if (state === "running") {
       const mapped = await this.exec(["port", id, `${port}/tcp`]).catch(() => "");
       const first = mapped.split("\n")[0]?.trim();
       if (first) runnerUrl = `http://${first.replace(/^0\.0\.0\.0/, "127.0.0.1")}`;

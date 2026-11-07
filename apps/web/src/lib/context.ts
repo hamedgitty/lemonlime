@@ -30,6 +30,7 @@ export interface AppContext {
 export interface AppConfig {
   /** Public base URL of this control plane; runners send heartbeats here. */
   publicUrl(): string;
+  runnerControlPlaneUrl(): string;
   /** Master secret for runner and client tokens. */
   tokenSecret(): string;
   /** Bearer secret for /api/cron/sweep. */
@@ -51,6 +52,9 @@ export function makeConfig(vars: Record<string, string | undefined>): AppConfig 
   };
   return {
     publicUrl: () => required("LEMONLIME_PUBLIC_URL").replace(/\/+$/, ""),
+    // Where runners send heartbeats. Defaults to the public URL; set it when sandboxes
+    // reach the control plane on an internal address (e.g. http://web:3000 in docker compose).
+    runnerControlPlaneUrl: () => (vars.LEMONLIME_RUNNER_CONTROL_PLANE_URL || required("LEMONLIME_PUBLIC_URL")).replace(/\/+$/, ""),
     tokenSecret: () => required("LEMONLIME_TOKEN_SECRET"),
     cronSecret: () => required("LEMONLIME_CRON_SECRET"),
   };

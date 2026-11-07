@@ -52,8 +52,8 @@ export function Composer({
       <div className="mx-auto max-w-[860px]">
         <div
           className={cx(
-            "flex items-end gap-2 rounded-2xl border bg-white p-2 pl-4 shadow-panel transition-colors",
-            "border-line-strong focus-within:border-leaf",
+            "flex items-end gap-2 rounded-2xl border bg-white p-2 pl-4 shadow-panel transition-[border-color,box-shadow] duration-150",
+            "border-control focus-within:border-leaf focus-within:shadow-[0_0_0_1px_var(--color-leaf)]",
           )}
         >
           <label htmlFor="composer" className="sr-only">

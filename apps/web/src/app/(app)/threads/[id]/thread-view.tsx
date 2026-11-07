@@ -270,7 +270,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
           {!closed && (
             <form onSubmit={send} className="sticky bottom-0 -mx-5 border-t border-line bg-cream/95 px-5 pb-5 pt-3 backdrop-blur">
               <label htmlFor="composer" className="sr-only">Message the agent</label>
-              <div className="card flex items-end gap-2 p-2 focus-within:border-leaf focus-within:ring-2 focus-within:ring-lime/40">
+              <div className="flex items-end gap-2 rounded-xl border border-control bg-paper p-2 transition-[border-color,box-shadow] duration-150 focus-within:border-leaf focus-within:shadow-[0_0_0_1px_var(--color-leaf)]">
                 <textarea
                   id="composer"
                   rows={1}

@@ -89,10 +89,10 @@ function DiffRow({ line }: { line: DiffLine }) {
     line.kind === "add" ? "text-diff-add-strong" : line.kind === "del" ? "text-diff-del-strong" : line.kind === "note" ? "text-ink-faint italic" : "text-ink";
   return (
     <tr className={bg}>
-      <td className="w-10 select-none border-r border-line/70 px-2 text-right align-top text-ink-faint/80 tabular-nums">
+      <td className="w-10 select-none border-r border-line/70 px-2 text-right align-top text-ink-faint tabular-nums">
         {line.oldNo ?? ""}
       </td>
-      <td className="w-10 select-none border-r border-line/70 px-2 text-right align-top text-ink-faint/80 tabular-nums">
+      <td className="w-10 select-none border-r border-line/70 px-2 text-right align-top text-ink-faint tabular-nums">
         {line.newNo ?? ""}
       </td>
       <td className={cx("px-3 align-top whitespace-pre", fg)}>{line.text || " "}</td>

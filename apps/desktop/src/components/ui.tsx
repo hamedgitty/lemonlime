@@ -38,7 +38,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       ref={ref}
       type={type}
       className={cx(
-        "inline-flex shrink-0 select-none items-center justify-center font-medium whitespace-nowrap transition-colors duration-150 disabled:opacity-50",
+        "inline-flex shrink-0 select-none items-center justify-center font-medium whitespace-nowrap transition-[color,background-color,border-color,scale] duration-150 ease-(--ease-out) active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50",
         VARIANTS[variant],
         SIZES[size],
         className,
@@ -104,7 +104,7 @@ export function Field({
 }
 
 export const inputClass =
-  "w-full rounded-[10px] border border-line-strong bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-faint/80 transition-colors focus:border-leaf focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-leaf/40";
+  "w-full rounded-[10px] border border-control bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-[border-color,box-shadow] duration-150 focus:border-leaf focus:shadow-[0_0_0_1px_var(--color-leaf)] focus:outline-none";
 
 export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function TextInput(
   { className, ...rest },

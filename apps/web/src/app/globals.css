@@ -8,7 +8,13 @@
   --color-leaf: #3f7a16;
   --color-paper: #ffffff;
   --color-line: #e9e3c4;
+  --color-control: #8f8a68;
   --color-muted: #5d6651;
+  --color-faint: #636d54;
+  --color-danger: #b42318;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --shadow-card: 0 0 0 1px rgb(23 32 14 / 0.07), 0 1px 2px -1px rgb(23 32 14 / 0.08), 0 2px 6px rgb(23 32 14 / 0.04);
 
   --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
@@ -42,7 +48,7 @@
 
 /* Shared building blocks, usable like any utility class. */
 @utility btn {
-  @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg px-3.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  @apply inline-flex h-9 select-none items-center justify-center gap-2 rounded-lg px-3.5 text-sm font-medium transition-[color,background-color,border-color,scale] duration-150 ease-(--ease-out) active:scale-[0.97] disabled:pointer-events-none disabled:opacity-50;
 }
 
 @utility btn-primary {
@@ -58,11 +64,11 @@
 }
 
 @utility btn-danger {
-  @apply btn border border-red-200 bg-paper text-red-700 hover:bg-red-50;
+  @apply btn border border-danger/30 bg-paper text-danger hover:bg-danger/5;
 }
 
 @utility field {
-  @apply h-10 w-full rounded-lg border border-line bg-paper px-3 text-sm text-ink placeholder:text-muted/70 focus:border-leaf focus:outline-none focus:ring-2 focus:ring-lime/40;
+  @apply h-10 w-full rounded-lg border border-control bg-paper px-3 text-sm text-ink placeholder:text-faint transition-[border-color,box-shadow] duration-150 focus:border-leaf focus:shadow-[0_0_0_1px_var(--color-leaf)] focus:outline-none;
 }
 
 @utility label {
@@ -70,5 +76,5 @@
 }
 
 @utility card {
-  @apply rounded-xl border border-line bg-paper;
+  @apply rounded-xl bg-paper shadow-(--shadow-card);
 }

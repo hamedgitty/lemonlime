@@ -16,6 +16,8 @@ export const UserMessageEvent = z.object({
   clientMsgId: z.string().optional(),
   /** The thread branch's commit when this message's turn began, for rewinding to it. */
   commit: z.string().optional(),
+  /** Files sent with the message, saved in the working folder at `path`. */
+  attachments: z.array(z.object({ id: z.string(), name: z.string(), size: z.number(), path: z.string() })).optional(),
 });
 
 export const AgentMessageEvent = z.object({
@@ -111,6 +113,8 @@ export const QueuedMessage = z.object({
   clientMsgId: z.string(),
   text: z.string(),
   queuedAt: z.string().datetime(),
+  /** Upload ids of files sent with it. */
+  attachments: z.array(z.string()).optional(),
 });
 export type QueuedMessage = z.infer<typeof QueuedMessage>;
 

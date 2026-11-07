@@ -10,6 +10,7 @@ import {
   History,
   Info,
   MoreHorizontal,
+  Paperclip,
   Trash2,
   Undo2,
   Wrench,
@@ -138,6 +139,7 @@ const Item = memo(function Item({
           at={item.at}
           pending={item.pending}
           queued={Boolean(item.queued)}
+          files={item.files}
           {...(onRewind && item.seq !== null && !item.pending
             ? { onRewind: (restore: boolean) => onRewind(item.seq!, item.text, restore), restorable: Boolean(item.restorable) }
             : {})}
@@ -232,6 +234,7 @@ function UserMessage({
   queued,
   onRewind,
   restorable,
+  files,
 }: {
   text: string;
   at: string;
@@ -239,12 +242,23 @@ function UserMessage({
   queued: boolean;
   onRewind?: (restoreFiles: boolean) => void;
   restorable?: boolean;
+  files?: string[] | undefined;
 }) {
   return (
     <div className="group flex animate-rise justify-end">
       <div className="max-w-[78%]">
         <div className={cx("rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft px-4 py-2.5 text-ink", pending && "opacity-70")}>
           <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
+          {files && files.length > 0 && (
+            <ul aria-label="Attached files" className="mt-2 flex flex-wrap gap-1">
+              {files.map(f => (
+                <li key={f} className="inline-flex h-6 max-w-[220px] items-center gap-1 rounded-md bg-white/70 px-2 text-[12.5px] text-ink-soft">
+                  <Paperclip aria-hidden="true" className="size-3 shrink-0" />
+                  <span className="truncate">{f}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
         <div className="mt-1 flex items-center justify-end gap-1 pr-1 text-xs text-ink-faint">
           {onRewind && (

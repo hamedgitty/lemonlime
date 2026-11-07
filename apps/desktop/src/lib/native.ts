@@ -16,6 +16,7 @@ export interface StartLocalRunnerArgs {
   agent: AgentKind;
   agentCommand?: string | undefined;
   model?: string | undefined;
+  reasoning?: string | undefined;
   workdir: string;
   baseBranch?: string | undefined;
   /** Path to lemonlime-runner, or empty to look it up on PATH. */
@@ -34,6 +35,7 @@ export async function startLocalRunner(args: StartLocalRunnerArgs): Promise<Loca
     agent: args.agent,
     agentCommand: args.agentCommand || null,
     model: args.model || null,
+    reasoning: args.reasoning || null,
     workdir: args.workdir,
     baseBranch: args.baseBranch || null,
     runnerPath: args.runnerPath || null,

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Bot, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Zap } from "lucide-react";
-import { SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type SandboxSize } from "@lemonlime/protocol";
+import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type ReasoningLevel, type SandboxSize } from "@lemonlime/protocol";
 import { splitCommand } from "../lib/command.ts";
 import { AGENT_LABELS, repoName } from "../lib/format.ts";
 import { inDesktopShell, inspectRepo, pickFolder } from "../lib/native.ts";
@@ -48,6 +48,8 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
   const place = prefs.lastPlace === "cloud" && cloudAvailable ? "cloud" : "local";
   const agent = prefs.lastAgent;
   const [model, setModel] = useState("");
+  const [reasoning, setReasoning] = useState<ReasoningLevel | "">("");
+  const caps = AGENT_CAPABILITIES[agent];
   const [acpCommand, setAcpCommand] = useState("");
   const [repoPath, setRepoPath] = useState(prefs.recentProjects[0] ?? "");
   const [repoUrl, setRepoUrl] = useState("");
@@ -98,6 +100,7 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
       agent,
       agentCommand: agent === "acp" ? words : undefined,
       model: model.trim() || undefined,
+      reasoning: reasoning && caps.reasoning.includes(reasoning) ? reasoning : undefined,
       baseBranch: baseBranch.trim(),
       prompt,
     };
@@ -153,8 +156,38 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
                   <p className="text-[13.5px] text-ink-soft">{AGENT_HINT[agent]}. Leave the model empty to use the agent's own default.</p>
                   <label className="block">
                     <span className="mb-1 block text-[13.5px] font-medium">Model</span>
-                    <TextInput value={model} onChange={e => setModel(e.target.value)} placeholder="Agent's default" className="font-mono text-[13px]" />
+                    <TextInput
+                      value={model}
+                      onChange={e => setModel(e.target.value)}
+                      placeholder="Agent's default"
+                      className="font-mono text-[13px]"
+                      list={caps.models.length ? "lemonlime-models" : undefined}
+                    />
+                    {caps.models.length > 0 && (
+                      <datalist id="lemonlime-models">
+                        {caps.models.map(m => (
+                          <option key={m.id} value={m.id}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </datalist>
+                    )}
                   </label>
+                  {caps.reasoning.length > 0 && (
+                    <div>
+                      <span className="mb-1 block text-[13.5px] font-medium">Thinking</span>
+                      <SegmentedControl
+                        label="Thinking"
+                        value={reasoning || "default"}
+                        onChange={v => setReasoning(v === "default" ? "" : (v as ReasoningLevel))}
+                        options={[
+                          { value: "default", label: "Default" },
+                          ...caps.reasoning.slice(0, 4).map(r => ({ value: r, label: r === "xhigh" ? "Extra high" : r[0]!.toUpperCase() + r.slice(1) })),
+                        ]}
+                      />
+                      <p className="mt-1 text-[12.5px] text-ink-faint">Fixed for this thread once it starts.</p>
+                    </div>
+                  )}
                   {agent === "acp" && (
                     <label className="block">
                       <span className="mb-1 block text-[13.5px] font-medium">Command that starts the agent</span>

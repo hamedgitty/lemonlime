@@ -1,8 +1,10 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import { parseClientMessage, parseTerminalClientMessage, verifyToken, type ServerMessage, type TerminalServerMessage } from "@lemonlime/protocol";
 import { TerminalSession, type SpawnPty } from "./terminal.ts";
+import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
+import { capabilitiesFor } from "./capabilities.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 
 export interface ServerOptions {
@@ -32,6 +34,14 @@ const TERMINAL_SLOW_MS = 10_000;
 /** HTTP health endpoint + the thread's WebSocket. */
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
+    const path = new URL(req.url ?? "/", "http://runner").pathname;
+    if (path === "/capabilities" || path.startsWith("/attachments")) {
+      void handleHttpApi(req, res, path, runner, opts).catch(() => {
+        if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "internal" }));
+      });
+      return;
+    }
     if (req.method === "GET" && (req.url === "/healthz" || req.url === "/")) {
       const t = runner.thread;
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
@@ -150,7 +160,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
     switch (msg.type) {
       case "send_message":
         try {
-          const r = runner.sendMessage(msg.text, msg.clientMsgId);
+          const r = runner.sendMessage(msg.text, msg.clientMsgId, msg.attachments ?? []);
           send({ type: "ack", clientMsgId: r.clientMsgId, result: r.result });
         } catch (err) {
           send({ type: "error", code: "internal", message: err instanceof Error ? err.message : String(err) });
@@ -299,4 +309,88 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
     clearTimeout(helloTimer);
     unsubscribe?.();
   });
+}
+
+const CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
+  "access-control-allow-headers": "authorization, content-type",
+  "access-control-max-age": "600",
+};
+
+function reply(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...CORS });
+  res.end(JSON.stringify(body));
+}
+
+/** The body, up to `max` bytes; null if it's bigger. */
+function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const parts: Buffer[] = [];
+    let size = 0;
+    req.on("data", (d: Buffer) => {
+      size += d.length;
+      if (size > max) {
+        resolve(null);
+        req.destroy();
+      } else parts.push(d);
+    });
+    req.on("end", () => resolve(Buffer.concat(parts)));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * `GET /capabilities`: what this thread's agent can be asked for. Attachments, with a
+ * client token (`Authorization: Bearer`):
+ * `POST /attachments` {id, name, size} starts an upload; `PUT /attachments/<id>?offset=N`
+ * sends the next piece (up to 4 MB); `GET /attachments/<id>` says how much has arrived,
+ * to resume after a dropped connection.
+ */
+async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: string, runner: ThreadRunner, opts: ServerOptions): Promise<void> {
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, CORS);
+    res.end();
+    return;
+  }
+  if (path === "/capabilities" && req.method === "GET") {
+    const agent = runner.thread.agent;
+    return reply(
+      res,
+      200,
+      capabilitiesFor(agent.kind, {
+        agentVersion: runner.agentVersion ?? null,
+        ...(agent.model ? { model: agent.model } : {}),
+        ...(agent.reasoning ? { reasoning: agent.reasoning } : {}),
+      }),
+    );
+  }
+  const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+  const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+  if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
+
+  const id = path.split("/")[2];
+  if (path === "/attachments" && req.method === "POST") {
+    const body = await readBody(req, 16 * 1024);
+    let parsed: { id?: unknown; name?: unknown; size?: unknown } = {};
+    try {
+      parsed = JSON.parse(body?.toString() ?? "{}") as typeof parsed;
+    } catch {
+      return reply(res, 400, { error: "bad json" });
+    }
+    const r = runner.attachments.begin(String(parsed.id ?? ""), String(parsed.name ?? ""), Number(parsed.size));
+    return "error" in r ? reply(res, r.status, { error: r.error }) : reply(res, 200, r);
+  }
+  if (id && req.method === "GET") {
+    const u = runner.attachments.get(id);
+    return u ? reply(res, 200, u) : reply(res, 404, { error: "unknown upload" });
+  }
+  if (id && req.method === "PUT") {
+    const offset = Number(new URL(req.url ?? "/", "http://runner").searchParams.get("offset"));
+    const data = await readBody(req, ATTACHMENT_CHUNK_BYTES);
+    if (!data) return reply(res, 413, { error: "piece too large" });
+    const r = runner.attachments.write(id, offset, data);
+    return "error" in r ? reply(res, r.status, r) : reply(res, 200, r);
+  }
+  return reply(res, 404, { error: "not_found" });
 }

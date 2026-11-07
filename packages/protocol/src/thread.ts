@@ -53,6 +53,8 @@ export const AgentConfig = z.object({
   /** Command + args for ACP agents, e.g. ["opencode", "acp"]. */
   command: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** How hard the agent thinks, for agents that offer it (see AGENT_CAPABILITIES). */
+  reasoning: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

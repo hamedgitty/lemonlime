@@ -100,6 +100,19 @@ replaces the remote branch. History is never deleted: a `rewind` event marks wha
 leave out (`withoutRewound` in the protocol). `{"type":"compact"}` asks Claude Code to
 shrink its conversation (`/compact`); other agents say they can't.
 
+## Attachments, models and thinking
+
+Files go to the runner over HTTP with the client token: `POST /attachments` {id, name,
+size} starts an upload, `PUT /attachments/<id>?offset=N` sends the next piece (up to
+4 MB), and `GET /attachments/<id>` says how much arrived, so a dropped connection resumes
+where it stopped. Images can be up to 10 MB and other files up to 100 MB. Finished files
+sit in `.lemonlime-attachments/` in the thread's folder (kept out of git), and a
+`send_message` with their ids tells the agent where they are.
+
+`GET /capabilities` lists the agent's models (Codex's own list when it has one), thinking
+levels and limits. `--model` and `--reasoning` are fixed when the thread starts: Claude
+Code gets a thinking budget (`MAX_THINKING_TOKENS`), Codex `model_reasoning_effort`.
+
 ## Side chats
 
 `side_ask` (with no `sideId`) starts a side chat: a separate agent conversation, at the

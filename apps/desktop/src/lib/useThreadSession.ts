@@ -46,7 +46,8 @@ export interface ThreadSession {
   error: string | null;
   /** Status from the runner (welcome + status changes). */
   status: ThreadStatus | null;
-  send: (text: string) => void;
+  /** Send a message, with ids of finished uploads (live connections only). */
+  send: (text: string, attachments?: string[]) => void;
   interrupt: () => void;
   /** Answer the agent's request for permission. */
   approve: (requestId: string, decision: "allow" | "deny") => void;
@@ -282,7 +283,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     };
   }, [threadId, generation]);
 
-  const send = useCallback((text: string) => {
+  const send = useCallback((text: string, attachments: string[] = []) => {
     const client = clientRef.current;
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -291,7 +292,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     const clientMsgId = newClientMsgId();
     setPending(p => [...p, { clientMsgId, text: trimmed, at: new Date().toISOString() }]);
     if (client) {
-      client.send(trimmed, clientMsgId);
+      client.send(trimmed, clientMsgId, attachments);
       return;
     }
     // Paused cloud thread: the control plane keeps the message and wakes the sandbox,
@@ -354,6 +355,7 @@ async function resolveConnection(target: SessionTarget): Promise<Connection | nu
       agent: meta.agent.kind,
       agentCommand: meta.agent.command ? joinCommand(meta.agent.command) : undefined,
       model: meta.agent.model,
+      reasoning: meta.agent.reasoning,
       workdir: meta.repoPath,
       baseBranch: meta.baseBranch,
       runnerPath,

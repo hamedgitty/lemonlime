@@ -74,6 +74,7 @@ struct StartRequest {
     agent: String,
     agent_command: Option<String>,
     model: Option<String>,
+    reasoning: Option<String>,
     workdir: String,
     base_branch: Option<String>,
     runner_path: Option<String>,
@@ -88,11 +89,12 @@ pub async fn start_local_runner(
     agent: String,
     agent_command: Option<String>,
     model: Option<String>,
+    reasoning: Option<String>,
     workdir: String,
     base_branch: Option<String>,
     runner_path: Option<String>,
 ) -> Result<RunnerInfo, String> {
-    let req = StartRequest { thread_id, agent, agent_command, model, workdir, base_branch, runner_path };
+    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, workdir, base_branch, runner_path };
     tauri::async_runtime::spawn_blocking(move || start_blocking(&app, req))
         .await
         .map_err(|e| format!("Could not start the runner: {e}"))?
@@ -230,6 +232,10 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         }
         if let Some(m) = non_empty(req.model) {
             cmd.arg("--model").arg(m);
+        }
+        // Only the levels the runner knows; anything else is dropped rather than passed on.
+        if let Some(r) = non_empty(req.reasoning).filter(|r| ["low", "medium", "high", "xhigh", "max", "ultra"].contains(&r.as_str())) {
+            cmd.arg("--reasoning").arg(r);
         }
         if let Some(b) = non_empty(req.base_branch) {
             cmd.arg("--base").arg(b);

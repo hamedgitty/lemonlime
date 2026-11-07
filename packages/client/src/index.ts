@@ -62,8 +62,8 @@ export class RunnerClient {
    * resent after a reconnect until the runner acknowledges it. The runner never runs the
    * same id twice, and queues messages that arrive while the agent is busy.
    */
-  send(text: string, clientMsgId: string = newId()): string {
-    const msg: ClientMessage = { type: "send_message", text, clientMsgId };
+  send(text: string, clientMsgId: string = newId(), attachments: string[] = []): string {
+    const msg: ClientMessage = { type: "send_message", text, clientMsgId, ...(attachments.length ? { attachments } : {}) };
     this.unacked.set(clientMsgId, msg);
     this.post(msg);
     return clientMsgId;
@@ -255,3 +255,4 @@ function newId(): string {
   return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 export { TerminalClient, terminalUrl, type TerminalClientOptions, type TerminalState } from "./terminal.ts";
+export { runnerHttpBase, uploadAttachment, type UploadOptions } from "./attachments.ts";

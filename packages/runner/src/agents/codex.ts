@@ -25,6 +25,7 @@ class CodexSession implements AgentSession {
     // and the sandbox mode is set via a config override that both accept.
     const flags = ["--json", "--skip-git-repo-check"];
     if (this.opts.model) flags.push("--model", this.opts.model);
+    if (this.opts.reasoning && /^[a-z]+$/.test(this.opts.reasoning)) flags.push("-c", `model_reasoning_effort="${this.opts.reasoning}"`);
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
     else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
     const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, ctx.prompt] : ["exec", ...flags, ctx.prompt];

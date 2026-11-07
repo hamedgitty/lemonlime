@@ -1,4 +1,4 @@
-import type { AgentKind, PolicyDenied, SandboxSize } from "@lemonlime/protocol";
+import type { AgentKind, PolicyDenied, ReasoningLevel, SandboxSize } from "@lemonlime/protocol";
 
 export interface NewLocalThread {
   mode: "local";
@@ -6,6 +6,7 @@ export interface NewLocalThread {
   agent: AgentKind;
   agentCommand: string[] | undefined;
   model: string | undefined;
+  reasoning: ReasoningLevel | undefined;
   repoPath: string;
   baseBranch: string;
   prompt: string | undefined;
@@ -17,6 +18,7 @@ export interface NewCloudThread {
   agent: AgentKind;
   agentCommand: string[] | undefined;
   model: string | undefined;
+  reasoning: ReasoningLevel | undefined;
   repoUrl: string;
   baseBranch: string;
   sandboxSize: SandboxSize;

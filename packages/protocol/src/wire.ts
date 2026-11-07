@@ -23,6 +23,8 @@ export const ClientSendMessage = z.object({
    * turn, so clients can safely resend anything not yet acknowledged after a reconnect.
    */
   clientMsgId: z.string().min(1).max(100).optional(),
+  /** Ids of finished uploads (POST/PUT /attachments on the runner) sent with it. */
+  attachments: z.array(z.string().max(64)).max(20).optional(),
 });
 
 export const ClientInterrupt = z.object({ type: z.literal("interrupt") });

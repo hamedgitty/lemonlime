@@ -13,6 +13,7 @@ import {
   Power,
   RotateCw,
   MessagesSquare,
+  Paperclip,
   Shrink,
   SquareTerminal,
   Trash2,
@@ -21,6 +22,7 @@ import {
 import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
+import { useAttachments } from "../lib/useAttachments.ts";
 import type { ThreadEntry } from "../lib/threads.ts";
 import { summarize } from "../lib/threads.ts";
 import { AGENT_LABELS, STATUS_LABELS, repoName } from "../lib/format.ts";
@@ -168,6 +170,18 @@ function ThreadSessionView({
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
   const composerRef = useRef<ComposerHandle>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const files = useAttachments(session.connection);
+  const sendWithFiles = (text: string) => {
+    if (files.uploading) {
+      setActionError("Wait for the attached files to finish uploading.");
+      composerRef.current?.fill(text);
+      return;
+    }
+    setActionError(null);
+    session.send(text, files.ready);
+    files.clear();
+  };
   const rewindTo = async (seq: number, text: string, restoreFiles: boolean) => {
     const ok = await confirmAction(
       restoreFiles
@@ -303,16 +317,82 @@ function ThreadSessionView({
           onRewind={rewindTo}
         />
 
-        <div className="shrink-0 px-6 pt-2 pb-5">
+        <div
+          className="shrink-0 px-6 pt-2 pb-5"
+          onDragOver={e => {
+            if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+          }}
+          onDrop={e => {
+            if (!e.dataTransfer.files.length) return;
+            e.preventDefault();
+            files.add([...e.dataTransfer.files]);
+          }}
+          onPaste={e => {
+            const pasted = [...e.clipboardData.files];
+            if (pasted.length) {
+              e.preventDefault();
+              files.add(pasted);
+            }
+          }}
+        >
           <div className="mx-auto max-w-[760px]">
+            {files.items.length > 0 && (
+              <ul aria-label="Attached files" className="mb-2 flex flex-wrap gap-1.5">
+                {files.items.map(a => (
+                  <li
+                    key={a.id}
+                    title={a.error ?? a.name}
+                    className={cx(
+                      "inline-flex h-8 max-w-[260px] items-center gap-2 rounded-lg border bg-paper pr-1 pl-2.5 text-[13px]",
+                      a.state === "failed" ? "border-[#f3c4be] text-danger" : "border-line-strong text-ink",
+                    )}
+                  >
+                    <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
+                    <span className="min-w-0 truncate">{a.name}</span>
+                    <span className="shrink-0 text-[12px] text-ink-faint tabular-nums">
+                      {a.state === "uploading" ? `${Math.floor((a.sent / Math.max(1, a.size)) * 100)}%` : a.state === "failed" ? "Failed" : ""}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${a.name}`}
+                      onClick={() => files.remove(a.id)}
+                      className="inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-ink/5 hover:text-ink"
+                    >
+                      <X aria-hidden="true" className="size-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              hidden
+              onChange={e => {
+                files.add([...(e.target.files ?? [])]);
+                e.target.value = "";
+              }}
+            />
             <Composer
               ref={composerRef}
-              onSend={session.send}
+              onSend={sendWithFiles}
               onInterrupt={session.interrupt}
               working={working}
               disabled={composerDisabled}
               tools={
-                <span className="flex min-w-0 items-center gap-3 px-2 text-[13.5px] text-ink-soft">
+                <span className="flex min-w-0 items-center gap-3 px-1 text-[13.5px] text-ink-soft">
+                  <Tip label="Attach files (or drop or paste them)">
+                    <button
+                      type="button"
+                      aria-label="Attach files"
+                      disabled={!session.connection}
+                      onClick={() => fileInput.current?.click()}
+                      className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink disabled:opacity-50"
+                    >
+                      <Paperclip aria-hidden="true" className="size-4" />
+                    </button>
+                  </Tip>
                   <span className="inline-flex items-center gap-1.5">
                     <Bot aria-hidden="true" className="size-4" />
                     {AGENT_LABELS[summary.agent.kind]}

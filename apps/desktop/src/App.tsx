@@ -251,6 +251,7 @@ export function App() {
       kind: input.agent,
       ...(input.agentCommand ? { command: input.agentCommand } : {}),
       ...(input.model ? { model: input.model } : {}),
+      ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     };
 
     if (input.mode === "local") {

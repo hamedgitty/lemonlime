@@ -18,6 +18,8 @@ export type TimelineItem =
       queued?: { clientMsgId: string; index: number; count: number };
       /** Files can be put back to how they were when this was sent. */
       restorable?: boolean;
+      /** Names of files sent with it. */
+      files?: string[];
     }
   | { kind: "agent"; key: string; seq: number; at: string; text: string; streaming: boolean }
   | {
@@ -110,7 +112,16 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
     switch (ev.type) {
       case "user_message":
         if (ev.clientMsgId) confirmed.add(ev.clientMsgId);
-        items.push({ kind: "user", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, text: ev.text, pending: false, ...(ev.commit ? { restorable: true } : {}) });
+        items.push({
+          kind: "user",
+          key: `e${ev.seq}`,
+          seq: ev.seq,
+          at: ev.at,
+          text: ev.text,
+          pending: false,
+          ...(ev.commit ? { restorable: true } : {}),
+          ...(ev.attachments?.length ? { files: ev.attachments.map(a => a.name) } : {}),
+        });
         break;
       case "tool_call":
         toolIndex.set(ev.callId, items.length);

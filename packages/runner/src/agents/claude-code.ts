@@ -71,6 +71,9 @@ class ClaudeCodeSession implements AgentSession {
     if (this.sessionId) args.push("--resume", this.sessionId);
     if (this.opts.model) args.push("--model", this.opts.model);
     const env: Record<string, string> = { ...this.opts.env };
+    // Claude Code's thinking budget, in tokens.
+    const thinking = { low: 4_000, medium: 12_000, high: 31_999, xhigh: 31_999, max: 31_999, ultra: 31_999 }[this.opts.reasoning ?? ""];
+    if (thinking) env.MAX_THINKING_TOKENS = String(thinking);
     // Hooks run even with permissions skipped, so the guard holds at every autonomy level.
     if (this.opts.commandGuard !== false) args.push("--settings", JSON.stringify(commandGuardSettings()));
     if (this.opts.autonomy === "full") args.push("--dangerously-skip-permissions");

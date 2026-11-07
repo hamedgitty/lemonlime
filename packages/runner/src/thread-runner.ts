@@ -4,6 +4,7 @@ import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from 
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
+import { attachmentNote, Attachments, ATTACHMENTS_DIR, type Upload } from "./attachments.ts";
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
@@ -142,6 +143,7 @@ export class ThreadRunner {
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
     this.git = opts.git === false ? null : new GitWorkspace(opts.workdir, opts.credentialHelper);
+    this.attachments = new Attachments(opts.workdir);
     const { autonomy: _a, ...session } = opts.session;
     this.side = new SideChats({
       threadId: opts.thread.id,
@@ -156,6 +158,8 @@ export class ThreadRunner {
 
   /** Quick, read-only questions about the thread that stay out of its history. */
   readonly side: SideChats;
+  /** Files uploaded to send with messages. */
+  readonly attachments: Attachments;
 
   get thread(): Thread {
     return { ...this.opts.thread, status: this.status, latestSeq: this.store.latestSeq, updatedAt: new Date().toISOString() };
@@ -185,6 +189,7 @@ export class ThreadRunner {
         if (rel && !rel.startsWith("..") && !isAbsolute(rel)) await this.git.excludePath(rel);
       }
       this.headCommit = await this.git.head();
+      await this.git.excludePath(`${ATTACHMENTS_DIR}/`);
     }
     try {
       await installSkills({
@@ -257,21 +262,25 @@ export class ThreadRunner {
    * Send a message. It starts a turn if the agent is idle, otherwise it joins the queue.
    * A message whose `clientMsgId` the thread already has is ignored, so retries are safe.
    */
-  sendMessage(text: string, clientMsgId: string = randomUUID()): SendResult {
+  sendMessage(text: string, clientMsgId: string = randomUUID(), attachments: string[] = []): SendResult {
     if (!this.initialised) throw new Error("runner not initialised");
     if (this.seen.has(clientMsgId)) return { clientMsgId, result: "duplicate" };
+    if (attachments.length) {
+      const r = this.attachments.resolve(attachments);
+      if ("missing" in r) throw new Error(`Some attached files haven't finished uploading (${r.missing.length}). Try sending again.`);
+    }
     this.seen.add(clientMsgId);
     // The user carried on themselves: no automatic continue on top.
     if (!clientMsgId.startsWith("auto-continue-")) this.clearUsageLimit();
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
     if (this.status === "running" || this.current || this.queue.length > 0 || this.held) {
-      this.queue.push({ clientMsgId, text, queuedAt: new Date().toISOString() });
+      this.queue.push({ clientMsgId, text, queuedAt: new Date().toISOString(), ...(attachments.length ? { attachments } : {}) });
       this.publishQueue();
       this.saveState();
       return { clientMsgId, result: "queued" };
     }
-    this.startTurn(text, clientMsgId);
+    this.startTurn(text, clientMsgId, attachments);
     return { clientMsgId, result: "started" };
   }
 
@@ -495,12 +504,21 @@ export class ThreadRunner {
 
   private closing = false;
 
-  private startTurn(text: string, clientMsgId: string): void {
-    this.store.append({ type: "user_message", text, clientMsgId, ...(this.headCommit ? { commit: this.headCommit } : {}) });
+  private startTurn(text: string, clientMsgId: string, attachmentIds: string[] = []): void {
+    const resolved = attachmentIds.length ? this.attachments.resolve(attachmentIds) : { ok: [] as Upload[] };
+    const files = "ok" in resolved ? resolved.ok : [];
+    this.store.append({
+      type: "user_message",
+      text,
+      clientMsgId,
+      ...(this.headCommit ? { commit: this.headCommit } : {}),
+      ...(files.length ? { attachments: files.map(f => ({ id: f.id, name: f.name, size: f.size, path: f.path! })) } : {}),
+    });
     this.setStatus("running");
     const abort = new AbortController();
     this.abort = abort;
-    const turn = this.runTurn(text, abort).finally(() => {
+    const prompt = files.length ? `${text}\n\n${attachmentNote(files)}` : text;
+    const turn = this.runTurn(prompt, abort).finally(() => {
       if (this.current === turn) this.current = null;
       this.startNext();
     });
@@ -512,7 +530,7 @@ export class ThreadRunner {
     if (this.closing || this.held || this.status === "running" || this.current || !this.queue.length) return;
     const next = this.queue.shift()!;
     this.publishQueue();
-    this.startTurn(next.text, next.clientMsgId);
+    this.startTurn(next.text, next.clientMsgId, next.attachments ?? []);
   }
 
   private publishQueue(): void {

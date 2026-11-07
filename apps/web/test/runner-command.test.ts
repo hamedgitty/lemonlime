@@ -47,6 +47,11 @@ describe("runner command", () => {
     );
   });
 
+  it("passes the reasoning level", () => {
+    const args = runnerArgs({ ...base, agent: { kind: "codex", model: "gpt-6-astra", reasoning: "high" } });
+    expect(args.slice(args.indexOf("--reasoning"), args.indexOf("--reasoning") + 2)).toEqual(["--reasoning", "high"]);
+  });
+
   it("adds model and ACP command, each as one safely quoted argument", () => {
     const args = runnerArgs({
       ...base,

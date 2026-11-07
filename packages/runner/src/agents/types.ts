@@ -20,6 +20,8 @@ export interface SessionOptions {
   saved?: Record<string, string>;
   /** Block computer-wrecking commands (see command-guard.ts). On unless set to false. */
   commandGuard?: boolean;
+  /** How hard the agent thinks (AGENT_CAPABILITIES lists what each accepts). */
+  reasoning?: string;
 }
 
 export interface TurnContext {

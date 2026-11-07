@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowLeft, Bot, Check, Cloud, Eye, EyeOff, Keyboard, Package, Palette, Search, Settings as SettingsIcon, UserRound } from "lucide-react";
 import { CloudApi, CloudError, normalizeBaseUrl } from "../lib/cloud.ts";
 import { AGENT_LABELS } from "../lib/format.ts";
+import { startBrowserSignIn } from "../lib/desktopAuth.ts";
 import { inDesktopShell } from "../lib/native.ts";
 import { NAV_ITEMS, type Settings, type UiPrefs } from "../lib/storage.ts";
 import { Kbd, Toggle } from "./primitives.tsx";
@@ -127,12 +128,14 @@ export function SettingsView({
   onSave,
   prefs,
   onPrefs,
+  justSignedIn = false,
 }: {
   page: SettingsPage;
   settings: Settings;
   onSave: (s: Settings) => void;
   prefs: UiPrefs;
   onPrefs: (p: Partial<UiPrefs>) => void;
+  justSignedIn?: boolean;
 }) {
   const current = PAGES.find(p => p.id === page)!;
   return (
@@ -145,7 +148,9 @@ export function SettingsView({
           <current.icon aria-hidden="true" className="size-5 text-ink-soft" />
           {current.label}
         </h2>
-        {page === "account" && <AccountPage settings={settings} onSave={onSave} />}
+        {page === "account" && (
+          <AccountPage key={`${settings.controlPlaneUrl}|${settings.accessToken ? 1 : 0}`} settings={settings} onSave={onSave} justSignedIn={justSignedIn} />
+        )}
         {page === "general" && <GeneralPage settings={settings} onSave={onSave} />}
         {page === "agents" && <AgentsPage />}
         {page === "appearance" && <AppearancePage prefs={prefs} onPrefs={onPrefs} />}
@@ -211,7 +216,7 @@ function useSaved(): [boolean, () => void] {
 
 // ── Pages ────────────────────────────────────────────────────
 
-function AccountPage({ settings, onSave }: { settings: Settings; onSave: (s: Settings) => void }) {
+function AccountPage({ settings, onSave, justSignedIn }: { settings: Settings; onSave: (s: Settings) => void; justSignedIn: boolean }) {
   const [url, setUrl] = useState(settings.controlPlaneUrl);
   const [token, setToken] = useState(settings.accessToken);
   const [showToken, setShowToken] = useState(false);
@@ -267,9 +272,25 @@ function AccountPage({ settings, onSave }: { settings: Settings; onSave: (s: Set
           )}
         </p>
       </div>
+      <Section title="Sign in" description="The quickest way: approve this computer in your browser, and LemonLime keeps the sign-in in your system keychain.">
+        <Row
+          label="Sign in with your browser"
+          description={
+            justSignedIn ? (
+              <span className="text-leaf">Signed in. Cloud threads are connected.</span>
+            ) : (
+              "Opens your LemonLime dashboard to approve this computer."
+            )
+          }
+        >
+          <Button variant="primary" onClick={() => void startBrowserSignIn(url.trim() || "https://app.lemonlime.dev")} disabled={!inDesktopShell()}>
+            {connected ? "Sign in again" : "Sign in with your browser"}
+          </Button>
+        </Row>
+      </Section>
       <Section
         title="Cloud connection"
-        description="Your LemonLime dashboard's address, and a personal access token you create under Settings → Personal access tokens there."
+        description="Or connect by hand: your dashboard's address, and a personal access token you create under Settings → Personal access tokens there."
       >
         <Row
           label="Dashboard address"

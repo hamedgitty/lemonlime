@@ -26,6 +26,7 @@
           "url": "https://*:*"
         }
       ]
-    }
+    },
+    "deep-link:default"
   ]
 }

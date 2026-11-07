@@ -20,6 +20,7 @@
     "@lemonlime/client": "workspace:*",
     "@lemonlime/protocol": "workspace:*",
     "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-deep-link": "^2.6.3",
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-http": "^2.8.3",
     "@tauri-apps/plugin-opener": "^2.7.2",

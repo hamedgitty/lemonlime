@@ -44,5 +44,12 @@
     "category": "DeveloperTool",
     "shortDescription": "Run coding agents on your computer or in cloud sandboxes.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["lemonlime"]
+      }
+    }
   }
 }

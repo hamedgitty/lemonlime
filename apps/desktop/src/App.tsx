@@ -10,6 +10,7 @@ import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
 import { inDesktopShell, listLocalRunners, loadAccessToken, removeLocalThread, saveAccessToken, stopLocalRunner } from "./lib/native.ts";
+import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import {
   forgetEvents,
@@ -76,6 +77,24 @@ export function App() {
     })();
     // Runs once at start.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Coming back from "Sign in with your browser": keep the token and connect.
+  const [signedIn, setSignedIn] = useState(false);
+  useEffect(() => {
+    let stop: () => void = () => undefined;
+    void onSignInLink(link => {
+      const ok = acceptSignInLink(link);
+      if (!ok) return;
+      setSettings(s => {
+        const next = { ...s, controlPlaneUrl: ok.url, accessToken: ok.token };
+        saveSettings(next);
+        return next;
+      });
+      void saveAccessToken(ok.token).catch(err => console.warn("Could not save the access token to the keychain", err));
+      setSignedIn(true);
+    }).then(off => (stop = off));
+    return () => stop();
   }, []);
 
   const onPrefs = useCallback((patch: Partial<UiPrefs>) => {
@@ -369,7 +388,7 @@ export function App() {
           )}
           <div className="flex min-h-0 flex-1">
             {place.view === "settings" ? (
-              <SettingsView page={place.page} settings={settings} onSave={saveAll} prefs={prefs} onPrefs={onPrefs} />
+              <SettingsView page={place.page} settings={settings} onSave={saveAll} prefs={prefs} onPrefs={onPrefs} justSignedIn={signedIn} />
             ) : place.view === "thread" && selectedEntry ? (
               <ThreadView
                 key={`${selectedEntry.mode}:${selection?.id}`}

@@ -32,7 +32,9 @@ describe("check-boundary", () => {
   });
 
   it("fails on an import no package.json declares", () => {
-    const dir = repo({ "package.json": pkg, "src/a.ts": 'import { plan } from "@somewhere-else/plans";\n' });
+    // Built in pieces so this file doesn't trip the check itself.
+    const outside = "@somewhere-else" + "/plans";
+    const dir = repo({ "package.json": pkg, "src/a.ts": `import { plan } from ${JSON.stringify(outside)};\n` });
     const r = run(dir);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain('imports "@somewhere-else/plans"');

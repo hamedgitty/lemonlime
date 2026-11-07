@@ -1,0 +1,44 @@
+name: Bug report
+description: Something doesn't work the way it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can we reproduce it?
+      placeholder: |
+        1. Start a local thread with Codex on ...
+        2. Send ...
+        3. See ...
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where?
+      options:
+        - Desktop app
+        - Web dashboard
+        - Runner (command line)
+        - Self-hosted control plane
+        - Something else
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: LemonLime version, OS, and the agent CLI and its version (e.g. `codex --version`).
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Runner log or console output. Remove anything private first.
+      render: text

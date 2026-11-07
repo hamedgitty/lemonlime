@@ -509,6 +509,7 @@ export function App() {
                 onPrefs={onPrefs}
                 onCreate={createThread}
                 onConnectCloud={() => go({ view: "settings", page: "account" })}
+                {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
               />
             )}
           </div>

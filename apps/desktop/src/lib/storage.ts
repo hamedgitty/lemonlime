@@ -133,6 +133,10 @@ export const UiPrefs = z.object({
   archived: z.record(z.string(), z.string()).default({}),
   /** The archive explanation has been shown once. */
   archivedHint: z.boolean().default(false),
+  /** The first-run setup card was finished or put away. */
+  setupDone: z.boolean().default(false),
+  /** Setup steps ticked by hand (agent signed in). */
+  setupAgentSignedIn: z.boolean().default(false),
   sidebarCollapsed: z.boolean().default(false),
   /** Projects (repository folders) used for local threads, most recent first. */
   recentProjects: z.array(z.string()).default([]),

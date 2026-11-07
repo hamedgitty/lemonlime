@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowUpCircle,
   Bot,
   Cloud,
   Ellipsis,
@@ -92,6 +93,13 @@ function ThreadSessionView({
   // While connected the runner is the source of truth; otherwise the control plane (cloud) is.
   const liveStatus: ThreadStatus | null = entry.mode === "cloud" ? (connected ? (session.status ?? entry.thread.status) : entry.thread.status) : session.status;
   const working = liveStatus === "running" && connected;
+  // The runner says the installed agent is older than the version LemonLime is tested with.
+  const outdated = useMemo(() => {
+    const e = [...session.events].reverse().find(x => x.type === "notice" && x.code === "agent_older_than_tested");
+    if (!e || e.type !== "notice") return null;
+    return { message: e.message, command: /`([^`]+)`/.exec(e.message)?.[1] ?? null };
+  }, [session.events]);
+  const [copiedUpdate, setCopiedUpdate] = useState(false);
   // A paused cloud thread still takes messages: sending one saves it and wakes the sandbox.
   const pausedCloud = entry.mode === "cloud" && entry.thread.status === "paused" && session.state === "offline";
   const composerDisabled = !pausedCloud && (session.state === "starting" || session.state === "offline" || session.state === "error");
@@ -267,6 +275,23 @@ function ThreadSessionView({
                 </MenuItem>
               )}
             </Menu>
+          )}
+          {outdated && (
+            <Tip label={outdated.command ? `${outdated.message} Click to copy the command.` : outdated.message} side="bottom">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!outdated.command) return;
+                  void navigator.clipboard?.writeText(outdated.command);
+                  setCopiedUpdate(true);
+                  setTimeout(() => setCopiedUpdate(false), 2000);
+                }}
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#f0d95c] bg-lemon-soft px-2.5 text-[12.5px] font-medium text-ink hover:bg-lemon"
+              >
+                <ArrowUpCircle aria-hidden="true" className="size-3.5" />
+                {copiedUpdate ? "Copied update command" : `Update ${AGENT_LABELS[summary.agent.kind]}`}
+              </button>
+            </Tip>
           )}
           <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
             <button

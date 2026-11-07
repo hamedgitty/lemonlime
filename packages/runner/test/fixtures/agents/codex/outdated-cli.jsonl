@@ -1,0 +1,10 @@
+{"dir":"meta","agent":"codex","cli":"codex","version":"0.145.0","recorded":"2026-11-07","note":"A CLI too old for the configured model: the API refuses, then turn.failed and exit code 1."}
+{"dir":"argv","line":"[\"codex\", \"exec\", \"--json\", \"--skip-git-repo-check\", \"-c\", \"sandbox_mode=\\\"workspace-write\\\"\", \"The test in test.js fails. Fix the bug in add.js, then run `node test.js` to check it passes. Keep your reply short.\"]"}
+{"dir":"out","line":"{\"type\":\"thread.started\",\"thread_id\":\"01a1b4f1-fdf1-71a0-8621-60a5e1ad3a69\"}"}
+{"dir":"out","line":"{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Configured service tier `priority` is not advertised as supported for model `gpt-6-astra` and will be omitted from requests.\"}}"}
+{"dir":"out","line":"{\"type\":\"item.completed\",\"item\":{\"id\":\"item_1\",\"type\":\"error\",\"message\":\"Model metadata for `gpt-6-astra` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}"}
+{"dir":"out","line":"{\"type\":\"turn.started\"}"}
+{"dir":"out","line":"{\"type\":\"item.completed\",\"item\":{\"id\":\"item_2\",\"type\":\"error\",\"message\":\"Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.\"}}"}
+{"dir":"out","line":"{\"type\":\"error\",\"message\":\"{\\\"type\\\":\\\"error\\\",\\\"status\\\":400,\\\"error\\\":{\\\"type\\\":\\\"invalid_request_error\\\",\\\"message\\\":\\\"The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.\\\"}}\"}"}
+{"dir":"out","line":"{\"type\":\"turn.failed\",\"error\":{\"message\":\"{\\\"type\\\":\\\"error\\\",\\\"status\\\":400,\\\"error\\\":{\\\"type\\\":\\\"invalid_request_error\\\",\\\"message\\\":\\\"The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.\\\"}}\"}}"}
+{"dir":"exit","line":"{\"code\":1,\"sig\":null}"}

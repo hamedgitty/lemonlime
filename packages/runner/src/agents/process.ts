@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
-import { AgentError } from "./types.ts";
+import { AgentError, classifyAgentFailure } from "./types.ts";
 
 export interface LineProcessOptions {
   command: string;
@@ -56,7 +56,7 @@ export function runLineProcess(o: LineProcessOptions): Promise<void> {
       rl.close();
       if (o.signal.aborted) return resolve();
       if (code === 0) return resolve();
-      reject(new AgentError(`${o.command} exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+      reject(new AgentError(`${o.command} exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`, classifyAgentFailure(stderr)));
     });
   });
 }

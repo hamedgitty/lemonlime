@@ -46,3 +46,22 @@ export class AgentError extends Error {
     super(message);
   }
 }
+
+/**
+ * Pick an error code from the reason an agent gave for failing, so apps can show the
+ * right fix: `auth_required` (sign the CLI in again), `agent_outdated` (update the CLI),
+ * otherwise `agent_failed`.
+ */
+export function classifyAgentFailure(reason: string): string {
+  if (/not logged in|log ?in expired|please (run )?\/?login|run \/login|invalid api key|not authenticated|authentication (failed|required)|unauthori[sz]ed|\b401\b/i.test(reason)) {
+    return "auth_required";
+  }
+  if (/requires a newer version|please upgrade|update (the )?(cli|app) and try again/i.test(reason)) return "agent_outdated";
+  return "agent_failed";
+}
+
+/** The error to throw when a turn fails: the agent's own reason if it gave one, else what the process reported. */
+export function turnFailure(reason: string | null, processError?: unknown): Error | null {
+  if (reason) return new AgentError(reason, classifyAgentFailure(reason));
+  return processError instanceof Error ? processError : processError === undefined ? null : new AgentError(String(processError));
+}

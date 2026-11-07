@@ -1,6 +1,6 @@
 import type { NewEvent } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
-import type { AgentAdapter, AgentSession, SessionOptions, TurnContext } from "./types.ts";
+import { turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
  * Codex CLI: `codex exec --json <prompt>`, then `codex exec resume <thread_id> --json <prompt>`
@@ -30,6 +30,7 @@ class CodexSession implements AgentSession {
     const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, ctx.prompt] : ["exec", ...flags, ctx.prompt];
 
     let failure: string | null = null;
+    let processError: unknown;
     await runLineProcess({
       command: this.opts.command?.[0] ?? "codex",
       args: [...(this.opts.command?.slice(1) ?? []), ...args],
@@ -42,8 +43,10 @@ class CodexSession implements AgentSession {
         if (parsed.failure) failure = parsed.failure;
         parsed.events.forEach(e => ctx.emit(e));
       },
-    });
-    if (failure) throw new Error(failure);
+    }).catch(err => (processError = err));
+    // Codex exits non-zero after turn.failed; its own reason beats "exited with code 1".
+    const err = turnFailure(failure, processError);
+    if (err) throw err;
   }
 
   saveState(): Record<string, string> {
@@ -81,9 +84,9 @@ export function parseCodexLine(line: string): { events: NewEvent[]; threadId?: s
     case "thread.started":
       return { events, threadId: msg.thread_id };
     case "turn.failed":
-      return { events, failure: msg.error?.message ?? "Codex turn failed" };
+      return { events, failure: unwrapApiError(msg.error?.message) ?? "Codex turn failed" };
     case "error":
-      return { events, failure: msg.message ?? "Codex reported an error" };
+      return { events, failure: unwrapApiError(msg.message) ?? "Codex reported an error" };
     case "item.started":
     case "item.completed": {
       const item = msg.item;
@@ -123,13 +126,21 @@ export function parseCodexLine(line: string): { events: NewEvent[]; threadId?: s
             events.push({ type: "tool_result", callId: id, output: "done", isError: false });
           }
           break;
-        case "error":
-          if (done) events.push({ type: "error", message: item.message ?? "Codex error", fatal: false });
-          break;
-        // reasoning, todo_list and other internal items are not shown.
+        // "error" items are Codex's non-fatal warnings (unknown model metadata, skills trimmed to
+        // fit, ...). They don't end the turn, so they aren't LemonLime errors; real failures
+        // arrive as top-level "error" / "turn.failed" lines.
+        // reasoning, todo_list and other internal items are not shown either.
       }
       break;
     }
   }
   return { events };
+}
+
+/** Codex passes API errors through as a JSON string; pull out the human-readable message. */
+function unwrapApiError(message: string | undefined): string | undefined {
+  if (!message) return undefined;
+  const parsed = tryJson(message) as { error?: { message?: unknown }; message?: unknown } | null;
+  const inner = parsed?.error?.message ?? parsed?.message;
+  return typeof inner === "string" && inner.trim() ? inner : message;
 }

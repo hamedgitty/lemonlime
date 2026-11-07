@@ -1,6 +1,6 @@
 import type { NewEvent } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
-import type { AgentAdapter, AgentSession, SessionOptions, TurnContext } from "./types.ts";
+import { turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
  * Claude Code in print mode: `claude -p <prompt> --output-format stream-json --verbose`.
@@ -28,6 +28,7 @@ class ClaudeCodeSession implements AgentSession {
     else args.push("--permission-mode", "acceptEdits");
 
     let failure: string | null = null;
+    let processError: unknown;
     await runLineProcess({
       command: this.opts.command?.[0] ?? "claude",
       args: [...(this.opts.command?.slice(1) ?? []), ...args],
@@ -40,8 +41,10 @@ class ClaudeCodeSession implements AgentSession {
         if (parsed.failure) failure = parsed.failure;
         parsed.events.forEach(e => ctx.emit(e));
       },
-    });
-    if (failure) throw new Error(failure);
+    }).catch(err => (processError = err));
+    // Claude exits non-zero after a failed result; its own reason beats "exited with code 1".
+    const err = turnFailure(failure, processError);
+    if (err) throw err;
   }
 
   saveState(): Record<string, string> {
@@ -71,6 +74,9 @@ export function parseClaudeLine(line: string): ParsedLine {
   const events: NewEvent[] = [];
 
   if (msg.type === "assistant" || msg.type === "user") {
+    // "<synthetic>" messages are written by the CLI itself (e.g. "Login expired"), not the model.
+    // The result line that follows carries the same text as the failure, so don't show it twice.
+    if ((msg.message as { model?: unknown } | undefined)?.model === "<synthetic>") return { events, sessionId };
     const content = ((msg.message as { content?: unknown })?.content ?? []) as ContentBlock[] | string;
     if (typeof content === "string") return { events, sessionId };
     for (const block of content) {

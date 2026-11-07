@@ -56,19 +56,35 @@ describe("Codex exec --json", () => {
 });
 
 describe("ACP translation", () => {
-  it("coalesces streamed text and closes it before a tool call", () => {
+  it("coalesces streamed text and closes it with a whole message before a tool call", () => {
     const t = new AcpTranslator();
     expect(t.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hel" } })).toEqual([]);
+    expect(t.flushText()).toEqual([{ type: "agent_message", text: "Hel", partial: true }]);
     expect(t.update({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "lo" } })).toEqual([]);
-    const out = t.update({ sessionUpdate: "tool_call", toolCallId: "x", title: "Read file", kind: "read", status: "pending", rawInput: { path: "a" } });
+    const out = t.update({ sessionUpdate: "tool_call", toolCallId: "x", title: "Read file", kind: "read", status: "in_progress", rawInput: { path: "a" } });
     expect(out).toEqual([
-      { type: "agent_message", text: "Hello", partial: true },
+      { type: "agent_message", text: "Hello", partial: false },
       { type: "tool_call", callId: "x", name: "Read file", input: { path: "a" } },
     ]);
     expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "x", status: "completed", content: [{ type: "content", content: { type: "text", text: "ok" } }] })).toEqual([
       { type: "tool_result", callId: "x", output: "ok", isError: false },
     ]);
-    expect(t.flushText()).toEqual([]);
+    expect(t.finish()).toEqual([]);
+  });
+
+  it("holds a pending call until it starts, keeping the latest input and the first name", () => {
+    const t = new AcpTranslator();
+    expect(t.update({ sessionUpdate: "tool_call", toolCallId: "b", title: "bash", kind: "execute", status: "pending", rawInput: { cwd: "/w" } })).toEqual([]);
+    expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress", title: "node test.js", rawInput: { command: "node test.js" } })).toEqual([
+      { type: "tool_call", callId: "b", name: "bash", input: { command: "node test.js" } },
+    ]);
+    expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "in_progress", rawInput: { command: "node test.js" } })).toEqual([]);
+    expect(t.update({ sessionUpdate: "tool_call_update", toolCallId: "b", status: "failed", rawOutput: { exit: 1 } })).toEqual([
+      { type: "tool_result", callId: "b", output: { exit: 1 }, isError: true },
+    ]);
+    // A call that never started is still recorded when the turn ends.
+    t.update({ sessionUpdate: "tool_call", toolCallId: "c", title: "read", status: "pending", rawInput: {} });
+    expect(t.finish()).toEqual([{ type: "tool_call", callId: "c", name: "read", input: null }]);
   });
 
   it("grants permissions according to autonomy", () => {

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { AgentKind, NewEvent } from "@lemonlime/protocol";
 import { killGently, tryJson } from "./process.ts";
-import { AgentError, type AgentAdapter, type AgentSession, type Autonomy, type SessionOptions, type TurnContext } from "./types.ts";
+import { AgentError, classifyAgentFailure, type AgentAdapter, type AgentSession, type Autonomy, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
  * Agent Client Protocol (https://agentclientprotocol.com): JSON-RPC 2.0 over stdio.
@@ -109,7 +109,7 @@ class AcpSession implements AgentSession {
     } finally {
       clearInterval(flush);
       ctx.signal.removeEventListener("abort", onAbort);
-      this.translator.flushText().forEach(e => ctx.emit(e));
+      this.translator.finish().forEach(e => ctx.emit(e));
       this.turn = null;
     }
   }
@@ -146,7 +146,10 @@ class AcpSession implements AgentSession {
       const p = this.pending.get(msg.id as number);
       if (!p) return;
       this.pending.delete(msg.id as number);
-      if (msg.error) p.reject(new AgentError(String((msg.error as Json).message ?? "ACP error")));
+      if (msg.error) {
+        const reason = String((msg.error as Json).message ?? "ACP error");
+        p.reject(new AgentError(reason, classifyAgentFailure(reason)));
+      }
       else p.resolve(msg.result);
       return;
     }
@@ -180,34 +183,50 @@ export function answerAgentRequest(method: string, params: Json | undefined, aut
 
 /** Turns ACP `session/update` payloads into LemonLime events. */
 export class AcpTranslator {
+  /** Streamed text not yet sent as a chunk. */
   private text = "";
-  private readonly titles = new Map<string, string>();
+  /** The whole message so far, sent as one `partial: false` event when it ends. */
+  private message = "";
+  /** Tool calls announced without their input yet, keyed by id. */
+  private readonly waiting = new Map<string, { name: string; input: unknown }>();
+  private readonly started = new Set<string>();
 
   update(u: Json): NewEvent[] {
     const out: NewEvent[] = [];
     switch (u.sessionUpdate) {
       case "agent_message_chunk": {
         const c = u.content as Json | undefined;
-        if (c?.type === "text" && typeof c.text === "string") this.text += c.text;
-        break;
-      }
-      case "tool_call": {
-        out.push(...this.flushText());
-        const id = String(u.toolCallId);
-        const name = String(u.title ?? u.kind ?? "tool");
-        this.titles.set(id, name);
-        out.push({ type: "tool_call", callId: id, name, input: u.rawInput ?? null });
-        if (u.status === "completed" || u.status === "failed") out.push(this.result(u));
-        break;
-      }
-      case "tool_call_update": {
-        if (u.status === "completed" || u.status === "failed") {
-          out.push(...this.flushText());
-          out.push(this.result(u));
+        if (c?.type === "text" && typeof c.text === "string") {
+          this.text += c.text;
+          this.message += c.text;
         }
         break;
       }
-      // agent_thought_chunk, plan, user_message_chunk, available_commands_update: not shown.
+      case "tool_call":
+      case "tool_call_update": {
+        const id = String(u.toolCallId);
+        if (u.sessionUpdate === "tool_call") out.push(...this.endMessage());
+        // Agents such as OpenCode announce a call with empty or partial input and fill it in
+        // while it is still pending, so hold the call until the tool actually starts.
+        if (!this.started.has(id)) {
+          const prev = this.waiting.get(id);
+          const name = prev?.name ?? String(u.title ?? u.kind ?? "tool");
+          const input = hasInput(u.rawInput) ? u.rawInput : prev?.input ?? null;
+          if (u.status === "in_progress" || u.status === "completed" || u.status === "failed") {
+            out.push(...this.endMessage());
+            this.waiting.delete(id);
+            this.started.add(id);
+            out.push({ type: "tool_call", callId: id, name, input });
+          } else this.waiting.set(id, { name, input });
+        }
+        if (this.started.has(id) && (u.status === "completed" || u.status === "failed")) {
+          out.push(...this.endMessage());
+          out.push(this.result(u));
+          this.started.delete(id);
+        }
+        break;
+      }
+      // agent_thought_chunk, plan, user_message_chunk, usage_update, available_commands_update: not shown.
     }
     return out;
   }
@@ -220,7 +239,25 @@ export class AcpTranslator {
     return [{ type: "agent_message", text, partial: true }];
   }
 
+  /** End of turn: close the open message and record calls that never got their input. */
+  finish(): NewEvent[] {
+    const out = this.endMessage();
+    for (const [id, call] of this.waiting) out.push({ type: "tool_call", callId: id, name: call.name, input: call.input });
+    this.waiting.clear();
+    return out;
+  }
+
+  /** Close the open message with one whole copy; clients replace the streamed chunks with it. */
+  private endMessage(): NewEvent[] {
+    this.text = "";
+    if (!this.message) return [];
+    const text = this.message;
+    this.message = "";
+    return [{ type: "agent_message", text, partial: false }];
+  }
+
   private result(u: Json): NewEvent {
+    // Prefer the readable content the agent shows its own users; rawOutput is agent-specific.
     const content = Array.isArray(u.content)
       ? (u.content as Json[])
           .map(c => {
@@ -231,7 +268,13 @@ export class AcpTranslator {
           })
           .filter(Boolean)
           .join("\n")
-      : undefined;
-    return { type: "tool_result", callId: String(u.toolCallId), output: u.rawOutput ?? content ?? null, isError: u.status === "failed" };
+      : "";
+    return { type: "tool_result", callId: String(u.toolCallId), output: content || (u.rawOutput ?? null), isError: u.status === "failed" };
   }
+}
+
+function hasInput(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "object") return Object.keys(v as object).length > 0;
+  return true;
 }

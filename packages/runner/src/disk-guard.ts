@@ -15,6 +15,12 @@ export async function diskSpace(path: string): Promise<DiskSpace | null> {
   }
 }
 
+const GB = 1024 ** 3;
+/** Fixed amounts the share-based lines never go above. */
+const WARN_CAP = 10 * GB;
+const PAUSE_CAP = 2 * GB;
+const RESUME_CAP = 4 * GB;
+
 export interface DiskGuardOptions {
   path: string;
   intervalMs?: number;
@@ -35,8 +41,9 @@ export interface DiskGuardOptions {
 
 /**
  * Watches free disk space where the thread works. A full disk breaks builds, git and the
- * runner's own history, so: a warning at 15% free, the agent paused under 5% (new messages
- * wait) and picked up again at 8%. The gap stops it flapping around one line.
+ * runner's own history, so: a warning at 15% free (at most 10 GB), the agent paused under 5%
+ * (at most 2 GB; new messages wait) and picked up again at 8% (at most 4 GB). The gap stops it
+ * flapping around one line.
  */
 export class DiskGuard {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -64,33 +71,36 @@ export class DiskGuard {
   async check(): Promise<void> {
     const space = await (this.opts.read ?? diskSpace)(this.opts.path);
     if (!space || space.totalBytes <= 0) return;
-    const free = space.freeBytes / space.totalBytes;
     const now = (this.opts.now ?? Date.now)();
-    const warn = this.opts.warnBelow ?? 0.15;
-    const pause = this.opts.pauseBelow ?? 0.05;
-    const resume = this.opts.resumeAt ?? 0.08;
+    // Each line is a share of the disk, but never more than a fixed amount: on a big disk,
+    // 5% is still tens of gigabytes, which is plenty.
+    const line = (share: number, capBytes: number) => Math.min(share * space.totalBytes, capBytes);
+    const warnAt = line(this.opts.warnBelow ?? 0.15, WARN_CAP);
+    const pauseAt = line(this.opts.pauseBelow ?? 0.05, PAUSE_CAP);
+    const resumeAt = line(this.opts.resumeAt ?? 0.08, RESUME_CAP);
+    const free = space.freeBytes;
 
     if (this.pausedAt !== null) {
-      if (free >= resume) {
+      if (free >= resumeAt) {
         this.pausedAt = null;
         this.toldStillFull = false;
         this.opts.onResume(space);
-      } else if (!this.toldStillFull && now - this.pausedAt >= (this.opts.stillFullAfterMs ?? 30_000) && free < pause) {
+      } else if (!this.toldStillFull && now - this.pausedAt >= (this.opts.stillFullAfterMs ?? 30_000) && free < pauseAt) {
         this.toldStillFull = true;
         this.opts.onStillFull?.(space);
       }
       return;
     }
-    if (free < pause) {
+    if (free < pauseAt) {
       this.pausedAt = now;
       this.warned = true;
       this.opts.onPause(space);
       return;
     }
-    if (free < warn && !this.warned) {
+    if (free < warnAt && !this.warned) {
       this.warned = true;
       this.opts.onWarn(space);
-    } else if (free >= warn + 0.05) this.warned = false;
+    } else if (free >= warnAt * 1.3) this.warned = false;
   }
 }
 

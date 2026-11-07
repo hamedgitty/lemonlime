@@ -12,7 +12,7 @@ describe("disk guard", () => {
     const seen: string[] = [];
     const guard = new DiskGuard({
       path: "/",
-      read: async () => ({ freeBytes: free * GB, totalBytes: 100 * GB }),
+      read: async () => ({ freeBytes: (free / 10) * GB, totalBytes: 10 * GB }), // a sandbox-sized disk
       now: () => now,
       onWarn: () => void seen.push("warn"),
       onPause: () => void seen.push("pause"),
@@ -36,6 +36,26 @@ describe("disk guard", () => {
     await guard.check();
     expect(seen).toEqual(["warn", "pause", "still full", "resume"]);
     expect(guard.paused).toBe(false);
+  });
+
+  it("doesn't count a big disk with gigabytes left as full", async () => {
+    const seen: string[] = [];
+    let free = 18.9; // GB free of 460: 4%, but plenty
+    const guard = new DiskGuard({
+      path: "/",
+      read: async () => ({ freeBytes: free * GB, totalBytes: 460 * GB }),
+      onWarn: () => void seen.push("warn"),
+      onPause: () => void seen.push("pause"),
+      onResume: () => void seen.push("resume"),
+    });
+    await guard.check();
+    expect(seen).toEqual([]);
+    free = 1.5;
+    await guard.check();
+    expect(seen).toEqual(["pause"]);
+    free = 5;
+    await guard.check();
+    expect(seen).toEqual(["pause", "resume"]);
   });
 
   it("reads this machine's disk", async () => {

@@ -9,6 +9,7 @@
 import openNext from "./.open-next/worker.js";
 import { createWorkersContext } from "./src/lib/context.ts";
 import { sweepRunningSandboxes } from "./src/lib/threads.ts";
+import { runDueAutomations } from "./src/lib/automations.ts";
 
 interface ExecutionContextLike {
   waitUntil(promise: Promise<unknown>): void;
@@ -22,10 +23,13 @@ export default {
   async scheduled(_controller: unknown, env: Record<string, unknown>, ctx: ExecutionContextLike): Promise<void> {
     ctx.waitUntil(
       (async () => {
-        const result = await sweepRunningSandboxes(createWorkersContext(env));
+        const app = createWorkersContext(env);
+        const result = await sweepRunningSandboxes(app);
         if (result.paused.length || result.errors.length) {
           console.log(`[lemonlime] sweep: checked ${result.checked}, paused ${result.paused.length}, errors ${result.errors.length}`, result);
         }
+        const auto = await runDueAutomations(app).catch(err => (console.error("[lemonlime] automations failed:", err), null));
+        if (auto && (auto.started.length || auto.skipped.length || auto.failed.length)) console.log("[lemonlime] automations:", auto);
       })(),
     );
   },

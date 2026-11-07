@@ -57,6 +57,13 @@
       "when": 1794069767762,
       "tag": "0007_sandbox_load",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794076444772,
+      "tag": "0008_automations",
+      "breakpoints": true
     }
   ]
 }

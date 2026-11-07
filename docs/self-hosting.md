@@ -259,6 +259,7 @@ migrations in `packages/db/migrations/`, in the format
 | `agent_credentials` | Agent sign-ins saved from a sandbox, encrypted, so the next sandbox starts signed in. |
 | `github_installations` | GitHub App installations linked to a workspace. |
 | `rate_limit` | Counters for sign-in and API rate limits. |
+| `automations`, `automation_runs` | Scheduled prompts and each time one was due (started, skipped or failed). |
 | `system_status` | Small service facts, such as when the idle sweep last ran (read by `/api/health`). |
 
 SQLite has no row-level security. Every query made on behalf of a person goes
@@ -324,6 +325,16 @@ docker compose start web sweep
 
 Try a restore on a spare machine now and then, and check `/api/health` and an old
 thread afterwards: a backup that has never been restored is only a hope.
+
+## Automations
+
+An automation runs a prompt as a new cloud thread on a schedule (five-field cron in its own
+time zone, e.g. `0 9 * * 1-5` in Europe/London). The minute sweep (the Workers cron, or
+`/api/cron/sweep` on Node) starts the ones that are due; each is claimed before it starts,
+so overlapping sweeps never start it twice. The prompt waits in the new thread's inbox
+and the runner picks it up when it starts, with nobody watching. If the usage policy says
+no at that moment, the run is recorded as skipped and the automation stays on. Schedule,
+time zone, agent, model, thinking level and repository are checked when it is saved.
 
 ## Thread history and paused sandboxes
 
@@ -491,5 +502,6 @@ All bodies are JSON and validated with the schemas in `packages/protocol`.
 | `POST /api/runner/heartbeat` | runner token | Runner status (`RunnerHeartbeat` → `HeartbeatResponse`). |
 | `POST /api/cron/sweep` | cron secret | Pause idle and disallowed sandboxes (Node deployments). |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | session (create), session or token (list, revoke) | Personal access tokens. The raw value is returned once, on create. |
+| `GET/POST /api/automations`, `PATCH/DELETE /api/automations/:id`, `GET /api/automations/:id/runs` | session or token | Scheduled prompts that start cloud threads (see "Automations"). |
 | `GET /api/health` | — | Health for uptime monitors: 200 or 503 with the failing check. |
 | `/api/auth/*` | — | Better Auth: sign-in codes, GitHub sign-in, sessions. |

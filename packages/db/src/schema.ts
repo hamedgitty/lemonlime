@@ -312,6 +312,57 @@ export const systemStatus = sqliteTable("system_status", {
   updatedAt: text("updated_at").notNull().$defaultFn(nowIso),
 });
 
+// ─── Automations ─────────────────────────────────────────────────────────────
+
+/** A prompt run as a new cloud thread on a schedule (the minute sweep starts due ones). */
+export const automations = sqliteTable(
+  "automations",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    name: text("name").notNull(),
+    /** Five-field cron, e.g. "0 9 * * 1-5". */
+    schedule: text("schedule").notNull(),
+    timezone: text("timezone").notNull().default("UTC"),
+    agent: text("agent", { mode: "json" }).$type<AgentConfig>().notNull(),
+    repo: text("repo", { mode: "json" }).$type<RepoRef>().notNull(),
+    sandboxSize: text("sandbox_size").$type<SandboxSize>().notNull().default("small"),
+    prompt: text("prompt").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    /** When it runs next (ISO); null when disabled or the schedule never fires again. */
+    nextRunAt: text("next_run_at"),
+    lastRunAt: text("last_run_at"),
+    createdAt: text("created_at").notNull().$defaultFn(nowIso),
+    updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
+  },
+  t => [index("automations_due_idx").on(t.enabled, t.nextRunAt), index("automations_workspace_idx").on(t.workspaceId)],
+);
+
+/** Each time an automation was due: started a thread, was skipped (plan limit), or failed. */
+export const automationRuns = sqliteTable(
+  "automation_runs",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    automationId: text("automation_id")
+      .notNull()
+      .references(() => automations.id, { onDelete: "cascade" }),
+    scheduledFor: text("scheduled_for").notNull(),
+    ranAt: text("ran_at").notNull().$defaultFn(nowIso),
+    status: text("status").$type<"started" | "skipped" | "failed">().notNull(),
+    threadId: text("thread_id"),
+    /** Why it was skipped or failed, in words for the user. */
+    detail: text("detail"),
+  },
+  t => [index("automation_runs_automation_idx").on(t.automationId, t.ranAt)],
+);
+
 // ─── Personal access tokens (desktop app) ────────────────────────────────────
 
 export const accessTokens = sqliteTable(

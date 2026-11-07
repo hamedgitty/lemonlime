@@ -46,6 +46,13 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             </svg>
             New thread
           </Link>
+          <Link href="/automations" className="flex h-[30px] items-center gap-2.5 rounded-lg px-2 text-sm hover:bg-cream-hover">
+            <svg aria-hidden="true" viewBox="0 0 16 16" className="size-4 text-muted">
+              <circle cx="8" cy="8" r="5.75" fill="none" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M8 4.75V8l2.25 1.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Automations
+          </Link>
         </div>
         <div className="mx-3 my-4 h-px bg-line" />
         <p className="px-4 pb-2 text-[13.5px] text-muted">Threads</p>

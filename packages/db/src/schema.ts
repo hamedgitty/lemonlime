@@ -140,6 +140,35 @@ export const workspaceMembers = sqliteTable(
   ],
 );
 
+/**
+ * An email invitation to join a workspace. Only a hash of the token is stored; the link
+ * in the email is the only copy. Accepted invites are kept (accepted_at) for the record.
+ */
+export const workspaceInvites = sqliteTable(
+  "workspace_invites",
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** Lower-cased; only someone signed in with this address can accept. */
+    email: text("email").notNull(),
+    role: text("role").$type<WorkspaceRole>().notNull().default("member"),
+    tokenHash: text("token_hash").notNull(),
+    invitedBy: text("invited_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull().$defaultFn(nowIso),
+    expiresAt: text("expires_at").notNull(),
+    acceptedAt: text("accepted_at"),
+  },
+  t => [
+    uniqueIndex("workspace_invites_token_idx").on(t.tokenHash),
+    index("workspace_invites_workspace_idx").on(t.workspaceId),
+    check("workspace_invites_role", sql`${t.role} in ('owner', 'member')`),
+  ],
+);
+
+export type WorkspaceInviteRow = typeof workspaceInvites.$inferSelect;
+
 // ─── Threads ─────────────────────────────────────────────────────────────────
 
 export const threads = sqliteTable(

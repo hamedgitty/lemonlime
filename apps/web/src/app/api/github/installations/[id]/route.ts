@@ -1,4 +1,4 @@
-import { resolveWorkspace } from "@/lib/access.ts";
+import { requestWorkspace } from "@/lib/current-workspace.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { unlinkInstallation } from "@/lib/github.ts";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const DELETE = route<{ params: Promise<{ id: string }> }>(async (request, { params }) => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   await unlinkInstallation(ctx, workspaceId, (await params).id);
   return json({ ok: true });
 });

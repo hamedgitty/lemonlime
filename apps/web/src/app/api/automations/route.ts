@@ -1,4 +1,4 @@
-import { resolveWorkspace } from "@/lib/access.ts";
+import { requestWorkspace } from "@/lib/current-workspace.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { AutomationInput, createAutomation, listAutomations } from "@/lib/automations.ts";
 import { getAppContext } from "@/lib/env.ts";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export const GET = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   return json({ automations: await listAutomations(ctx, workspaceId) });
 });
 
@@ -19,7 +19,7 @@ export const GET = route(async request => {
 export const POST = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   const input = await parseBody(request, AutomationInput);
   await enforce(ctx.db, `automations:${user.userId}`, { max: 60, windowSeconds: 3600 }, "automation changes");
   return json({ automation: await createAutomation(ctx, user.userId, workspaceId, input) }, 201);

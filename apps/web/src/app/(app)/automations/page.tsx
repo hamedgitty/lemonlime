@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { resolveWorkspace } from "@/lib/access.ts";
+import { pageWorkspace } from "@/lib/current-workspace.ts";
 import { requirePageUser } from "@/lib/auth.ts";
 import { listAutomations } from "@/lib/automations.ts";
 import { getAppContext } from "@/lib/env.ts";
@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Automations" };
 export default async function AutomationsPage() {
   const ctx = await getAppContext();
   const user = await requirePageUser(ctx, "/automations");
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const workspaceId = await pageWorkspace(ctx.db, user.userId);
   const list = await listAutomations(ctx, workspaceId);
   return (
     <main className="mx-auto max-w-3xl space-y-8 px-5 py-10">

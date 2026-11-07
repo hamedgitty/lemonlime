@@ -44,6 +44,14 @@ export interface SandboxRun extends RunningSandbox {
   endReason: "idle" | "user" | "policy" | "error" | "replaced";
 }
 
+/** Someone is about to be invited to a workspace, or to accept an invitation to it. */
+export interface MemberRequest extends PolicySubject {
+  /** People in the workspace now. */
+  members: number;
+  /** Invitations sent and not yet accepted, other than the one being decided. */
+  pendingInvites: number;
+}
+
 export type PolicyDecision =
   | { allow: true }
   | {
@@ -98,6 +106,11 @@ export interface UsagePolicy {
   notice?(subject: PolicySubject): Promise<UsageNotice | null>;
   /** Optional sidebar card for a workspace. Null or absent shows nothing. */
   summary?(subject: PolicySubject): Promise<UsageSummary | null>;
+  /**
+   * Before an invitation is sent and again before it is accepted. Deny → nothing is sent
+   * or joined, and the reason is shown. Left out: anyone may join.
+   */
+  canAddMember?(req: MemberRequest): Promise<PolicyDecision>;
 }
 
 const ALLOW: PolicyDecision = { allow: true };

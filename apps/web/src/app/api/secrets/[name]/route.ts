@@ -1,4 +1,4 @@
-import { resolveWorkspace } from "@/lib/access.ts";
+import { requestWorkspace } from "@/lib/current-workspace.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError, json, route } from "@/lib/http.ts";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const DELETE = route<{ params: Promise<{ name: string }> }>(async (request, { params }) => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   if (!(await deleteSecret(ctx, workspaceId, (await params).name))) throw new HttpError(404, "No secret with that name.");
   return json({ ok: true });
 });

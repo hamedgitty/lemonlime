@@ -1,5 +1,5 @@
+import { requestWorkspace } from "@/lib/current-workspace.ts";
 import { z } from "zod";
-import { resolveWorkspace } from "@/lib/access.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { json, parseBody, route } from "@/lib/http.ts";
@@ -14,7 +14,7 @@ const SetSecretRequest = z.object({ name: z.string().trim().min(1).max(64), valu
 export const GET = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   return json({ secrets: await listSecrets(ctx, workspaceId) });
 });
 
@@ -22,7 +22,7 @@ export const GET = route(async request => {
 export const PUT = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   const { name, value } = await parseBody(request, SetSecretRequest);
   await enforce(ctx.db, `secrets:${user.userId}`, { max: 60, windowSeconds: 3600 }, "secret changes");
   return json({ secret: await setSecret(ctx, user.userId, workspaceId, name, value) });

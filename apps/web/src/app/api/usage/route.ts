@@ -1,4 +1,4 @@
-import { resolveWorkspace } from "@/lib/access.ts";
+import { requestWorkspace } from "@/lib/current-workspace.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { json, route } from "@/lib/http.ts";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export const GET = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   const [notice, summary] = await Promise.all([usageNotice(ctx, user.userId, workspaceId), usageSummary(ctx, user.userId, workspaceId)]);
   return json({ notice, summary });
 });

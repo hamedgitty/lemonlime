@@ -1,5 +1,5 @@
+import { requestWorkspace } from "@/lib/current-workspace.ts";
 import { CreateThreadRequest } from "@lemonlime/protocol";
-import { resolveWorkspace } from "@/lib/access.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { json, parseBody, route } from "@/lib/http.ts";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export const GET = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   return json({ workspaceId, threads: await listThreads(ctx, user.userId, workspaceId) });
 });
 
@@ -22,6 +22,6 @@ export const POST = route(async request => {
   const user = await requireUser(ctx, request);
   const body = await parseBody(request, CreateThreadRequest);
   await enforce(ctx.db, `threads:${user.userId}`, LIMITS.threadsPerUser, "new threads");
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
+  const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
   return json(await createThread(ctx, user.userId, workspaceId, body), 201);
 });

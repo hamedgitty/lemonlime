@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
+import { pageWorkspace } from "@/lib/current-workspace.ts";
 import { renderSlot } from "@lemonlime/plugins";
-import { listAccessTokens, resolveWorkspace } from "@/lib/access.ts";
+import { listAccessTokens } from "@/lib/access.ts";
 import { requirePageUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { githubAppConfig, listInstallations } from "@/lib/github.ts";
@@ -8,13 +9,15 @@ import { listSecrets } from "@/lib/secrets.ts";
 import { GitHubSection } from "./github-section.tsx";
 import { SecretsManager } from "./secrets-manager.tsx";
 import { TokensManager } from "./tokens-manager.tsx";
+import { MembersManager } from "./members-manager.tsx";
+import { listMembers, listWorkspaces } from "@/lib/members.ts";
 
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ github?: string }> }) {
   const ctx = await getAppContext();
   const user = await requirePageUser(ctx, "/settings");
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const workspaceId = await pageWorkspace(ctx.db, user.userId);
   const { billingUI } = ctx.plugin;
   const tokens = await listAccessTokens(ctx.db, user.userId);
   const secretList = await listSecrets(ctx, workspaceId);
@@ -22,6 +25,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const installations = githubEnabled ? await listInstallations(ctx, workspaceId) : [];
   const githubResult = (await searchParams).github ?? null;
   const controlPlaneUrl = ctx.vars.LEMONLIME_PUBLIC_URL ?? "";
+  const { members, invites } = await listMembers(ctx.db, workspaceId);
+  const workspace = (await listWorkspaces(ctx.db, user.userId)).find(w => w.id === workspaceId);
+  const isOwner = workspace?.role === "owner";
 
   return (
     <main className="mx-auto max-w-3xl space-y-10 px-5 py-10">
@@ -35,7 +41,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <dt className="text-muted">Email</dt>
           <dd>{user.email ?? "Unknown"}</dd>
           <dt className="text-muted">Workspace</dt>
-          <dd className="font-mono text-[0.8125rem]">{workspaceId}</dd>
+          <dd>
+            {workspace?.name ?? "Workspace"} <span className="font-mono text-[0.8125rem] text-muted">{workspaceId}</span>
+          </dd>
           {controlPlaneUrl && (
             <>
               <dt className="text-muted">Control plane URL</dt>
@@ -46,6 +54,17 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
       </section>
 
       {renderSlot(billingUI.accountSection, { workspaceId })}
+
+      <section aria-labelledby="members-heading" className="card p-6">
+        <h2 id="members-heading" className="text-xl font-semibold">
+          Members
+        </h2>
+        <p className="mt-1 text-sm text-muted">
+          Everyone here shares the workspace's threads, automations, secrets and GitHub repositories.{" "}
+          {isOwner ? "Invite people by email; they join when they accept, signed in with that address." : "Only owners can invite or remove people."}
+        </p>
+        <MembersManager initialMembers={members} initialInvites={invites} me={user.userId} isOwner={isOwner} canLeave={!workspace?.personal} />
+      </section>
 
       <section aria-labelledby="github-heading" className="card p-6">
         <h2 id="github-heading" className="text-xl font-semibold">

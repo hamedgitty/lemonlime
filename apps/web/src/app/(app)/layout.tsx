@@ -1,8 +1,8 @@
+import { pageWorkspace } from "@/lib/current-workspace.ts";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { renderSlot } from "@lemonlime/plugins";
 import { Logo } from "@/components/logo.tsx";
-import { resolveWorkspace } from "@/lib/access.ts";
 import { getUser } from "@/lib/auth.ts";
 import { SignInRedirect } from "@/components/sign-in-redirect.tsx";
 import { getAppContext } from "@/lib/env.ts";
@@ -10,6 +10,8 @@ import { UsageBanner } from "@/components/usage-banner.tsx";
 import { usageNotice } from "@/lib/usage.ts";
 import { SidebarThreads } from "@/components/sidebar-threads.tsx";
 import { listThreads } from "@/lib/threads.ts";
+import { listWorkspaces } from "@/lib/members.ts";
+import { WorkspaceSwitcher } from "@/components/workspace-switcher.tsx";
 
 export const dynamic = "force-dynamic";
 
@@ -19,11 +21,12 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   // which knows the real address) sends them to /login?next=<this page>.
   const user = await getUser(ctx);
   if (!user) return <SignInRedirect />;
-  const workspaceId = await resolveWorkspace(ctx.db, user.userId);
+  const workspaceId = await pageWorkspace(ctx.db, user.userId);
   const notice = await usageNotice(ctx, user.userId, workspaceId);
   const { billingUI } = ctx.plugin;
 
   const threads = await listThreads(ctx, user.userId, workspaceId);
+  const workspaceList = await listWorkspaces(ctx.db, user.userId);
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -33,6 +36,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
             <Logo />
           </Link>
         </div>
+        {workspaceList.length > 1 && <WorkspaceSwitcher workspaces={workspaceList} current={workspaceId} />}
         <div className="px-2">
           <Link href="/" className="flex h-[30px] items-center gap-2.5 rounded-lg px-2 text-sm hover:bg-cream-hover">
             <svg aria-hidden="true" viewBox="0 0 16 16" className="size-4 text-muted">

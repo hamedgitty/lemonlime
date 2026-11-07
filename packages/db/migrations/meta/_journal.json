@@ -64,6 +64,13 @@
       "when": 1794076444772,
       "tag": "0008_automations",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794089480782,
+      "tag": "0009_workspace_invites",
+      "breakpoints": true
     }
   ]
 }

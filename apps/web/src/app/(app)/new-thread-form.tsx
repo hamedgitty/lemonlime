@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent } from "react";
 import type { AgentKind, CreateThreadRequest, PolicyDenied, SandboxSize, ThreadMode } from "@lemonlime/protocol";
 import { DeniedNotice } from "@/components/denied-notice.tsx";
 import { apiFetch } from "@/lib/api-client.ts";
@@ -13,38 +13,6 @@ const AGENTS: Array<{ value: AgentKind; label: string }> = [
   { value: "opencode", label: "OpenCode" },
   { value: "acp", label: "Other ACP agent" },
 ];
-
-function Segmented<T extends string>({
-  name,
-  value,
-  onChange,
-  options,
-}: {
-  name: string;
-  value: T;
-  onChange: (v: T) => void;
-  options: Array<{ value: T; label: ReactNode; hint?: string }>;
-}) {
-  return (
-    <div role="radiogroup" aria-label={name} className="grid grid-cols-2 gap-1 rounded-lg border border-line bg-cream p-1">
-      {options.map(o => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={value === o.value}
-          onClick={() => onChange(o.value)}
-          className={`rounded-md px-3 py-1.5 text-left text-sm transition-colors ${
-            value === o.value ? "bg-paper font-medium text-ink shadow-sm" : "text-muted hover:text-ink"
-          }`}
-        >
-          {o.label}
-          {o.hint && <span className="block text-xs font-normal text-muted">{o.hint}</span>}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 export function NewThreadForm() {
   const router = useRouter();
@@ -87,108 +55,153 @@ export function NewThreadForm() {
     else setError(res.message);
   }
 
+  const STARTERS = [
+    ["Find and fix a bug", "Look through this repository for a real bug, explain it, fix it, and add a test that would have caught it."],
+    ["Add missing tests", "Find the most important code in this repository that has no tests, and write good tests for it. Run them."],
+    ["Explain this codebase", "Explain how this codebase fits together: the main parts, how data flows, and where I should start reading."],
+    ["Review the last commit", "Review the most recent commit on this branch like a careful senior engineer. List real problems, most important first."],
+  ] as const;
+  const pill = "h-8 rounded-lg bg-transparent px-2 text-sm font-medium text-ink hover:bg-cream-deep focus-visible:bg-cream-deep";
+  const canSend = !busy && prompt.trim().length > 0 && repoUrl.trim().length > 0 && (agent !== "acp" || acpCommand.trim().length > 0);
+
   return (
-    <form onSubmit={submit} className="mt-5 space-y-4">
-      <div>
-        <label htmlFor="agent" className="label">
-          Agent
+    <form onSubmit={submit}>
+      <div className="rounded-xl border border-line bg-paper shadow-[0_1px_2px_rgb(23_32_14/0.04),0_4px_16px_rgb(23_32_14/0.05)] focus-within:border-control">
+        <label htmlFor="prompt" className="sr-only">
+          What should the agent do?
         </label>
-        <select id="agent" className="field" value={agent} onChange={e => setAgent(e.target.value as AgentKind)}>
-          {AGENTS.map(a => (
-            <option key={a.value} value={a.value}>
-              {a.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      {agent === "acp" && (
-        <div>
-          <label htmlFor="acp-command" className="label">
-            Agent command
+        <textarea
+          id="prompt"
+          rows={3}
+          autoFocus
+          className="block w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed outline-none placeholder:text-faint"
+          placeholder="Ask the agent to build anything…"
+          value={prompt}
+          onChange={e => setPrompt(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              if (canSend) e.currentTarget.form?.requestSubmit();
+            }
+          }}
+        />
+        <div className="flex flex-wrap items-center gap-1 px-2.5 pt-1 pb-2.5">
+          <label htmlFor="agent" className="sr-only">
+            Agent
+          </label>
+          <select id="agent" className={pill} value={agent} onChange={e => setAgent(e.target.value as AgentKind)}>
+            {AGENTS.map(a => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="model" className="sr-only">
+            Model
           </label>
           <input
-            id="acp-command"
-            required
-            className="field font-mono"
-            placeholder="gemini --experimental-acp"
-            value={acpCommand}
-            onChange={e => setAcpCommand(e.target.value)}
+            id="model"
+            className={`${pill} w-36 font-normal text-muted placeholder:text-muted`}
+            placeholder="Default model"
+            value={model}
+            onChange={e => setModel(e.target.value)}
           />
+          {agent === "acp" && (
+            <>
+              <label htmlFor="acp-command" className="sr-only">
+                Command that starts the agent
+              </label>
+              <input
+                id="acp-command"
+                className={`${pill} w-56 font-mono font-normal`}
+                placeholder="gemini --experimental-acp"
+                value={acpCommand}
+                onChange={e => setAcpCommand(e.target.value)}
+              />
+            </>
+          )}
+          <span className="flex-1" />
+          <button
+            type="submit"
+            disabled={!canSend}
+            aria-label={busy ? "Starting" : "Start thread"}
+            className={`inline-flex size-[34px] items-center justify-center rounded-full transition-colors ${canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-faint"}`}
+          >
+            <svg aria-hidden="true" viewBox="0 0 16 16" className="size-4">
+              <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
         </div>
-      )}
-      <div>
-        <label htmlFor="model" className="label">
-          Model <span className="font-normal text-muted">(optional)</span>
-        </label>
-        <input id="model" className="field" placeholder="Agent default" value={model} onChange={e => setModel(e.target.value)} />
       </div>
-      <div>
-        <label htmlFor="repo" className="label">
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-1 px-2">
+        <label htmlFor="repo" className="sr-only">
           Repository
         </label>
         <input
           id="repo"
           required
-          className="field"
-          placeholder={mode === "cloud" ? "https://github.com/you/project.git" : "/path/to/project"}
+          className={`${pill} min-w-0 flex-1 font-normal placeholder:text-muted`}
+          placeholder={mode === "cloud" ? "Repository, e.g. https://github.com/you/app.git" : "Folder on your computer, e.g. /Users/you/app"}
           value={repoUrl}
           onChange={e => setRepoUrl(e.target.value)}
         />
-      </div>
-      <div>
-        <label htmlFor="base" className="label">
-          Base branch
+        <label htmlFor="base" className="sr-only">
+          Start from branch
         </label>
-        <input id="base" required className="field font-mono" value={baseBranch} onChange={e => setBaseBranch(e.target.value)} />
-      </div>
-      <div>
-        <span className="label">Where it runs</span>
-        <Segmented
-          name="Where it runs"
-          value={mode}
-          onChange={setMode}
-          options={[
-            { value: "cloud", label: "Cloud", hint: "Isolated sandbox" },
-            { value: "local", label: "This computer", hint: "Via the desktop app" },
-          ]}
+        <input
+          id="base"
+          required
+          className={`${pill} w-28 font-mono font-normal`}
+          value={baseBranch}
+          onChange={e => setBaseBranch(e.target.value)}
+          title="Start from branch"
         />
-      </div>
-      {mode === "cloud" && (
-        <div>
-          <span className="label">Sandbox size</span>
-          <Segmented
-            name="Sandbox size"
-            value={size}
-            onChange={setSize}
-            options={[
-              { value: "small", label: "Small", hint: "1 vCPU · 2 GB" },
-              { value: "large", label: "Large", hint: "2 vCPU · 4 GB" },
-            ]}
-          />
-        </div>
-      )}
-      <div>
-        <label htmlFor="prompt" className="label">
-          First message
+        <label htmlFor="mode" className="sr-only">
+          Where it runs
         </label>
-        <textarea
-          id="prompt"
-          rows={4}
-          className="field h-auto resize-y py-2 leading-relaxed"
-          placeholder="What should the agent do?"
-          value={prompt}
-          onChange={e => setPrompt(e.target.value)}
-        />
+        <select id="mode" className={pill} value={mode} onChange={e => setMode(e.target.value as ThreadMode)}>
+          <option value="cloud">Cloud</option>
+          <option value="local">This computer</option>
+        </select>
+        {mode === "cloud" && (
+          <>
+            <label htmlFor="size" className="sr-only">
+              Sandbox size
+            </label>
+            <select id="size" className={pill} value={size} onChange={e => setSize(e.target.value as SandboxSize)}>
+              <option value="small">Small (1 CPU, 2 GB)</option>
+              <option value="large">Large (2 CPU, 4 GB)</option>
+            </select>
+          </>
+        )}
       </div>
+
       {error && (
-        <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <p role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error}
         </p>
       )}
-      {denied && <DeniedNotice denied={denied} onDismiss={() => setDenied(null)} />}
-      <button type="submit" className="btn-lemon w-full" disabled={busy}>
-        {busy ? (mode === "cloud" ? "Starting sandbox..." : "Creating...") : "Start thread"}
-      </button>
+      {denied && (
+        <div className="mt-4">
+          <DeniedNotice denied={denied} onDismiss={() => setDenied(null)} />
+        </div>
+      )}
+
+      <div className="mt-10 flex items-center gap-3 text-[13px] text-muted" aria-hidden="true">
+        <span className="h-px flex-1 bg-line" />
+        One-click prompts
+        <span className="h-px flex-1 bg-line" />
+      </div>
+      <ul className="mt-4 flex flex-wrap justify-center gap-2.5" aria-label="One-click prompts">
+        {STARTERS.map(([label, text]) => (
+          <li key={label}>
+            <button type="button" onClick={() => setPrompt(text)} className="h-8 rounded-full bg-cream-deep px-4 text-sm hover:bg-cream-hover">
+              {label}
+            </button>
+          </li>
+        ))}
+      </ul>
     </form>
   );
 }

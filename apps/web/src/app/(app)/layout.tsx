@@ -8,6 +8,8 @@ import { SignInRedirect } from "@/components/sign-in-redirect.tsx";
 import { getAppContext } from "@/lib/env.ts";
 import { UsageBanner } from "@/components/usage-banner.tsx";
 import { usageNotice } from "@/lib/usage.ts";
+import { SidebarThreads } from "@/components/sidebar-threads.tsx";
+import { listThreads } from "@/lib/threads.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -21,34 +23,70 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   const notice = await usageNotice(ctx, user.userId, workspaceId);
   const { billingUI } = ctx.plugin;
 
+  const threads = await listThreads(ctx, user.userId, workspaceId);
+
   return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="sticky top-0 z-20 border-b border-line bg-cream/90 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-6 px-5">
+    <div className="flex h-dvh overflow-hidden">
+      <nav aria-label="LemonLime" className="hidden w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep md:flex">
+        <div className="flex h-14 items-center px-4">
           <Link href="/" aria-label="LemonLime home">
             <Logo />
           </Link>
-          <nav className="flex items-center gap-1 text-sm">
-            <Link href="/" className="rounded-md px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink">
-              Threads
-            </Link>
-            <Link href="/settings" className="rounded-md px-2.5 py-1.5 text-muted hover:bg-paper hover:text-ink">
-              Settings
-            </Link>
-          </nav>
-          <div className="ml-auto flex items-center gap-3">
-            {renderSlot(billingUI.headerBadge, { workspaceId })}
-            {user.email && <span className="hidden text-sm text-muted sm:inline">{user.email}</span>}
-            <form action="/auth/signout" method="post">
-              <button type="submit" className="btn-ghost h-8 px-3">
-                Sign out
-              </button>
-            </form>
-          </div>
         </div>
-      </header>
-      <UsageBanner notice={notice} />
-      <div className="flex-1">{children}</div>
+        <div className="px-2">
+          <Link href="/" className="flex h-[30px] items-center gap-2.5 rounded-lg px-2 text-sm hover:bg-cream-hover">
+            <svg aria-hidden="true" viewBox="0 0 16 16" className="size-4 text-muted">
+              <path
+                d="M7.5 2.5h-4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-4M11.5 2l2.5 2.5-6 6H5.5V8z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+            </svg>
+            New thread
+          </Link>
+        </div>
+        <div className="mx-3 my-4 h-px bg-line" />
+        <p className="px-4 pb-2 text-[13.5px] text-muted">Threads</p>
+        <SidebarThreads threads={threads} />
+        <div className="px-2 pb-2">{renderSlot(billingUI.headerBadge, { workspaceId })}</div>
+        <div className="flex h-11 shrink-0 items-center gap-1 border-t border-line px-2">
+          <Link href="/settings" className="inline-flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-muted hover:bg-cream-hover hover:text-ink">
+            <svg aria-hidden="true" viewBox="0 0 16 16" className="size-4">
+              <circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+              <path
+                d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+            </svg>
+            Settings
+          </Link>
+          <span className="min-w-0 flex-1 truncate px-1 text-right text-[12.5px] text-muted" title={user.email ?? undefined}>
+            {user.email}
+          </span>
+          <form action="/auth/signout" method="post">
+            <button type="submit" className="inline-flex h-8 items-center rounded-lg px-2 text-[12.5px] text-muted hover:bg-cream-hover hover:text-ink">
+              Sign out
+            </button>
+          </form>
+        </div>
+      </nav>
+      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line px-4 md:hidden">
+          <Link href="/" aria-label="LemonLime home">
+            <Logo />
+          </Link>
+          <span className="flex-1" />
+          <Link href="/settings" className="text-sm text-muted hover:text-ink">
+            Settings
+          </Link>
+        </header>
+        <UsageBanner notice={notice} />
+        <div className="flex-1">{children}</div>
+      </div>
     </div>
   );
 }

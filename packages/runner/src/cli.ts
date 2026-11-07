@@ -92,7 +92,9 @@ export function worktreePathFor(home: string, sourceRepo: string, threadId: stri
   return join(home, "worktrees", `${name}-${hash}`, threadId);
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
+export async function main(args = process.argv.slice(2)): Promise<void> {
+  // `pnpm runner -- --help` passes the `--` along; it isn't an argument.
+  const argv = args[0] === "--" ? args.slice(1) : args;
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
   if (argv[0] === "git-credential") {

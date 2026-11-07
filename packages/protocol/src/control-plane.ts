@@ -55,6 +55,16 @@ export const RunnerHeartbeat = z.object({
   background: z.enum(["build", "download", "server"]).nullable().optional(),
   /** True once the runner has finished a `drain`: history uploaded, state saved. */
   drained: z.boolean().optional(),
+  /**
+   * CPU in use across the sandbox since the last heartbeat (in cores) and the program
+   * using the most. Reported as measured inside the sandbox, so treat it as a hint.
+   */
+  load: z
+    .object({
+      cpuCores: z.number().nonnegative().max(1024),
+      topProcess: z.string().max(64).nullable(),
+    })
+    .optional(),
 });
 export type RunnerHeartbeat = z.infer<typeof RunnerHeartbeat>;
 

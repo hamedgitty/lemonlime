@@ -62,9 +62,11 @@ describe("ActivityMonitor", () => {
     now = 10_000;
     p.proc(11, "gopls", 9000); // language server busy: upkeep, doesn't count
     expect(m.sample()).toBeNull();
+    expect(m.load()).toEqual({ cpuCores: 8, topProcess: "gopls" }); // but it does show as load
     now = 20_000;
     p.proc(10, "node", 1500); // 500 ticks in 10 s = half a core
     expect(m.sample()).toBe("build");
+    expect(m.load()).toEqual({ cpuCores: 0.5, topProcess: "node" });
     now = 30_000;
     p.dev(1000 + 5 * 1024 * 1024); // 5 MB in 10 s
     expect(m.sample()).toBe("download");
@@ -163,7 +165,7 @@ describe("heartbeat", () => {
       version: "t",
       onShutdown: () => undefined,
       intervalMs: 60_000,
-      activity: { sample: () => null },
+      activity: { sample: () => null, load: () => null },
     });
     cleanups.push(() => hb.stop());
     await hb.beat();
@@ -181,7 +183,7 @@ describe("heartbeat", () => {
       version: "t",
       onShutdown: () => undefined,
       intervalMs: 60_000,
-      activity: { sample: () => "server" },
+      activity: { sample: () => "server", load: () => ({ cpuCores: 0.5, topProcess: "node" }) },
     });
     cleanups.push(() => hb.stop());
     await hb.beat();

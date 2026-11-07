@@ -12,11 +12,28 @@ export interface SandboxRequest extends PolicySubject {
   size: SandboxSize;
 }
 
+/**
+ * What the sandbox's runner last reported. Measured inside the sandbox, so code running
+ * there could fake it: use it as a hint, together with what the provider reports.
+ */
+export interface SandboxActivity {
+  /** Whether the agent is working on a turn right now. */
+  agentWorking: boolean;
+  /** CPU in use across the sandbox (cores), or null if not reported yet. */
+  cpuCores: number | null;
+  /** The program using the most CPU, or null. */
+  topProcess: string | null;
+  /** When the runner last reported (ISO), or null. */
+  reportedAt: string | null;
+}
+
 /** A sandbox that is currently running. */
 export interface RunningSandbox extends SandboxRequest {
   sandboxId: string;
   /** When this run started (ISO). Resets on every resume. */
   runningSince: string;
+  /** Present when the control plane has heard from the runner. */
+  activity?: SandboxActivity;
 }
 
 /** One finished stretch of running time, from start/resume to pause/stop. */

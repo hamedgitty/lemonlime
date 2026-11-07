@@ -70,6 +70,12 @@ function runningSandbox(row: ThreadRow): RunningSandbox {
     size: row.sandboxSize,
     sandboxId: row.sandboxId ?? "",
     runningSince: iso(row.runningSince ?? row.updatedAt),
+    activity: {
+      agentWorking: row.status === "running",
+      cpuCores: row.cpuCores ?? null,
+      topProcess: row.topProcess ?? null,
+      reportedAt: row.lastHeartbeatAt ?? null,
+    },
   };
 }
 
@@ -374,6 +380,8 @@ export async function recordHeartbeat(ctx: AppContext, hb: RunnerHeartbeat): Pro
     idleSince: hb.idleSince,
     lastHeartbeatAt: now,
     background: hb.background ?? null,
+    cpuCores: hb.load?.cpuCores ?? null,
+    topProcess: hb.load?.topProcess ?? null,
     drainRequestedAt,
     drainedAt,
   });

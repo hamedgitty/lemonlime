@@ -112,6 +112,27 @@ describe("threads, scoped to a workspace", () => {
     expect(closed.thread.status).toBe("stopped");
   });
 
+  it("passes what the runner reports about CPU use to the usage policy", async () => {
+    const seen: unknown[] = [];
+    const { ctx, db } = await createTestApp({
+      policy: {
+        async canKeepRunning(sandbox) {
+          seen.push(sandbox.activity);
+          return sandbox.activity?.topProcess === "xmrig" ? { allow: false, reason: "Looks like mining." } : { allow: true };
+        },
+      },
+    });
+    const alice = await addUser(db, "alice@example.com");
+    const { thread } = await createThread(ctx, alice.userId, alice.workspaceId, cloudThread);
+    const beat = { threadId: thread.id, status: "running" as const, latestSeq: 1, idleSince: null, runnerVersion: "test" };
+    await recordHeartbeat(ctx, { ...beat, load: { cpuCores: 0.4, topProcess: "node" } });
+    expect(await sweepRunningSandboxes(ctx)).toMatchObject({ paused: [] });
+    expect(seen[0]).toMatchObject({ agentWorking: true, cpuCores: 0.4, topProcess: "node" });
+    await recordHeartbeat(ctx, { ...beat, load: { cpuCores: 1, topProcess: "xmrig" } });
+    // Denied: drained first, like any pause, so nothing the agent did is lost.
+    expect(await sweepRunningSandboxes(ctx)).toMatchObject({ paused: [], draining: [thread.id] });
+  });
+
   it("runs cloud threads through the usage policy and records each run once", async () => {
     const decisions: Array<{ allow: boolean }> = [];
     const stopped: string[] = [];

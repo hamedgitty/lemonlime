@@ -20,7 +20,7 @@ export interface HeartbeatOptions {
   ownPorts?: number[];
   /** For tests. */
   intervalMs?: number;
-  activity?: Pick<ActivityMonitor, "sample">;
+  activity?: Pick<ActivityMonitor, "sample" | "load">;
 }
 
 export interface Heartbeat {
@@ -103,13 +103,17 @@ export function startHeartbeat(runner: ThreadRunner, opts: HeartbeatOptions): He
       await syncHistory(false).catch(err => opts.log?.(`history upload failed: ${err instanceof Error ? err.message : String(err)}`));
       const t = runner.thread;
       if (t.status === "running") drained = false;
+      // Sampled on every beat so CPU use is measured while the agent works too.
+      const busy = activity.sample();
+      const load = activity.load();
       const body: RunnerHeartbeat = {
         threadId,
         status: t.status,
         latestSeq: t.latestSeq,
         idleSince: runner.idle,
         runnerVersion: opts.version,
-        background: t.status === "running" ? null : activity.sample(),
+        background: busy === null || t.status === "running" ? null : busy,
+        ...(load ? { load } : {}),
         ...(drained ? { drained: true } : {}),
       };
       const res = await call("/api/runner/heartbeat", { method: "POST", body });

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import type { AgentConfig, RepoRef, SandboxSize, ThreadMode, ThreadStatus } from "@lemonlime/protocol";
 
 /**
@@ -178,6 +178,9 @@ export const threads = sqliteTable(
     drainedAt: text("drained_at"),
     /** Pull request opened for the thread's branch, if any. */
     pullRequestUrl: text("pull_request_url"),
+    /** CPU in use in the sandbox at the last heartbeat (cores), and the busiest program. */
+    cpuCores: real("cpu_cores"),
+    topProcess: text("top_process"),
     createdAt: text("created_at").notNull().$defaultFn(nowIso),
     updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
   },

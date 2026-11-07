@@ -3,6 +3,12 @@ import { join } from "node:path";
 
 export type BackgroundActivity = "build" | "download" | "server";
 
+/** CPU in use across the sandbox between the last two samples, and the busiest program. */
+export interface SandboxLoad {
+  cpuCores: number;
+  topProcess: string | null;
+}
+
 /** Programs whose activity is upkeep, not work the user is waiting for. */
 const HOUSEKEEPING = new Set([
   "claude",
@@ -53,7 +59,8 @@ export class ActivityMonitor {
   private readonly ownPorts: Set<number>;
   private readonly ticks: number;
   private readonly now: () => number;
-  private last: { at: number; cpu: Map<number, number>; rx: number } | null = null;
+  private last: { at: number; cpu: Map<number, { ticks: number; comm: string }>; rx: number } | null = null;
+  private lastLoad: SandboxLoad | null = null;
 
   constructor(opts: ActivityMonitorOptions = {}) {
     this.proc = opts.procRoot ?? "/proc";
@@ -67,6 +74,14 @@ export class ActivityMonitor {
     return existsSync(join(this.proc, "net", "tcp"));
   }
 
+  /**
+   * CPU use measured by the latest `sample()`, counting every program but the runner
+   * (housekeeping included). Null until two samples have been taken.
+   */
+  load(): SandboxLoad | null {
+    return this.lastLoad;
+  }
+
   sample(): BackgroundActivity | null {
     if (!this.supported) return null;
     const at = this.now();
@@ -77,17 +92,27 @@ export class ActivityMonitor {
 
     if (prev && at > prev.at) {
       const seconds = (at - prev.at) / 1000;
-      let ticks = 0;
-      for (const [pid, t] of cpu) ticks += Math.max(0, t - (prev.cpu.get(pid) ?? t));
-      if (ticks / this.ticks / seconds >= BUILD_CPU) return "build";
+      let work = 0;
+      let all = 0;
+      const byName = new Map<string, number>();
+      for (const [pid, t] of cpu) {
+        const used = Math.max(0, t.ticks - (prev.cpu.get(pid)?.ticks ?? t.ticks));
+        all += used;
+        byName.set(t.comm, (byName.get(t.comm) ?? 0) + used);
+        if (!HOUSEKEEPING.has(t.comm)) work += used;
+      }
+      let top: string | null = null;
+      for (const [name, used] of byName) if (used > 0 && (top === null || used > byName.get(top)!)) top = name;
+      this.lastLoad = { cpuCores: Math.round((all / this.ticks / seconds) * 100) / 100, topProcess: top };
+      if (work / this.ticks / seconds >= BUILD_CPU) return "build";
       if ((rx - prev.rx) / seconds >= DOWNLOAD_BYTES_PER_SEC) return "download";
     }
     return this.hasServer() ? "server" : null;
   }
 
-  /** Total CPU ticks per process, leaving out the runner and housekeeping programs. */
-  private cpuByPid(): Map<number, number> {
-    const out = new Map<number, number>();
+  /** Total CPU ticks per process, with its program name, leaving out the runner itself. */
+  private cpuByPid(): Map<number, { ticks: number; comm: string }> {
+    const out = new Map<number, { ticks: number; comm: string }>();
     for (const name of safeReaddir(this.proc)) {
       if (!/^\d+$/.test(name)) continue;
       const pid = Number(name);
@@ -97,11 +122,10 @@ export class ActivityMonitor {
       // "pid (comm) state ppid ... utime stime": comm may contain spaces, so split after ")".
       const close = stat.lastIndexOf(")");
       const comm = stat.slice(stat.indexOf("(") + 1, close);
-      if (HOUSEKEEPING.has(comm)) continue;
       const fields = stat.slice(close + 2).split(" ");
       const utime = Number(fields[11]);
       const stime = Number(fields[12]);
-      if (Number.isFinite(utime) && Number.isFinite(stime)) out.set(pid, utime + stime);
+      if (Number.isFinite(utime) && Number.isFinite(stime)) out.set(pid, { ticks: utime + stime, comm });
     }
     return out;
   }

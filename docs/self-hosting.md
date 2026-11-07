@@ -443,7 +443,10 @@ The control plane calls `canStartSandbox` before every sandbox start or resume
 (a denial returns HTTP 402 with a `PolicyDenied` body), `onSandboxStarted` after
 each start or resume, `onSandboxStopped` with the runtime and end reason after
 each pause or stop, and `canKeepRunning` for every running sandbox during the
-sweep.
+sweep. `canKeepRunning` also gets the sandbox's last reported `activity`: whether the
+agent is mid-turn, the CPU in use and the busiest program. The runner measures these
+inside the sandbox, so a policy can use them to notice runaway or unwanted work but
+shouldn't treat them as proof.
 
 ## The desktop app
 

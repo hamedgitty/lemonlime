@@ -1,20 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, Bot, Check, Cloud, Eye, EyeOff, Keyboard, Package, Palette, Search, Settings as SettingsIcon, UserRound } from "lucide-react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { ArrowLeft, BookOpen, Bot, Check, Cloud, Eye, EyeOff, Keyboard, Package, Palette, Search, Settings as SettingsIcon, UserRound } from "lucide-react";
 import { CloudApi, CloudError, normalizeBaseUrl } from "../lib/cloud.ts";
 import { AGENT_LABELS } from "../lib/format.ts";
 import { startBrowserSignIn } from "../lib/desktopAuth.ts";
 import { checkForUpdate, type AvailableUpdate } from "../lib/updates.ts";
-import { inDesktopShell } from "../lib/native.ts";
+import { addSkillFromFolder, confirmAction, inDesktopShell, listSkills, removeSkill, skillsFolder, type SkillInfo } from "../lib/native.ts";
 import { NAV_ITEMS, type Settings, type UiPrefs } from "../lib/storage.ts";
 import { Kbd, Toggle } from "./primitives.tsx";
 import { Button, SegmentedControl, Spinner, TextInput, cx, openExternal } from "./ui.tsx";
 
-export type SettingsPage = "account" | "general" | "agents" | "appearance" | "keyboard" | "updates";
+export type SettingsPage = "account" | "general" | "agents" | "skills" | "appearance" | "keyboard" | "updates";
 
 const PAGES: { id: SettingsPage; label: string; icon: typeof UserRound; keywords: string }[] = [
   { id: "account", label: "Account", icon: UserRound, keywords: "cloud control plane url token sign in connect" },
   { id: "general", label: "General", icon: SettingsIcon, keywords: "runner binary path local" },
   { id: "agents", label: "Agents", icon: Bot, keywords: "claude codex opencode acp version sign in update" },
+  { id: "skills", label: "Skills", icon: BookOpen, keywords: "skill skill.md instructions add folder" },
   { id: "appearance", label: "Appearance", icon: Palette, keywords: "sidebar organize sort search pinned" },
   { id: "keyboard", label: "Keyboard", icon: Keyboard, keywords: "shortcuts keys" },
   { id: "updates", label: "Updates", icon: Package, keywords: "version release changelog" },
@@ -154,6 +156,7 @@ export function SettingsView({
         )}
         {page === "general" && <GeneralPage settings={settings} onSave={onSave} />}
         {page === "agents" && <AgentsPage />}
+        {page === "skills" && <SkillsPage />}
         {page === "appearance" && <AppearancePage prefs={prefs} onPrefs={onPrefs} />}
         {page === "keyboard" && <KeyboardPage />}
         {page === "updates" && <UpdatesPage />}
@@ -427,6 +430,90 @@ function AgentsPage() {
         <span className="inline-flex h-6 items-center rounded-full bg-cream-deep px-2.5 text-[12.5px] font-medium text-ink-soft">Bring your own</span>
       </Row>
     </Section>
+  );
+}
+
+function SkillsPage() {
+  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [added, setAdded] = useState<string | null>(null);
+  const shell = inDesktopShell();
+  const reload = () =>
+    listSkills()
+      .then(setSkills)
+      .catch(e => setError(String(e)));
+  useEffect(() => {
+    void reload();
+  }, []);
+  const act = async (fn: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await fn();
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const add = () =>
+    act(async () => {
+      const name = await addSkillFromFolder();
+      setAdded(name);
+    });
+  const remove = (name: string) =>
+    act(async () => {
+      if (await confirmAction(`Remove the ${name} skill? New threads won't get it; threads that already have it keep their copy.`)) await removeSkill(name);
+    });
+  const bundled = skills?.filter(s => s.source === "bundled") ?? [];
+  const yours = skills?.filter(s => s.source === "yours") ?? [];
+
+  return (
+    <>
+      <Section
+        title="Your skills"
+        description={
+          <>
+            A skill is a folder with a <code className="font-mono text-[12.5px] text-ink">SKILL.md</code> that tells agents how to do something your way. Yours
+            are copied into every new local thread, for every agent.
+          </>
+        }
+      >
+        {yours.length === 0 && <p className="text-[14px] text-ink-soft">{skills === null ? "Loading…" : "None yet."}</p>}
+        {yours.map(s => (
+          <Row key={s.name} label={s.name} description={s.description || undefined}>
+            <Button variant="ghost" onClick={() => void remove(s.name)}>
+              Remove
+            </Button>
+          </Row>
+        ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => void add()} disabled={!shell}>
+            Add skill folder…
+          </Button>
+          <Button variant="ghost" disabled={!shell} onClick={() => void act(async () => revealItemInDir(await skillsFolder()))}>
+            Show in folder
+          </Button>
+          {added && !error && (
+            <span role="status" className="inline-flex items-center gap-1.5 text-[13.5px] text-leaf">
+              <Check aria-hidden="true" className="size-4" />
+              Added {added}
+            </span>
+          )}
+        </div>
+        {error && (
+          <p role="alert" className="text-[13.5px] text-danger">
+            {error}
+          </p>
+        )}
+      </Section>
+      <Section title="Included with LemonLime" description="Always copied into threads, so agents keep to the same habits.">
+        {bundled.map(s => (
+          <Row key={s.name} label={s.name} description={s.description || undefined}>
+            <span className="inline-flex h-6 items-center rounded-full bg-cream-deep px-2.5 text-[12.5px] font-medium text-ink-soft">Included</span>
+          </Row>
+        ))}
+        {bundled.length === 0 && <p className="text-[14px] text-ink-soft">{shell ? "Loading…" : "Shown in the desktop app."}</p>}
+      </Section>
+    </>
   );
 }
 

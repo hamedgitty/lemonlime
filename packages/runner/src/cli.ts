@@ -38,7 +38,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            ~/.lemonlime/threads/<thread> with --source-repo)
   --control-plane <url>    Send heartbeats to this control plane
   --autonomy <level>       full | edits (default: full inside a sandbox, otherwise edits)
-  --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable)
+  --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable).
+                           Skills in ~/.lemonlime/skills are always copied too.
   --no-bundled-skills      Don't copy LemonLime's own skills into the thread
   --no-git                 Don't manage a branch or commit changes
   -h, --help               Show this help
@@ -195,7 +196,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     ...(values["control-plane"] && secret
       ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, secret, c) }
       : {}),
-    extraSkillDirs: (values.skills ?? []).map(d => resolve(d)),
+    // The user's own skills (added in the desktop app's settings), then any given here.
+    extraSkillDirs: [join(home, "skills"), ...(values.skills ?? []).map(d => resolve(d))],
   });
 
   const log = (m: string) => process.stderr.write(`[runner ${id}] ${m}\n`);

@@ -64,3 +64,4 @@ jobs:
       # The app ships the runner as one executable; Tauri's build needs the file to exist.
       - run: pnpm --filter @lemonlime/runner build:sea
       - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml

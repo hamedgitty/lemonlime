@@ -5,6 +5,7 @@ mod paths;
 mod repo;
 mod runner;
 mod secrets;
+mod skills;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -38,6 +39,10 @@ pub fn run() {
             repo::inspect_repo,
             secrets::secret_get,
             secrets::secret_set,
+            skills::list_skills,
+            skills::add_skill,
+            skills::remove_skill,
+            skills::skills_folder,
             confirm_quit,
         ])
         .build(tauri::generate_context!())

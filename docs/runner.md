@@ -82,6 +82,8 @@ and other ACP agents. They cover git hygiene, running tests first, opening a pul
 request, and when to stop and ask. The copies are listed in the repository's local
 `.git/info/exclude`, so they are never committed. Add your own with `--skills <dir>`
 (each skill is a folder with a `SKILL.md`), or leave ours out with `--no-bundled-skills`.
+Skills in `~/.lemonlime/skills` (or `$LEMONLIME_HOME/skills`) are always copied too; the
+desktop app's **Settings → Skills** adds and removes them there.
 
 ## Approvals
 

@@ -84,6 +84,37 @@ export async function pickFolder(): Promise<string | null> {
   return typeof picked === "string" ? picked : null;
 }
 
+export interface SkillInfo {
+  name: string;
+  description: string;
+  source: "bundled" | "yours";
+}
+
+/** LemonLime's own skills and the user's, as copied into every local thread. */
+export async function listSkills(): Promise<SkillInfo[]> {
+  if (!isTauri()) return [];
+  return invoke<SkillInfo[]>("list_skills");
+}
+
+/** Asks for a skill folder and adds it. Null if the user cancels. */
+export async function addSkillFromFolder(): Promise<string | null> {
+  requireShell();
+  const picked = await open({ directory: true, multiple: false, title: "Choose a skill folder (one with a SKILL.md)" });
+  if (typeof picked !== "string") return null;
+  return invoke<string>("add_skill", { path: picked });
+}
+
+export async function removeSkill(name: string): Promise<void> {
+  requireShell();
+  await invoke("remove_skill", { name });
+}
+
+/** The folder the user's skills live in (created if missing). */
+export async function skillsFolder(): Promise<string> {
+  requireShell();
+  return invoke<string>("skills_folder");
+}
+
 /** Asks a yes/no question with the native dialog (or the browser's when not in the shell). */
 export async function confirmAction(message: string): Promise<boolean> {
   if (isTauri()) return ask(message, { title: "LemonLime", kind: "warning" });

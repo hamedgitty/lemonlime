@@ -6,6 +6,7 @@ import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type Ag
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
+import { installSkills } from "./skills.ts";
 
 export interface ThreadRunnerOptions {
   thread: Thread;
@@ -31,6 +32,10 @@ export interface ThreadRunnerOptions {
   checkAgentVersion?: boolean;
   /** How long an approval request waits for the user before it is declined. Default 30 minutes. */
   approvalTimeoutMs?: number;
+  /** Copy LemonLime's bundled skills into the thread. Default true. */
+  bundledSkills?: boolean;
+  /** More skill folders (each with a SKILL.md inside) to copy into the thread. */
+  extraSkillDirs?: string[];
 }
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60_000;
@@ -137,6 +142,21 @@ export class ThreadRunner {
         const rel = relative(this.opts.workdir, this.opts.dataDir);
         if (rel && !rel.startsWith("..") && !isAbsolute(rel)) await this.git.excludePath(rel);
       }
+    }
+    try {
+      await installSkills({
+        workdir: this.opts.workdir,
+        kind: this.opts.adapter.kind,
+        git: this.git,
+        bundled: this.opts.bundledSkills ?? true,
+        extraDirs: this.opts.extraSkillDirs ?? [],
+      });
+    } catch (err) {
+      this.store.append({
+        type: "notice",
+        code: "skills_not_installed",
+        message: `Couldn't add LemonLime's skills to this thread: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
     this.agentState = saved?.agentState ?? {};
     this.session = this.newSession();

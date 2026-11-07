@@ -34,6 +34,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            ~/.lemonlime/threads/<thread> with --source-repo)
   --control-plane <url>    Send heartbeats to this control plane
   --autonomy <level>       full | edits (default: full inside a sandbox, otherwise edits)
+  --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable)
+  --no-bundled-skills      Don't copy LemonLime's own skills into the thread
   --no-git                 Don't manage a branch or commit changes
   -h, --help               Show this help
 
@@ -99,6 +101,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       "control-plane": { type: "string" },
       autonomy: { type: "string" },
       "no-git": { type: "boolean", default: false },
+      skills: { type: "string", multiple: true },
+      "no-bundled-skills": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
@@ -161,6 +165,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     ...(values.repo ? { repoUrl: values.repo } : {}),
     ...(sourceRepo ? { sourceRepo } : {}),
     checkAgentVersion: true,
+    bundledSkills: !values["no-bundled-skills"],
+    extraSkillDirs: (values.skills ?? []).map(d => resolve(d)),
   });
 
   const log = (m: string) => process.stderr.write(`[runner ${id}] ${m}\n`);

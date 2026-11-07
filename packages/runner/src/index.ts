@@ -7,4 +7,5 @@ export { startServer, type ServerOptions, type RunningServer } from "./server.ts
 export { startHeartbeat, type HeartbeatOptions } from "./heartbeat.ts";
 export { cleanup, lemonlimeHome, main, splitCommand, worktreePathFor } from "./cli.ts";
 export { RUNNER_VERSION } from "./version.ts";
+export { BUNDLED_SKILLS_DIR, installSkills, listSkills, skillsDirFor } from "./skills.ts";
 export * from "./agents/index.ts";

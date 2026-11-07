@@ -31,7 +31,8 @@ model calls.
 packages/
   protocol/   Zod schemas + types for every message between app, control plane and runner
   runner/     Node daemon that runs next to one agent; spawns the CLI, streams events,
-              stores history, manages the thread's git branch
+              stores history, manages the thread's git branch; runner/skills holds the
+              skills copied into every thread
   sandbox/    SandboxProvider interface + Docker, Daytona and E2B implementations
   plugins/    UsagePolicy and BillingUI hook types with allow-all / render-nothing defaults
   deployment-plugin/  The plugin bundled into the web app (default: none); deployments replace it at build time
@@ -40,7 +41,6 @@ apps/
   web/        Next.js control plane (auth, threads, provisioning, tokens, dashboard) on
               Cloudflare Workers + D1 (OpenNext) or plain Node + SQLite; Better Auth for sign-in
   desktop/    Tauri 2 + React + Tailwind desktop app
-skills/       Bundled agent skills
 docs/         Self-hosting and architecture docs
 ```
 

@@ -74,6 +74,15 @@ Environment:
   restart it commits whatever the agent left behind, records an error with code
   `turn_outcome_unknown`, then carries on with the queue.
 
+## Skills
+
+Every thread gets LemonLime's bundled skills (`packages/runner/skills`), copied to where
+its agent looks: `.claude/skills` for Claude Code, `.agents/skills` for Codex, OpenCode
+and other ACP agents. They cover git hygiene, running tests first, opening a pull
+request, and when to stop and ask. The copies are listed in the repository's local
+`.git/info/exclude`, so they are never committed. Add your own with `--skills <dir>`
+(each skill is a folder with a `SKILL.md`), or leave ours out with `--no-bundled-skills`.
+
 ## Approvals
 
 At autonomy `edits` (the default for local threads) agents edit files freely but ask

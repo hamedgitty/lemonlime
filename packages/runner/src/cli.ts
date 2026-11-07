@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { AgentKind, branchForThread, ThreadId, type Thread } from "@lemonlime/protocol";
+import { AgentKind, branchForThread, signToken, ThreadId, type Thread } from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { GitWorkspace } from "./git.ts";
 import { secretsFromEnv } from "./redact.ts";
 import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
+import type { AgentCredential } from "./login.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
@@ -189,10 +190,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     bundledSkills: !values["no-bundled-skills"],
     redact: secretsFromEnv(),
     ...(cloudGit ? { pushBranch: true, credentialHelper: credentialHelperCommand() } : {}),
+    ...(values["control-plane"] && secret
+      ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, secret, c) }
+      : {}),
     extraSkillDirs: (values.skills ?? []).map(d => resolve(d)),
   });
 
   const log = (m: string) => process.stderr.write(`[runner ${id}] ${m}\n`);
+  // Sign-ins the user made in earlier sandboxes arrive as files to put back in place.
+  for (const credential of writeAgentFiles()) runner.useCredential(credential);
   await runner.init();
   const server = await startServer(runner, { host: values.host!, port, threadSecret: secret, version: RUNNER_VERSION });
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
@@ -220,6 +226,43 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 
   process.on("SIGTERM", () => void shutdown(0));
   process.on("SIGINT", () => void shutdown(0));
+}
+
+/**
+ * Files from LEMONLIME_AGENT_FILES (base64 JSON: path under $HOME → content), such as
+ * Codex's auth.json, written with owner-only permissions. The variable is then removed so
+ * the agent never sees it.
+ */
+export function writeAgentFiles(env: NodeJS.ProcessEnv = process.env, home = homedir()): AgentCredential[] {
+  const raw = env.LEMONLIME_AGENT_FILES;
+  delete env.LEMONLIME_AGENT_FILES;
+  if (!raw) return [];
+  let files: Record<string, string>;
+  try {
+    files = JSON.parse(Buffer.from(raw, "base64").toString("utf8")) as Record<string, string>;
+  } catch {
+    return [];
+  }
+  const out: AgentCredential[] = [];
+  for (const [path, content] of Object.entries(files)) {
+    if (path.startsWith("/") || path.split("/").includes("..")) continue;
+    const file = join(home, path);
+    mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    writeFileSync(file, content, { mode: 0o600 });
+    out.push({ kind: "file", name: path, value: content });
+  }
+  return out;
+}
+
+async function uploadCredential(controlPlane: string, threadId: string, agent: string, secret: string, c: AgentCredential): Promise<void> {
+  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 120 }, secret);
+  const res = await fetch(`${controlPlane.replace(/\/+$/, "")}/api/runner/agent-credentials`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ threadId, agent, kind: c.kind, name: c.name, value: c.value }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 /** `lemonlime-runner cleanup`: forget a local thread's worktree and history. */

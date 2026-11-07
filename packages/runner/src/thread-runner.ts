@@ -6,6 +6,7 @@ import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type Ag
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
+import { type AgentCredential, LoginSession, type LoginUpdate } from "./login.ts";
 import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
 
@@ -43,6 +44,10 @@ export interface ThreadRunnerOptions {
   pushBranch?: boolean;
   /** git credential helper for clone/fetch/push (cloud threads; see git-credential.ts). */
   credentialHelper?: string;
+  /** Keep a credential the user produced by signing the agent in (cloud threads upload it). */
+  onAgentCredential?: (credential: AgentCredential) => Promise<void>;
+  /** For tests: the command a sign-in runs instead of the agent's own. */
+  loginCommand?: string[];
 }
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60_000;
@@ -117,7 +122,8 @@ export class ThreadRunner {
   private readonly seen = new Set<string>();
 
   constructor(private readonly opts: ThreadRunnerOptions) {
-    this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(opts.redact ?? {}));
+    this.redactions = { ...opts.redact };
+    this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
     this.git = opts.git === false ? null : new GitWorkspace(opts.workdir, opts.credentialHelper);
   }
@@ -230,6 +236,69 @@ export class ThreadRunner {
     }
     this.startTurn(text, clientMsgId);
     return { clientMsgId, result: "started" };
+  }
+
+  private readonly redactions: Record<string, string>;
+  private login: LoginSession | null = null;
+  private lastLogin: LoginUpdate | null = null;
+  private readonly loginListeners = new Set<(u: LoginUpdate) => void>();
+
+  /** Sign-in progress for connected apps. Never stored in history. */
+  onLogin(listener: (u: LoginUpdate) => void): () => void {
+    this.loginListeners.add(listener);
+    if (this.login && this.lastLogin) listener(this.lastLogin);
+    return () => this.loginListeners.delete(listener);
+  }
+
+  /** Start signing the agent in to the user's own account (or re-send where it stands). */
+  startLogin(): void {
+    if (this.login) {
+      if (this.lastLogin) for (const l of this.loginListeners) l(this.lastLogin);
+      return;
+    }
+    const session = new LoginSession(
+      this.opts.adapter.kind,
+      u => {
+        this.lastLogin = u;
+        for (const l of this.loginListeners) l(u);
+      },
+      { cwd: this.opts.workdir, ...(this.opts.loginCommand ? { command: this.opts.loginCommand, usePty: false } : {}) },
+    );
+    this.login = session;
+    void session
+      .run()
+      .then(async credential => {
+        if (!credential) return;
+        this.useCredential(credential);
+        await this.opts.onAgentCredential?.(credential).catch(err =>
+          this.store.append({
+            type: "notice",
+            code: "credential_not_saved",
+            message: `Signed in, but LemonLime couldn't save the sign-in for your next sandboxes: ${String(err)}`,
+          }),
+        );
+      })
+      .finally(() => {
+        if (this.login === session) this.login = null;
+      });
+  }
+
+  loginInput(text: string): void {
+    this.login?.input(text);
+  }
+
+  cancelLogin(): void {
+    this.login?.cancel();
+  }
+
+  /** Make a credential take effect now, and keep its value out of every event. */
+  useCredential(credential: AgentCredential): void {
+    if (credential.kind === "env") {
+      process.env[credential.name] = credential.value;
+      this.redactions[credential.name] = credential.value;
+    } else {
+      for (const [i, value] of tokensIn(credential.value).entries()) this.redactions[`${credential.name}#${i + 1}`] = value;
+    }
   }
 
   /** Answer an approval request. Returns false if it was already decided or doesn't exist. */
@@ -472,4 +541,20 @@ export class ThreadRunner {
     const state: SavedState = { agentState: this.session?.saveState() ?? this.agentState, status: this.status, queue: this.queue };
     writeFileSync(f, JSON.stringify(state, null, 2));
   }
+}
+
+/** Long string values in a JSON credential file (tokens), to keep out of history. */
+export function tokensIn(json: string): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown) => {
+    if (typeof v === "string" && v.length >= 20 && !/\s/.test(v)) out.push(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  try {
+    walk(JSON.parse(json));
+  } catch {
+    if (json.trim().length >= 20) out.push(json.trim());
+  }
+  return out;
 }

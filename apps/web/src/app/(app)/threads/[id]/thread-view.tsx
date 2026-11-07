@@ -10,6 +10,7 @@ import { AGENT_LABELS, StatusPill, repoName } from "@/components/status-pill.tsx
 import { apiFetch } from "@/lib/api-client.ts";
 import type { ThreadResponse } from "@/lib/threads.ts";
 import { addEvent, buildTimeline, type PendingMessage } from "@/lib/timeline.ts";
+import { SignInPanel, type LoginUpdate } from "./sign-in-panel.tsx";
 import { Timeline } from "./timeline.tsx";
 
 type Conn = ConnectionState | "offline";
@@ -38,6 +39,8 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   const [busy, setBusy] = useState<null | "pause" | "resume" | "close" | "pr">(null);
   const [pullRequestUrl, setPullRequestUrl] = useState<string | null>(initial.pullRequestUrl);
   const [draft, setDraft] = useState("");
+  const [login, setLogin] = useState<LoginUpdate | null>(null);
+  const [showSignIn, setShowSignIn] = useState(false);
 
   const clientRef = useRef<RunnerClient | null>(null);
   const tokenRef = useRef<{ token: string; expiresAt: string } | null>(
@@ -105,6 +108,10 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
         }
       },
       onError: message => setRunnerError(message),
+      onLogin: update => {
+        setLogin(update);
+        setShowSignIn(true);
+      },
     });
     clientRef.current = client;
     for (const m of queuedRef.current.splice(0)) client.send(m.text, m.clientMsgId);
@@ -221,6 +228,8 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   }
 
   const items = useMemo(() => buildTimeline(events, pending), [events, pending]);
+  // The agent isn't signed in: offer the sign-in panel.
+  const needsSignIn = isCloud && events.some(e => e.type === "error" && e.code === "auth_required") && login?.state !== "done";
 
   // Follow new output while the reader is at the bottom.
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -297,6 +306,28 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
               {busy === "close" ? "Closing..." : "Close thread"}
             </button>
           </div>
+        )}
+
+        {isCloud && conn === "live" && (showSignIn || needsSignIn) && (
+          <SignInPanel
+            agentLabel={AGENT_LABELS[thread.agent.kind] ?? "the agent"}
+            update={login}
+            onStart={() => {
+              setLogin({ state: "starting" });
+              clientRef.current?.startLogin();
+            }}
+            onCode={code => clientRef.current?.loginInput(code)}
+            onClose={() => {
+              if (login && login.state !== "done" && login.state !== "failed") clientRef.current?.cancelLogin();
+              setShowSignIn(false);
+              setLogin(null);
+            }}
+          />
+        )}
+        {isCloud && conn === "live" && !showSignIn && !needsSignIn && (thread.agent.kind === "claude-code" || thread.agent.kind === "codex") && (
+          <button type="button" className="mt-3 text-sm text-muted underline-offset-2 hover:text-ink hover:underline" onClick={() => setShowSignIn(true)}>
+            Sign the agent in to your account
+          </button>
         )}
 
         <div className="mt-4 space-y-2 empty:hidden">

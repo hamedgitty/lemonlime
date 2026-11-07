@@ -262,6 +262,28 @@ export const secrets = sqliteTable(
   t => [uniqueIndex("secrets_workspace_name_idx").on(t.workspaceId, t.name)],
 );
 
+// ─── Agent sign-ins kept for a user's next sandboxes ─────────────────────────
+
+export const agentCredentials = sqliteTable(
+  "agent_credentials",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    agent: text("agent").notNull(),
+    /** "env": an environment variable; "file": a file under the agent user's home. */
+    kind: text("kind").$type<"env" | "file">().notNull(),
+    name: text("name").notNull(),
+    /** Encrypted like workspace secrets; never returned by the API. */
+    ciphertext: text("ciphertext").notNull(),
+    updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
+  },
+  t => [uniqueIndex("agent_credentials_user_agent_name_idx").on(t.userId, t.agent, t.name)],
+);
+
 // ─── Messages sent while a sandbox was paused ────────────────────────────────
 
 export const pendingMessages = sqliteTable(

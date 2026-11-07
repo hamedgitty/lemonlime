@@ -16,6 +16,7 @@ import { getThreadForUser, listThreadsForUser } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
 import { countPendingMessages } from "./history.ts";
+import { credentialsForSandbox } from "./agent-credentials.ts";
 import { secretsForSandbox } from "./secrets.ts";
 import { RUNNER_PORT, buildRunnerLaunch, validateCloudLaunch } from "./runner-command.ts";
 import { decideSweep, runtimeSeconds, type EndReason, type SweepThread } from "./sweep.ts";
@@ -112,15 +113,25 @@ export async function threadResponse(ctx: AppContext, row: ThreadRow, userId: st
  * How to start a thread's runner. Secrets are only added for a new sandbox: providers keep
  * a sandbox's environment across pauses, and changing a secret applies to new threads.
  */
-async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | "repo" | "workspaceId">, opts: { withSecrets?: boolean } = {}) {
-  return buildRunnerLaunch({
+async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | "repo" | "workspaceId" | "createdBy">, opts: { withSecrets?: boolean } = {}) {
+  const launch = buildRunnerLaunch({
     threadId: row.id,
     agent: row.agent,
     repo: row.repo,
     controlPlaneUrl: ctx.config.runnerControlPlaneUrl(),
     threadSecret: await threadSecret(ctx.config.tokenSecret(), row.id),
-    ...(opts.withSecrets ? { secrets: await secretsForSandbox(ctx, row.workspaceId) } : {}),
+    ...(opts.withSecrets
+      ? {
+          // Workspace secrets, plus the creator's saved sign-in for this agent (if any).
+          secrets: { ...(await secretsForSandbox(ctx, row.workspaceId)), ...(await credentialsForSandbox(ctx, row.createdBy, row.agent.kind)).env },
+        }
+      : {}),
   });
+  if (opts.withSecrets) {
+    const { files } = await credentialsForSandbox(ctx, row.createdBy, row.agent.kind);
+    if (Object.keys(files).length) launch.env.LEMONLIME_AGENT_FILES = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(files))));
+  }
+  return launch;
 }
 
 type ThreadPatch = Partial<Omit<ThreadRow, "id" | "workspaceId" | "createdAt" | "updatedAt">>;

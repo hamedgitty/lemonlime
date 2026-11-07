@@ -35,7 +35,25 @@ export const ClientApprove = z.object({
 });
 export const ClientPing = z.object({ type: z.literal("ping"), t: z.number().optional() });
 
-export const ClientMessage = z.discriminatedUnion("type", [ClientHello, ClientSendMessage, ClientInterrupt, ClientPing, ClientApprove]);
+/**
+ * Sign the agent in to the user's own model account (cloud sandboxes). Login traffic uses
+ * these messages only and never becomes part of the thread's history.
+ */
+export const ClientStartLogin = z.object({ type: z.literal("start_login") });
+/** Text the user was asked for during sign-in, e.g. the code Claude shows after authorizing. */
+export const ClientLoginInput = z.object({ type: z.literal("login_input"), text: z.string().min(1).max(10_000) });
+export const ClientCancelLogin = z.object({ type: z.literal("cancel_login") });
+
+export const ClientMessage = z.discriminatedUnion("type", [
+  ClientHello,
+  ClientSendMessage,
+  ClientInterrupt,
+  ClientPing,
+  ClientApprove,
+  ClientStartLogin,
+  ClientLoginInput,
+  ClientCancelLogin,
+]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerWelcome = z.object({
@@ -69,7 +87,20 @@ export const ServerError = z.object({
   message: z.string(),
 });
 
-export const ServerMessage = z.discriminatedUnion("type", [ServerWelcome, ServerEvent, ServerCaughtUp, ServerPong, ServerError, ServerAck]);
+/**
+ * Where a sign-in stands. `open_url`: send the user to `url` (and show `code` if given);
+ * `needs_input`: they paste what the page showed them; then `done` or `failed`.
+ * Sent to connected clients only, never stored.
+ */
+export const ServerLogin = z.object({
+  type: z.literal("login"),
+  state: z.enum(["starting", "open_url", "needs_input", "done", "failed"]),
+  url: z.string().url().optional(),
+  code: z.string().max(100).optional(),
+  message: z.string().max(2000).optional(),
+});
+
+export const ServerMessage = z.discriminatedUnion("type", [ServerWelcome, ServerEvent, ServerCaughtUp, ServerPong, ServerError, ServerAck, ServerLogin]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
 /** Parse a raw WebSocket frame. Returns null instead of throwing on bad input. */

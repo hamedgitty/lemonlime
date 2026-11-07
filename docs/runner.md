@@ -104,6 +104,16 @@ Anything not answered is declined.
 
 At autonomy `full` (cloud sandboxes) nothing is asked.
 
+## Signing agents in (cloud sandboxes)
+
+An app sends `start_login`; the runner starts the agent's own sign-in inside the sandbox
+(`claude setup-token` for Claude Code, device sign-in for Codex) with no browser, and
+reports progress as `login` messages: a link to open, a code to type there, or a request
+to paste back the code the page shows (`login_input`). These messages go to connected
+apps only and never enter the thread's history. On success the runner uses the
+credential straight away, removes its value from every event, and uploads it to the
+control plane, which keeps it encrypted for the user's next sandboxes.
+
 ## Safety limits
 
 - **Huge output.** A single line from an agent over 16 MB is dropped without being

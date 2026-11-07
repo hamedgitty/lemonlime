@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { secrets } from "@lemonlime/db";
 import { decryptSecret, deleteSecret, encryptSecret, listSecrets, setSecret, validateSecretName } from "../src/lib/secrets.ts";
+import { saveAgentCredential } from "../src/lib/agent-credentials.ts";
 import { createThread, resumeThread, pauseThread } from "../src/lib/threads.ts";
 import { addUser, createTestApp } from "./helpers.ts";
 
@@ -63,5 +64,44 @@ describe("secrets", () => {
     await pauseThread(ctx, alice.userId, t.thread.id);
     await resumeThread(ctx, alice.userId, t.thread.id);
     expect(sandbox.created).toHaveLength(2);
+  });
+
+  it("give a user's saved agent sign-in to their next sandboxes only", async () => {
+    const { ctx, db, sandbox } = await createTestApp();
+    const alice = await addUser(db, "alice@example.com");
+    const bob = await addUser(db, "bob@example.com");
+    await saveAgentCredential(ctx, alice.userId, {
+      agent: "claude-code",
+      kind: "env",
+      name: "CLAUDE_CODE_OAUTH_TOKEN",
+      value: "sk-ant-oat01-alice-token-value",
+    });
+    await saveAgentCredential(ctx, alice.userId, {
+      agent: "codex",
+      kind: "file",
+      name: ".codex/auth.json",
+      value: '{"tokens":{"access_token":"alice-codex"}}',
+    });
+    const req = (kind: "claude-code" | "codex") => ({
+      agent: { kind },
+      repo: { url: "https://github.com/acme/app.git", baseBranch: "main" },
+      mode: "cloud" as const,
+      sandboxSize: "small" as const,
+    });
+
+    await createThread(ctx, alice.userId, alice.workspaceId, req("claude-code"));
+    expect(sandbox.created[0]!.runner.env).toMatchObject({
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-alice-token-value",
+      LEMONLIME_REDACT_ENV: "CLAUDE_CODE_OAUTH_TOKEN",
+    });
+    expect(sandbox.created[0]!.runner.env.LEMONLIME_AGENT_FILES).toBeUndefined();
+
+    await createThread(ctx, alice.userId, alice.workspaceId, req("codex"));
+    const files = JSON.parse(Buffer.from(sandbox.created[1]!.runner.env.LEMONLIME_AGENT_FILES!, "base64").toString());
+    expect(files).toEqual({ ".codex/auth.json": '{"tokens":{"access_token":"alice-codex"}}' });
+    expect(sandbox.created[1]!.runner.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+
+    await createThread(ctx, bob.userId, bob.workspaceId, req("claude-code"));
+    expect(sandbox.created[2]!.runner.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 });

@@ -15,6 +15,8 @@ export interface RunnerClientOptions {
   onWelcome?: (thread: Thread, latestSeq: number) => void;
   onState?: (state: ConnectionState) => void;
   onError?: (message: string, code?: string) => void;
+  /** Sign-in progress (cloud sandboxes). Never part of the history. */
+  onLogin?: (update: { state: "starting" | "open_url" | "needs_input" | "done" | "failed"; url?: string; code?: string; message?: string }) => void;
   /** The runner accepted a message: it started a turn, was queued, or was a repeat. */
   onAck?: (clientMsgId: string, result: "started" | "queued" | "duplicate") => void;
   /** Max delay between reconnect attempts. */
@@ -65,6 +67,20 @@ export class RunnerClient {
   /** Stop the agent's current turn. */
   interrupt(): void {
     this.post({ type: "interrupt" });
+  }
+
+  /** Sign the agent in to the user's own account, inside the sandbox. */
+  startLogin(): void {
+    this.post({ type: "start_login" });
+  }
+
+  /** The code the sign-in page showed, pasted back. */
+  loginInput(text: string): void {
+    this.post({ type: "login_input", text });
+  }
+
+  cancelLogin(): void {
+    this.post({ type: "cancel_login" });
   }
 
   /** Answer an approval request from the agent. */
@@ -127,6 +143,11 @@ export class RunnerClient {
           const waiting = this.pending.splice(0).filter(m => m.type !== "send_message");
           for (const m of this.unacked.values()) ws.send(JSON.stringify(m));
           for (const m of waiting) ws.send(JSON.stringify(m));
+          break;
+        }
+        case "login": {
+          const { type: _t, ...update } = msg;
+          this.opts.onLogin?.(update);
           break;
         }
         case "ack":

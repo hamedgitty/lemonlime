@@ -103,3 +103,23 @@ export const ThreadHistoryResponse = z.object({
   more: z.boolean(),
 });
 export type ThreadHistoryResponse = z.infer<typeof ThreadHistoryResponse>;
+
+/**
+ * Runner → control plane: the credential an agent produced when the user signed it in
+ * inside a sandbox, kept (encrypted) so the user's next sandboxes start signed in.
+ * `env`: an environment variable (e.g. CLAUDE_CODE_OAUTH_TOKEN). `file`: a file under the
+ * agent user's home directory (e.g. .codex/auth.json).
+ */
+export const AgentCredentialUpload = z.object({
+  threadId: ThreadId,
+  agent: z.enum(["claude-code", "codex", "opencode"]),
+  kind: z.enum(["env", "file"]),
+  /** Variable name, or path relative to the home directory. */
+  name: z
+    .string()
+    .min(1)
+    .max(200)
+    .regex(/^(?![/.])[A-Za-z0-9_./-]+$/),
+  value: z.string().min(1).max(64_000),
+});
+export type AgentCredentialUpload = z.infer<typeof AgentCredentialUpload>;

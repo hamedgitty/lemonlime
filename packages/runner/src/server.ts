@@ -120,6 +120,13 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       replaying = false;
       for (const m of buffered) send(m);
       send({ type: "caught_up", latestSeq: runner.store.latestSeq });
+      // Sign-in progress goes to live connections only; it is never part of history.
+      const offLogin = runner.onLogin(u => send({ type: "login", ...u }));
+      const offEvents = unsubscribe;
+      unsubscribe = () => {
+        offEvents?.();
+        offLogin();
+      };
       return;
     }
 
@@ -137,6 +144,15 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         break;
       case "approve":
         runner.answerApproval(msg.requestId, msg.decision);
+        break;
+      case "start_login":
+        runner.startLogin();
+        break;
+      case "login_input":
+        runner.loginInput(msg.text);
+        break;
+      case "cancel_login":
+        runner.cancelLogin();
         break;
       case "ping":
         send({ type: "pong", ...(msg.t !== undefined ? { t: msg.t } : {}) });

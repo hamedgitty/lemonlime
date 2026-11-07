@@ -63,7 +63,7 @@ pnpm test                                     # from the root; includes apps/des
    random 32-byte thread secret, picks a free port, and spawns:
    ```
    lemonlime-runner --thread <id> --agent <kind> [--agent-command <cmd>] [--model <name>]
-                    --workdir <repo> --base <branch> --port <port> --host 127.0.0.1
+                    --source-repo <repo> --base <branch> --port <port> --host 127.0.0.1
    ```
    with `LEMONLIME_THREAD_SECRET` in the environment. It waits until the port
    accepts connections, then returns `{ port, secret }`. Runner output goes to
@@ -74,7 +74,10 @@ pnpm test                                     # from the root; includes apps/des
 4. "Stop runner" sends the runner SIGTERM (or ends its process tree on
    Windows). Every runner is stopped when the app quits.
 
-The agent works on the thread's own branch, `agent/<thread-id>`.
+The agent works on the thread's own branch, `agent/<thread-id>`, in a separate git
+worktree under `~/.lemonlime/worktrees`, so it never switches your branch or touches
+your uncommitted work. Removing a thread runs `lemonlime-runner cleanup`, which deletes
+the worktree and local history but keeps the branch.
 
 ## Layout
 

@@ -104,17 +104,58 @@ pub async fn stop_local_runner(state: State<'_, Runners>, thread_id: String) -> 
     Ok(())
 }
 
+/// Stops a local thread's runner, then removes its worktree and local history.
+/// The thread's branch and commits stay in the user's repository.
+#[tauri::command]
+pub async fn remove_local_thread(
+    state: State<'_, Runners>,
+    thread_id: String,
+    repo_path: String,
+    runner_path: Option<String>,
+) -> Result<(), String> {
+    if !valid_thread_id(&thread_id) {
+        return Err("That thread id is not valid.".into());
+    }
+    let proc = state.lock().remove(&thread_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(p) = proc {
+            terminate(p.child);
+        }
+        let program = paths::resolve_program(runner_path.as_deref(), "lemonlime-runner")?;
+        let mut cmd = runner_command(&program)?;
+        cmd.arg("cleanup")
+            .arg("--thread")
+            .arg(&thread_id)
+            .arg("--source-repo")
+            .arg(&repo_path)
+            .env("PATH", paths::search_path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().map_err(|e| format!("Could not run the runner: {e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!("Could not clean up the thread: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        }
+    })
+    .await
+    .map_err(|e| format!("Could not clean up the thread: {e}"))?
+}
+
 #[tauri::command]
 pub fn local_runner_running(state: State<'_, Runners>, thread_id: String) -> bool {
     let mut runners = state.lock();
-    match runners.get_mut(&thread_id) {
-        Some(p) if p.alive() => true,
-        Some(_) => {
-            runners.remove(&thread_id);
-            false
-        }
-        None => false,
+    let alive = runners.get_mut(&thread_id).map(|p| p.alive());
+    if alive == Some(false) {
+        runners.remove(&thread_id);
     }
+    alive == Some(true)
 }
 
 #[tauri::command]
@@ -171,7 +212,9 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
             .arg(&req.thread_id)
             .arg("--agent")
             .arg(&req.agent)
-            .arg("--workdir")
+            // The runner works in its own git worktree of this repository, so the
+            // user's checked-out branch and uncommitted work are never touched.
+            .arg("--source-repo")
             .arg(&workdir)
             .arg("--port")
             .arg(port.to_string())

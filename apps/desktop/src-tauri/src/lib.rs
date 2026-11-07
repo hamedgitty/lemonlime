@@ -18,6 +18,7 @@ pub fn run() {
             runner::stop_local_runner,
             runner::local_runner_running,
             runner::list_local_runners,
+            runner::remove_local_thread,
             repo::inspect_repo,
         ])
         .build(tauri::generate_context!())

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import type { NewEvent, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
 import type { AgentAdapter, AgentSession, SessionOptions } from "./agents/index.ts";
 import { EventStore } from "./event-store.ts";
@@ -16,6 +16,11 @@ export interface ThreadRunnerOptions {
   git?: boolean;
   /** Clone this repository into an empty workdir. */
   repoUrl?: string;
+  /**
+   * The user's own repository. When set, `workdir` becomes a separate git worktree of it,
+   * so the thread never switches the user's branch or touches their uncommitted work.
+   */
+  sourceRepo?: string;
 }
 
 export class BusyError extends Error {
@@ -63,12 +68,16 @@ export class ThreadRunner {
   async init(): Promise<void> {
     const saved = this.loadState();
     if (this.git) {
-      await this.git.ensureRepo(this.opts.repoUrl);
+      if (this.opts.sourceRepo) {
+        await this.git.ensureWorktree(this.opts.sourceRepo, this.opts.thread.branch, this.opts.thread.repo.baseBranch);
+      } else {
+        await this.git.ensureRepo(this.opts.repoUrl);
+        await this.git.ensureBranch(this.opts.thread.branch, this.opts.thread.repo.baseBranch);
+      }
       if (this.opts.dataDir) {
         const rel = relative(this.opts.workdir, this.opts.dataDir);
-        if (rel && !rel.startsWith("..")) this.git.excludePath(rel);
+        if (rel && !rel.startsWith("..") && !isAbsolute(rel)) await this.git.excludePath(rel);
       }
-      await this.git.ensureBranch(this.opts.thread.branch, this.opts.thread.repo.baseBranch);
     }
     this.session = this.opts.adapter.createSession({
       ...this.opts.session,

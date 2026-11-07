@@ -45,6 +45,15 @@ export async function stopLocalRunner(threadId: string): Promise<void> {
   await invoke("stop_local_runner", { threadId });
 }
 
+/**
+ * Stops a local thread and removes its worktree and local history. The thread's
+ * branch and commits stay in the repository.
+ */
+export async function removeLocalThread(threadId: string, repoPath: string, runnerPath?: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("remove_local_thread", { threadId, repoPath, runnerPath: runnerPath || null });
+}
+
 /** True while the runner process for this thread is alive. */
 export async function isLocalRunnerRunning(threadId: string): Promise<boolean> {
   if (!isTauri()) return false;

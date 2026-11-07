@@ -32,12 +32,13 @@ computer or in isolated cloud sandboxes, each on its own git branch.
 pnpm install
 cd /path/to/your/repo
 LEMONLIME_THREAD_SECRET=$(openssl rand -hex 32) \
-  pnpm --dir /path/to/lemonlime runner -- --thread my-first-thread --agent claude-code --workdir .
+  pnpm --dir /path/to/lemonlime runner -- --thread my-first-thread --agent claude-code --source-repo .
 ```
 
-The runner creates the branch `agent/my-first-thread`, serves the thread on
-`ws://127.0.0.1:7420/ws`, and commits the agent's changes after every turn.
-The desktop app does all of this for you.
+The runner creates the branch `agent/my-first-thread` in its own git worktree under
+`~/.lemonlime/worktrees`, so your checked-out branch and uncommitted work are never
+touched. It serves the thread on `ws://127.0.0.1:7420/ws` and commits the agent's
+changes to that branch after every turn. The desktop app does all of this for you.
 
 ## Docs
 

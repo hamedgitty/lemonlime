@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -191,3 +191,35 @@ describe("runner end to end", () => {
     expect(runner.thread.status).toBe("idle");
   });
 });
+
+describe("local threads in their own worktree", () => {
+  it("runs the agent in a worktree and leaves the user's checkout alone", async () => {
+    const repo = tempRepo();
+    writeFileSync(join(repo, "README.md"), "# my unsaved edit\n");
+    const home = mkdtempSync(join(tmpdir(), "lemonlime-home-"));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    const workdir = join(home, "worktrees", "demo", "wt-thread-1");
+    const runner = new ThreadRunner({
+      thread: makeThread("wt-thread-1"),
+      workdir,
+      dataDir: join(home, "threads", "wt-thread-1"),
+      adapter: fakeAdapter,
+      session: { autonomy: "edits" },
+      sourceRepo: repo,
+    });
+    cleanups.push(() => runner.close());
+    await runner.init();
+    runner.sendMessage("hello");
+    await runner.settled();
+
+    const git = (dir: string, ...a: string[]) => execFileSync("git", a, { cwd: dir }).toString().trim();
+    expect(readFileSync(join(workdir, "notes.md"), "utf8")).toBe("hello\n");
+    expect(existsSync(join(repo, "notes.md"))).toBe(false);
+    expect(git(repo, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(readFileSync(join(repo, "README.md"), "utf8")).toBe("# my unsaved edit\n");
+    expect(git(repo, "show", "agent/wt-thread-1:notes.md")).toBe("hello");
+    expect(runner.store.since(0).some(e => e.type === "file_diff" && e.path === "notes.md")).toBe(true);
+    expect(existsSync(join(home, "threads", "wt-thread-1", "events.jsonl"))).toBe(true);
+  });
+});
+

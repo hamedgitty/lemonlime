@@ -16,7 +16,7 @@ import {
   type Settings,
 } from "./lib/storage.ts";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
-import { inDesktopShell, listLocalRunners, stopLocalRunner } from "./lib/native.ts";
+import { inDesktopShell, listLocalRunners, removeLocalThread, stopLocalRunner } from "./lib/native.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
 
@@ -123,13 +123,16 @@ export function App() {
 
   const onRemoveLocal = useCallback(
     (id: string) => {
-      void stopLocalRunner(id).finally(refreshRunners);
+      const meta = localThreads.find(m => m.id === id);
+      // Removes the thread's worktree and history; its branch stays in the repository.
+      const stop = meta ? removeLocalThread(id, meta.repoPath, settings.runnerPath) : stopLocalRunner(id);
+      void stop.catch(err => console.warn("Could not clean up the thread", err)).finally(refreshRunners);
       forgetEvents(id);
       setLocalThreads(list => list.filter(m => m.id !== id));
       setSelection(s => (s?.id === id ? null : s));
       setView(v => (v === "thread" ? "home" : v));
     },
-    [refreshRunners],
+    [refreshRunners, localThreads, settings.runnerPath],
   );
 
   // ── Creating threads ─────────────────────────────────────

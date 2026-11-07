@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -42,12 +42,77 @@ export class GitWorkspace {
   }
 
   /** Keep runner data out of the repo without touching the user's .gitignore. */
-  excludePath(relPath: string): void {
-    const exclude = join(this.dir, ".git", "info", "exclude");
-    mkdirSync(join(this.dir, ".git", "info"), { recursive: true });
+  async excludePath(relPath: string): Promise<void> {
+    // In a worktree `.git` is a file, so ask git where the exclude file lives.
+    const gitPath = (await this.git(["rev-parse", "--git-path", "info/exclude"])).trim();
+    const exclude = isAbsolute(gitPath) ? gitPath : resolve(this.dir, gitPath);
+    mkdirSync(dirname(exclude), { recursive: true });
     const current = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
     const line = `/${relPath.replace(/^\/+/, "")}`;
     if (!current.split("\n").includes(line)) appendFileSync(exclude, `${current.endsWith("\n") || !current ? "" : "\n"}${line}\n`);
+  }
+
+  /**
+   * Make this directory a git worktree of `source` with `branch` checked out, creating the
+   * branch from `base` the first time. The user's own checkout of `source` is never
+   * switched, and their uncommitted work there is never touched.
+   */
+  async ensureWorktree(source: string, branch: string, base: string): Promise<void> {
+    const src = new GitWorkspace(source);
+    const srcCommon = await src.commonDir();
+    if (!srcCommon) throw new Error(`${source} is not a git repository`);
+
+    if (existsSync(join(this.dir, ".git"))) {
+      // Reusing an earlier worktree: it must belong to the same repository.
+      if ((await this.commonDir()) !== srcCommon) throw new Error(`${this.dir} already holds a different repository`);
+      await this.ensureBranch(branch, base);
+      return;
+    }
+    if (existsSync(this.dir) && readdirSync(this.dir).length > 0) throw new Error(`${this.dir} is not empty and is not a worktree of ${source}`);
+    if (!(await src.hasCommits())) throw new Error("This repository has no commits yet. Make a first commit, then start the thread.");
+
+    mkdirSync(dirname(this.dir), { recursive: true });
+    await src.git(["worktree", "prune"], { allowFail: true });
+    const exists = (await src.git(["rev-parse", "--verify", "-q", `refs/heads/${branch}`], { allowFail: true })).trim();
+    try {
+      if (exists) await src.git(["worktree", "add", "-q", this.dir, branch]);
+      else await src.git(["worktree", "add", "-q", "-b", branch, this.dir, await src.resolveBase(base)]);
+    } catch (err) {
+      const msg = String((err as { stderr?: string }).stderr ?? err);
+      if (/already (checked out|used by worktree)/.test(msg)) {
+        throw new Error(`The branch ${branch} is checked out in another folder. Switch that folder to a different branch, then start the thread again.`);
+      }
+      throw new Error(`Could not create a worktree for this thread: ${msg.trim()}`);
+    }
+  }
+
+  /** Remove this worktree (keeping its branch and commits). Safe to call if it's already gone. */
+  async removeWorktree(source: string): Promise<void> {
+    const src = new GitWorkspace(source);
+    await src.git(["worktree", "remove", "--force", this.dir], { allowFail: true });
+    await src.git(["worktree", "prune"], { allowFail: true });
+  }
+
+  /** The repository's shared git directory, resolved, or "" if this isn't a repository. */
+  async commonDir(): Promise<string> {
+    if (!existsSync(this.dir)) return "";
+    const out = (await this.git(["rev-parse", "--git-common-dir"], { allowFail: true })).trim();
+    if (!out) return "";
+    const abs = isAbsolute(out) ? out : resolve(this.dir, out);
+    try {
+      return realpathSync(abs);
+    } catch {
+      return abs;
+    }
+  }
+
+  /** `base` as a local branch, else its remote-tracking branch, else HEAD. */
+  async resolveBase(base: string): Promise<string> {
+    return (
+      (await this.git(["rev-parse", "--verify", "-q", base], { allowFail: true })).trim() ||
+      (await this.git(["rev-parse", "--verify", "-q", `origin/${base}`], { allowFail: true })).trim() ||
+      "HEAD"
+    );
   }
 
   async hasCommits(): Promise<boolean> {
@@ -74,11 +139,7 @@ export class GitWorkspace {
       await this.git(["checkout", "-q", "--orphan", branch]);
       return;
     }
-    const baseRef =
-      (await this.git(["rev-parse", "--verify", "-q", base], { allowFail: true })).trim() ||
-      (await this.git(["rev-parse", "--verify", "-q", `origin/${base}`], { allowFail: true })).trim() ||
-      "HEAD";
-    await this.git(["checkout", "-q", "-b", branch, baseRef]);
+    await this.git(["checkout", "-q", "-b", branch, await this.resolveBase(base)]);
   }
 
   /** Stage everything and describe what changed since the last commit. */

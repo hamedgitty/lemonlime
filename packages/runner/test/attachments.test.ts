@@ -44,8 +44,7 @@ async function boot() {
   );
   const base = `http://127.0.0.1:${server.port}`;
   const token = await signToken({ threadId: thread.id, scope: "client", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
-  const call = (path: string, init: RequestInit = {}) =>
-    fetch(`${base}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, ...init.headers } });
+  const call = (path: string, init: RequestInit = {}) => fetch(`${base}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, ...init.headers } });
   return { dir, runner, prompts, base, call };
 }
 

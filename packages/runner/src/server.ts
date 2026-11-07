@@ -5,6 +5,7 @@ import { createConnection, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   ComputerRequest,
+  RelayAnswers,
   parseClientMessage,
   parseTerminalClientMessage,
   verifyToken,
@@ -15,6 +16,7 @@ import { TerminalSession, type SpawnPty } from "./terminal.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
+import type { Relay } from "./relay.ts";
 
 export interface ServerOptions {
   host: string;
@@ -26,6 +28,8 @@ export interface ServerOptions {
   terminal?: { cwd: string; spawn: SpawnPty | null };
   /** Ports the runner itself uses, never offered for preview. */
   ownPorts?: number[];
+  /** Relay mode: calls for the control plane wait here for it to collect them (see relay.ts). */
+  relay?: Relay;
 }
 
 export interface RunningServer {
@@ -52,7 +56,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
       path === "/previews" ||
       path.startsWith("/subagents") ||
       path === "/computer" ||
-      path.startsWith("/teleport")
+      path.startsWith("/teleport") ||
+      path.startsWith("/relay")
     ) {
       void handleHttpApi(req, res, path, runner, opts).catch(() => {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
@@ -378,6 +383,36 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     res.writeHead(204, CORS);
     res.end();
     return;
+  }
+  if (path === "/relay" || path === "/relay/local") {
+    if (!opts.relay) return reply(res, 404, { error: "not_found" });
+    // /relay: the control plane collecting and answering calls (a relay token);
+    // /relay/local: this sandbox's own git credential helper (a runner token).
+    const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+    const scope = path === "/relay" ? "relay" : "runner";
+    if (!auth?.ok || auth.claims.scope !== scope || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
+    if (path === "/relay" && req.method === "GET") return reply(res, 200, { requests: opts.relay.take() });
+    if (req.method !== "POST") return reply(res, 405, { error: "method_not_allowed" });
+    const raw = await readBody(req, 8 * 1024 * 1024);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw?.toString() ?? "{}");
+    } catch {
+      return reply(res, 400, { error: "bad json" });
+    }
+    if (path === "/relay") {
+      const answers = RelayAnswers.safeParse(parsed);
+      if (!answers.success) return reply(res, 400, { error: "bad request" });
+      return reply(res, 200, { matched: opts.relay.answer(answers.data.answers) });
+    }
+    // The git helper only ever asks for a repository token.
+    const asked = (parsed as { path?: unknown }).path;
+    if (typeof asked !== "string" || !/^\/api\/runner\/git-credentials\?[^#]*$/.test(asked)) return reply(res, 400, { error: "bad request" });
+    const answer = await opts.relay
+      .request({ method: "GET", path: asked, authorization: `Bearer ${token}` })
+      .catch((err: Error) => ({ status: 504, body: { error: err.message } }));
+    return reply(res, answer.status, answer.body ?? {});
   }
   if (path === "/computer" && req.method === "POST") {
     // From the cloud agent's own tools: a runner token signed with the thread secret.

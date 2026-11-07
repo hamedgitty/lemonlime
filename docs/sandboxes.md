@@ -93,6 +93,20 @@ process running, the same as the E2B SDK's background commands.
 
 The runner URL is `https://<port>-<id>.e2b.app`.
 
+## Sandboxes that can't reach the control plane
+
+Some providers only let sandboxes reach a list of well-known hosts (GitHub, package
+registries, model providers) on their cheaper tiers, so the runner can't send heartbeats,
+history or git token requests to your control plane. Set `LEMONLIME_RUNNER_RELAY=true` on
+the control plane and runners start in relay mode instead: they keep those calls, and the
+control plane collects them from the runner every minute (through the runner's public
+port, with a token only the control plane and that sandbox can sign), makes them, and
+hands back the answers. A new sandbox also starts with a first, hour-long repository
+token, so its first clone doesn't wait.
+
+On Node, `POST /api/cron/sweep` does the relaying too; on Cloudflare Workers the cron
+trigger does. Expect up to a minute's delay on heartbeats and on refreshing git tokens.
+
 ## Checking a provider for real
 
 With a provider's settings in the environment, this creates a small sandbox from the

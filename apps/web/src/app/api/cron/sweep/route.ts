@@ -3,6 +3,8 @@ import { getAppContext } from "@/lib/env.ts";
 import { HttpError, json, route } from "@/lib/http.ts";
 import { sweepRunningSandboxes } from "@/lib/threads.ts";
 import { runDueAutomations } from "@/lib/automations.ts";
+import { relayEnabled, relayRunnerCalls } from "@/lib/relay.ts";
+import { dispatchRunnerCall } from "@/lib/relay-routes.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,8 @@ export const POST = route(async request => {
   const ctx = await getAppContext();
   const token = bearerToken(request.headers.get("authorization"));
   if (!token || !safeEqual(token, ctx.config.cronSecret())) throw new HttpError(401, "Bad cron secret.");
+  // Relayed heartbeats first, so the sweep decides on fresh news.
+  const relay = relayEnabled(ctx.vars) ? await relayRunnerCalls(ctx, dispatchRunnerCall) : null;
   const sweep = await sweepRunningSandboxes(ctx);
-  return json({ ...sweep, automations: await runDueAutomations(ctx) });
+  return json({ ...sweep, automations: await runDueAutomations(ctx), ...(relay ? { relay } : {}) });
 });

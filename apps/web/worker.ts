@@ -23,6 +23,20 @@ export default {
   async scheduled(_controller: unknown, env: Record<string, unknown>, ctx: ExecutionContextLike): Promise<void> {
     ctx.waitUntil(
       (async () => {
+        // Relay mode: collect runners' calls first, through the app's own route, in-process.
+        if (env.LEMONLIME_RUNNER_RELAY === "true" && typeof env.LEMONLIME_PUBLIC_URL === "string" && typeof env.LEMONLIME_CRON_SECRET === "string") {
+          const relayed = await (openNext as { fetch: FetchHandler })
+            .fetch(
+              new Request(new URL("/api/cron/relay", env.LEMONLIME_PUBLIC_URL), {
+                method: "POST",
+                headers: { authorization: `Bearer ${env.LEMONLIME_CRON_SECRET}` },
+              }),
+              env,
+              ctx,
+            )
+            .catch(err => (console.error("[lemonlime] relay failed:", err), null));
+          if (relayed && !relayed.ok) console.error(`[lemonlime] relay failed: HTTP ${relayed.status}`);
+        }
         const app = createWorkersContext(env);
         const result = await sweepRunningSandboxes(app);
         if (result.paused.length || result.errors.length) {

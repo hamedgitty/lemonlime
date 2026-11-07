@@ -1,6 +1,7 @@
 import { HeartbeatResponse, RunnerHistoryResponse, RunnerInbox, signToken, type RunnerHeartbeat, type ThreadEvent } from "@lemonlime/protocol";
 import { ActivityMonitor } from "./activity.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
+import { relayResponse, type Relay } from "./relay.ts";
 
 const INTERVAL_MS = 30_000;
 /** Most events, and roughly most bytes, sent in one history upload. */
@@ -21,6 +22,8 @@ export interface HeartbeatOptions {
   /** For tests. */
   intervalMs?: number;
   activity?: Pick<ActivityMonitor, "sample" | "load">;
+  /** Relay mode: calls wait for the control plane to collect them instead of being sent. */
+  relay?: Relay;
 }
 
 export interface Heartbeat {
@@ -48,6 +51,15 @@ export function startHeartbeat(runner: ThreadRunner, opts: HeartbeatOptions): He
 
   const token = () => signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 300 }, opts.threadSecret);
   const call = async (path: string, init: { method: string; body?: unknown }) => {
+    if (opts.relay)
+      return relayResponse(
+        await opts.relay.request({
+          method: init.method === "GET" ? "GET" : "POST",
+          path,
+          authorization: `Bearer ${await token()}`,
+          ...(init.body !== undefined ? { body: init.body } : {}),
+        }),
+      );
     const res = await fetch(`${base}${path}`, {
       method: init.method,
       headers: { "content-type": "application/json", authorization: `Bearer ${await token()}` },

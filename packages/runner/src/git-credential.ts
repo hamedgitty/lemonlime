@@ -19,6 +19,11 @@ export function credentialHelperCommand(command: string[] = selfCommand("git-cre
  *
  * Needs LEMONLIME_THREAD_ID, LEMONLIME_THREAD_SECRET and LEMONLIME_CONTROL_PLANE_URL, which
  * the runner sets for itself and everything it starts.
+ *
+ * Relay mode (the sandbox can't reach the control plane): the control plane hands the
+ * sandbox a first token when it starts (LEMONLIME_GIT_TOKEN, for LEMONLIME_GIT_HOST, until
+ * LEMONLIME_GIT_TOKEN_EXPIRES), used while it lasts, so the first clone doesn't wait; after
+ * that the request goes through the runner (LEMONLIME_RUNNER_URL), which relays it.
  */
 export async function gitCredential(op: string, input: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   if (op !== "get") return "";
@@ -34,13 +39,26 @@ export async function gitCredential(op: string, input: string, env: NodeJS.Proce
   const secret = env.LEMONLIME_THREAD_SECRET;
   const base = env.LEMONLIME_CONTROL_PLANE_URL;
   if (!threadId || !secret || !base) return "";
-  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 120 }, secret);
-  const res = await fetch(
-    `${base.replace(/\/+$/, "")}/api/runner/git-credentials?threadId=${encodeURIComponent(threadId)}&host=${encodeURIComponent(req.host)}`,
-    {
-      headers: { authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(15_000),
-    },
+  const startToken = env.LEMONLIME_GIT_TOKEN;
+  const startUntil = Date.parse(env.LEMONLIME_GIT_TOKEN_EXPIRES ?? "");
+  if (startToken && (env.LEMONLIME_GIT_HOST ?? "").toLowerCase() === req.host.toLowerCase() && startUntil - Date.now() > 5 * 60_000)
+    return `username=x-access-token\npassword=${startToken}\n`;
+  const path = `/api/runner/git-credentials?threadId=${encodeURIComponent(threadId)}&host=${encodeURIComponent(req.host)}`;
+  const relayed = env.LEMONLIME_RELAY === "1" && env.LEMONLIME_RUNNER_URL;
+  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + (relayed ? 300 : 120) }, secret);
+  const res = await (
+    relayed
+      ? fetch(`${env.LEMONLIME_RUNNER_URL!.replace(/\/+$/, "")}/relay/local`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ path }),
+          // The control plane collects relayed calls every minute.
+          signal: AbortSignal.timeout(200_000),
+        })
+      : fetch(`${base.replace(/\/+$/, "")}${path}`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(15_000),
+        })
   ).catch(() => null);
   if (!res?.ok) return "";
   const body = (await res.json().catch(() => ({}))) as { username?: string; password?: string };

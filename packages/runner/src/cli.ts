@@ -18,6 +18,7 @@ import { startTunnel } from "./tunnel.ts";
 import { createInterface } from "node:readline";
 import { biggestWriter, DiskGuard, formatBytes } from "./disk-guard.ts";
 import { runCommandGuardHook } from "./command-guard.ts";
+import { Relay, relayResponse } from "./relay.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { RUNNER_VERSION } from "./version.ts";
@@ -54,6 +55,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --data-dir <path>        Where history is stored (default: <workdir>/.lemonlime, or
                            ~/.lemonlime/threads/<thread> with --source-repo)
   --control-plane <url>    Send heartbeats to this control plane
+  --relay                  The sandbox can't reach the control plane: keep its calls for
+                           the control plane to collect (it fetches them every minute)
   --autonomy <level>       full | edits (default: full inside a sandbox, otherwise edits)
   --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable).
                            Skills in ~/.lemonlime/skills are always copied too.
@@ -153,6 +156,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       host: { type: "string", default: "127.0.0.1" },
       "data-dir": { type: "string" },
       "control-plane": { type: "string" },
+      relay: { type: "boolean", default: false },
       autonomy: { type: "string" },
       "no-git": { type: "boolean", default: false },
       skills: { type: "string", multiple: true },
@@ -219,6 +223,10 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.env.LEMONLIME_THREAD_ID = id;
     process.env.LEMONLIME_CONTROL_PLANE_URL = values["control-plane"]!;
   }
+  // Relay mode: this sandbox can't reach the control plane, so the control plane collects
+  // the runner's calls from it instead (see relay.ts).
+  const relay = values.relay && values["control-plane"] ? new Relay() : null;
+  if (relay) process.env.LEMONLIME_RELAY = "1";
 
   const runner = new ThreadRunner({
     thread,
@@ -240,7 +248,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     redact: secretsFromEnv(),
     ...(cloudGit ? { pushBranch: true, credentialHelper: credentialHelperCommand() } : {}),
     ...(values["control-plane"] && secret
-      ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, secret, c) }
+      ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, secret, c, relay) }
       : {}),
     // The user's own skills (added in the desktop app's settings), then any given here.
     extraSkillDirs: [join(home, "skills"), ...(values.skills ?? []).map(d => resolve(d))],
@@ -257,6 +265,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     version: RUNNER_VERSION,
     terminal: { cwd: workdir, spawn: await loadPty() },
     ownPorts: [port],
+    ...(relay ? { relay } : {}),
   });
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
   // For the agent's own `lemonlime-runner preview`: where this runner is, and which thread.
@@ -341,6 +350,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
         onShutdown: () => void shutdown(0),
         log,
         ownPorts: [server.port],
+        ...(relay ? { relay } : {}),
       })
     : null;
 
@@ -374,14 +384,18 @@ export function writeAgentFiles(env: NodeJS.ProcessEnv = process.env, home = hom
   return out;
 }
 
-async function uploadCredential(controlPlane: string, threadId: string, agent: string, secret: string, c: AgentCredential): Promise<void> {
-  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 120 }, secret);
-  const res = await fetch(`${controlPlane.replace(/\/+$/, "")}/api/runner/agent-credentials`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ threadId, agent, kind: c.kind, name: c.name, value: c.value }),
-    signal: AbortSignal.timeout(15_000),
-  });
+async function uploadCredential(controlPlane: string, threadId: string, agent: string, secret: string, c: AgentCredential, relay: Relay | null): Promise<void> {
+  // Relayed calls can wait a few minutes for the control plane, so the token lives longer.
+  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + (relay ? 300 : 120) }, secret);
+  const body = { threadId, agent, kind: c.kind, name: c.name, value: c.value };
+  const res = relay
+    ? relayResponse(await relay.request({ method: "POST", path: "/api/runner/agent-credentials", authorization: `Bearer ${token}`, body }))
+    : await fetch(`${controlPlane.replace(/\/+$/, "")}/api/runner/agent-credentials`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(15_000),
+      });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 

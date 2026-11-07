@@ -7,8 +7,10 @@ import { ThreadId } from "./thread.ts";
  *
  * - `client` tokens let an app open the thread's WebSocket.
  * - `runner` tokens let a runner post heartbeats for its own thread.
+ * - `relay` tokens let the control plane collect and answer a runner's relayed calls,
+ *   when the runner can't reach the control plane itself (see RelayedRequest).
  */
-export const TokenScope = z.enum(["client", "runner"]);
+export const TokenScope = z.enum(["client", "runner", "relay"]);
 export type TokenScope = z.infer<typeof TokenScope>;
 
 export const TokenClaims = z.object({

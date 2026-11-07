@@ -147,3 +147,32 @@ export const AgentCredentialUpload = z
   })
   .refine(c => isAllowedAgentCredential(c.agent, c.kind, c.name), { message: "Not a credential this agent uses.", path: ["name"] });
 export type AgentCredentialUpload = z.infer<typeof AgentCredentialUpload>;
+
+// ─── Relay ───────────────────────────────────────────────────────────────────
+// Some sandbox providers only let sandboxes reach a list of well-known hosts, so the
+// runner can't call the control plane. In relay mode (`lemonlime-runner --relay`) it
+// queues those calls instead, and the control plane collects them from the runner every
+// minute (GET /relay), makes them on itself, and hands back the answers (POST /relay).
+
+/** A call the runner wants made on the control plane. Only /api/runner/* routes. */
+export const RelayedRequest = z.object({
+  id: z.string().min(1).max(64),
+  method: z.enum(["GET", "POST"]),
+  path: z
+    .string()
+    .max(2000)
+    .regex(/^\/api\/runner\/[a-z-]+(\?[^#]*)?$/),
+  /** The runner token the call would have carried (`Bearer …`). */
+  authorization: z.string().max(4096),
+  body: z.unknown().optional(),
+});
+export type RelayedRequest = z.infer<typeof RelayedRequest>;
+
+export const RelayPoll = z.object({ requests: z.array(RelayedRequest).max(100) });
+export type RelayPoll = z.infer<typeof RelayPoll>;
+
+export const RelayAnswer = z.object({ id: z.string().min(1).max(64), status: z.number().int().min(100).max(599), body: z.unknown() });
+export type RelayAnswer = z.infer<typeof RelayAnswer>;
+
+export const RelayAnswers = z.object({ answers: z.array(RelayAnswer).max(100) });
+export type RelayAnswers = z.infer<typeof RelayAnswers>;

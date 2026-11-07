@@ -21,6 +21,8 @@ import { secretsForSandbox } from "./secrets.ts";
 import { RUNNER_PORT, buildRunnerLaunch, validateCloudLaunch } from "./runner-command.ts";
 import { decideSweep, runtimeSeconds, type EndReason, type SweepThread } from "./sweep.ts";
 import { issueClientToken, threadSecret } from "./tokens.ts";
+import { githubAppConfig, tokenForThread } from "./github.ts";
+import { relayEnabled } from "./relay.ts";
 
 export type { ThreadRow };
 
@@ -131,7 +133,10 @@ export async function threadResponse(ctx: AppContext, row: ThreadRow, userId: st
  * a sandbox's environment across pauses, and changing a secret applies to new threads.
  */
 async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | "repo" | "workspaceId" | "createdBy">, opts: { withSecrets?: boolean } = {}) {
+  const relay = relayEnabled(ctx.vars);
   const launch = buildRunnerLaunch({
+    relay,
+    ...(relay ? { gitToken: await firstGitToken(ctx, row) } : {}),
     threadId: row.id,
     agent: row.agent,
     repo: row.repo,
@@ -149,6 +154,14 @@ async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | 
     if (Object.keys(files).length) launch.env.LEMONLIME_AGENT_FILES = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(files))));
   }
   return launch;
+}
+
+/** Relay mode: a repository token for the runner to start with (none if the repo isn't covered). */
+async function firstGitToken(ctx: AppContext, row: Pick<ThreadRow, "workspaceId" | "repo">) {
+  const cfg = githubAppConfig(ctx.vars);
+  if (!cfg) return undefined;
+  const creds = await tokenForThread(ctx, row).catch(err => (console.error("[lemonlime] first git token failed:", err), null));
+  return creds ? { token: creds.token, expiresAt: creds.expiresAt, host: new URL(cfg.webUrl).host } : undefined;
 }
 
 type ThreadPatch = Partial<Omit<ThreadRow, "id" | "workspaceId" | "createdAt" | "updatedAt">>;

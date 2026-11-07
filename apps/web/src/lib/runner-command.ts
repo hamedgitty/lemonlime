@@ -28,6 +28,8 @@ export interface RunnerCommandInput {
   /** Public URL of this control plane, for heartbeats. */
   controlPlaneUrl: string;
   port?: number;
+  /** The sandbox can't reach the control plane: the runner keeps its calls for us to collect. */
+  relay?: boolean;
 }
 
 /** A value that follows a flag must not look like a flag itself. */
@@ -59,6 +61,7 @@ export function runnerArgs(input: RunnerCommandInput): string[] {
     "--control-plane",
     value("--control-plane", input.controlPlaneUrl),
   );
+  if (input.relay) args.push("--relay");
   return args;
 }
 
@@ -68,9 +71,23 @@ export function buildRunnerCommand(input: RunnerCommandInput): string {
 }
 
 /** Everything a SandboxProvider needs to start (or restart) the runner for a thread. */
-export function buildRunnerLaunch(input: RunnerCommandInput & { threadSecret: string; secrets?: Record<string, string> }): RunnerLaunch {
-  const secrets = input.secrets ?? {};
-  const names = Object.keys(secrets).sort();
+export function buildRunnerLaunch(
+  input: RunnerCommandInput & {
+    threadSecret: string;
+    secrets?: Record<string, string>;
+    /** Relay mode: a first repository token, so the first clone doesn't wait for the relay. */
+    gitToken?: { token: string; expiresAt: string; host: string };
+  },
+): RunnerLaunch {
+  const secrets = {
+    ...input.secrets,
+    ...(input.gitToken
+      ? { LEMONLIME_GIT_TOKEN: input.gitToken.token, LEMONLIME_GIT_TOKEN_EXPIRES: input.gitToken.expiresAt, LEMONLIME_GIT_HOST: input.gitToken.host }
+      : {}),
+  };
+  const names = Object.keys(secrets)
+    .filter(n => n !== "LEMONLIME_GIT_TOKEN_EXPIRES" && n !== "LEMONLIME_GIT_HOST")
+    .sort();
   return {
     command: buildRunnerCommand(input),
     port: input.port ?? RUNNER_PORT,

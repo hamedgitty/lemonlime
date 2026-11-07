@@ -22,3 +22,4 @@ export { DiskGuard, biggestWriter, diskSpace, type DiskSpace } from "./disk-guar
 export { allowedRequest, startTunnel, type RunningTunnel } from "./tunnel.ts";
 export { MAX_SUBAGENT_CHILDREN, MAX_SUBAGENT_DEPTH, Subagents, type SubagentInfo } from "./subagents.ts";
 export { runSubagentTool } from "./subagents-mcp.ts";
+export * from "./relay.ts";

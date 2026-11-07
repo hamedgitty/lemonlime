@@ -11,6 +11,7 @@ import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
 import { confirmAction, inDesktopShell, listLocalRunners, loadAccessToken, removeLocalThread, saveAccessToken, stopLocalRunner } from "./lib/native.ts";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
+import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import {
   forgetEvents,
@@ -98,6 +99,18 @@ export function App() {
       });
     })();
     return () => off();
+  }, []);
+
+  // A newer signed version: offer it quietly, never interrupt.
+  const [update, setUpdate] = useState<AvailableUpdate | null>(null);
+  const [installing, setInstalling] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => void checkForUpdate().then(setUpdate), 10_000);
+    const daily = setInterval(() => void checkForUpdate().then(setUpdate), 6 * 60 * 60_000);
+    return () => {
+      clearTimeout(t);
+      clearInterval(daily);
+    };
   }, []);
 
   // Coming back from "Sign in with your browser": keep the token and connect.
@@ -386,6 +399,22 @@ export function App() {
             >
               <PanelLeft aria-hidden="true" className="size-4" />
             </button>
+          )}
+          {update && (
+            <div role="status" className="flex items-center gap-3 border-b border-line bg-lime-soft px-6 py-2 text-[14px]">
+              <p className="min-w-0 flex-1">LemonLime {update.version} is ready.</p>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={installing}
+                onClick={() => (setInstalling(true), void update.install().catch(() => setInstalling(false)))}
+              >
+                {installing ? "Installing…" : "Restart to update"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setUpdate(null)}>
+                Later
+              </Button>
+            </div>
           )}
           {usage && (
             <div

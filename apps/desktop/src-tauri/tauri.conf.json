@@ -43,13 +43,18 @@
     "targets": "all",
     "category": "DeveloperTool",
     "shortDescription": "Run coding agents on your computer or in cloud sandboxes.",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "createUpdaterArtifacts": true
   },
   "plugins": {
     "deep-link": {
       "desktop": {
         "schemes": ["lemonlime"]
       }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVBNUY2ODdBMTE4QkREMTYKUldRVzNZc1JlbWhmNnJYSDNSTjVrdStiVzBKdy9KS2F6clZmRG95TG9jQ21nQVZKRnNoYWNLRTkK",
+      "endpoints": ["https://github.com/hamedgitty/lemonlime/releases/latest/download/latest.json"]
     }
   }
 }

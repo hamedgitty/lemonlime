@@ -3,6 +3,7 @@ import { ArrowLeft, Bot, Check, Cloud, Eye, EyeOff, Keyboard, Package, Palette, 
 import { CloudApi, CloudError, normalizeBaseUrl } from "../lib/cloud.ts";
 import { AGENT_LABELS } from "../lib/format.ts";
 import { startBrowserSignIn } from "../lib/desktopAuth.ts";
+import { checkForUpdate, type AvailableUpdate } from "../lib/updates.ts";
 import { inDesktopShell } from "../lib/native.ts";
 import { NAV_ITEMS, type Settings, type UiPrefs } from "../lib/storage.ts";
 import { Kbd, Toggle } from "./primitives.tsx";
@@ -496,10 +497,55 @@ function KeyboardPage() {
 }
 
 function UpdatesPage() {
+  const [state, setState] = useState<"idle" | "checking" | "current" | "available" | "installing" | "error">("idle");
+  const [update, setUpdate] = useState<AvailableUpdate | null>(null);
+  const [progress, setProgress] = useState(0);
+  const check = async () => {
+    setState("checking");
+    const u = await checkForUpdate();
+    setUpdate(u);
+    setState(u ? "available" : "current");
+  };
+  const install = async () => {
+    if (!update) return;
+    setState("installing");
+    try {
+      await update.install(setProgress);
+    } catch {
+      setState("error");
+    }
+  };
   return (
-    <Section title="LemonLime" description="New versions are announced on GitHub with what changed.">
+    <Section title="LemonLime" description="LemonLime checks for new versions when it starts and installs them when you say so. Every update is signed.">
       <Row label="Version" description="The version of this app.">
         <span className="font-mono text-[13.5px]">{import.meta.env.VITE_APP_VERSION ?? "0.1.0"}</span>
+      </Row>
+      <Row
+        label="Updates"
+        description={
+          state === "current"
+            ? "You're on the latest version."
+            : state === "available" && update
+              ? `Version ${update.version} is ready to install.`
+              : state === "installing"
+                ? `Installing${progress ? ` (${Math.round(progress * 100)}%)` : ""}… LemonLime restarts when it's done.`
+                : state === "error"
+                  ? "The update didn't install. Try again later."
+                  : inDesktopShell()
+                    ? "Check whether a newer version is out."
+                    : "Updates only work in the desktop app."
+        }
+      >
+        {state === "available" ? (
+          <Button variant="primary" onClick={() => void install()}>
+            Install and restart
+          </Button>
+        ) : (
+          <Button onClick={() => void check()} disabled={!inDesktopShell() || state === "checking" || state === "installing"}>
+            {state === "checking" && <Spinner />}
+            Check now
+          </Button>
+        )}
       </Row>
       <Row label="What's new">
         <Button onClick={() => void openExternal("https://github.com/hamedgitty/lemonlime/releases")}>Open releases</Button>

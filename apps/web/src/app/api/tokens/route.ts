@@ -4,6 +4,7 @@ import { generateAccessToken, hashAccessToken } from "@/lib/access-tokens.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError, json, parseBody, route } from "@/lib/http.ts";
+import { enforce, LIMITS } from "@/lib/rate-limit.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,7 @@ export const POST = route(async request => {
   // A leaked token must not be able to mint more tokens.
   if (user.via !== "session") throw new HttpError(403, "Create tokens from the web dashboard.");
   const { name } = await parseBody(request, CreateAccessTokenRequest);
+  await enforce(ctx.db, `tokens:${user.userId}`, LIMITS.tokensPerUser, "new tokens");
   const raw = generateAccessToken();
   const accessToken = await createAccessTokenRow(ctx.db, user.userId, name, hashAccessToken(raw));
   return json({ token: raw, accessToken }, 201);

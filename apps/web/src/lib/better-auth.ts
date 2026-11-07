@@ -1,10 +1,11 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { emailOTP } from "better-auth/plugins";
-import { account, session, user, verification } from "@lemonlime/db";
+import { account, rateLimit, session, user, verification } from "@lemonlime/db";
 import { createPersonalWorkspace } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { signInCodeEmail } from "./email.ts";
+import { hit, LIMITS } from "./rate-limit.ts";
 
 /** Sign-in codes are 6 digits and valid for 10 minutes. */
 export const SIGN_IN_CODE_LENGTH = 6;
@@ -38,11 +39,24 @@ export function createAuth(ctx: AppContext) {
     ...(baseURL ? { trustedOrigins: [baseURL] } : {}),
     database: drizzleAdapter(ctx.db, {
       provider: "sqlite",
-      schema: { user, session, account, verification },
+      schema: { user, session, account, verification, rateLimit },
       // D1 has no interactive transactions.
       transaction: false,
     }),
     emailAndPassword: { enabled: false },
+    // Counted in the database so every Worker isolate shares the counts (Better Auth's
+    // default keeps them in memory, per isolate). Per client IP; tighter for codes.
+    rateLimit: {
+      enabled: true,
+      storage: "database",
+      modelName: "rateLimit",
+      window: 60,
+      max: 100,
+      customRules: {
+        "/email-otp/send-verification-otp": { window: 60, max: 3 },
+        "/sign-in/email-otp": { window: 60, max: 10 },
+      },
+    },
     // Client IP for rate limiting. On Workers, Cloudflare sets cf-connecting-ip; on Node,
     // put the app behind a proxy that sets x-forwarded-for.
     advanced: {
@@ -57,6 +71,13 @@ export function createAuth(ctx: AppContext) {
         storeOTP: "hashed",
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== "sign-in") return; // only sign-in codes are used
+          // Per address too, so nobody can flood one inbox from many IPs. Better Auth sends
+          // in the background and answers the same either way, so this reveals nothing.
+          const limit = await hit(ctx.db, `sign-in-code:${email.trim().toLowerCase()}`, LIMITS.signInCodesPerEmail);
+          if (!limit.ok) {
+            console.warn("Skipped a sign-in code: too many for this address in the last hour.");
+            return;
+          }
           await ctx.email.send(signInCodeEmail(email, otp, SIGN_IN_CODE_TTL_SECONDS / 60));
         },
       }),

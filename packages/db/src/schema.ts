@@ -90,6 +90,19 @@ export const verification = sqliteTable(
   t => [index("verification_identifier_idx").on(t.identifier)],
 );
 
+/**
+ * Request counters for rate limiting, shared by every Worker isolate (an in-memory
+ * counter would only see one isolate's traffic). Better Auth uses it for its own routes;
+ * `apps/web/src/lib/rate-limit.ts` uses it, with keys starting "app:", for the rest.
+ */
+export const rateLimit = sqliteTable("rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  /** Start of the current window, epoch milliseconds. */
+  lastRequest: integer("last_request").notNull(),
+});
+
 // ─── Workspaces ──────────────────────────────────────────────────────────────
 
 export const workspaces = sqliteTable(

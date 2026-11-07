@@ -9,3 +9,4 @@ apps/desktop/src-tauri/gen
 packages/db/migrations
 packages/runner/test/fixtures/agents/**/*.jsonl
 *.md
+packages/db/src/migrations.ts

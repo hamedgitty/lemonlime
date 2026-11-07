@@ -4,6 +4,7 @@ import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { json, parseBody, route } from "@/lib/http.ts";
 import { createThread, listThreads } from "@/lib/threads.ts";
+import { enforce, LIMITS } from "@/lib/rate-limit.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,7 @@ export const POST = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
   const body = await parseBody(request, CreateThreadRequest);
+  await enforce(ctx.db, `threads:${user.userId}`, LIMITS.threadsPerUser, "new threads");
   const workspaceId = await resolveWorkspace(ctx.db, user.userId, new URL(request.url).searchParams.get("workspace"));
   return json(await createThread(ctx, user.userId, workspaceId, body), 201);
 });

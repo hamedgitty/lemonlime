@@ -2,6 +2,7 @@ import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { json, route } from "@/lib/http.ts";
 import { resumeThread } from "@/lib/threads.ts";
+import { enforce, LIMITS } from "@/lib/rate-limit.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -9,5 +10,6 @@ export const dynamic = "force-dynamic";
 export const POST = route<{ params: Promise<{ id: string }> }>(async (request, { params }) => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
+  await enforce(ctx.db, `sandbox-starts:${user.userId}`, LIMITS.sandboxStartsPerUser, "sandbox starts");
   return json(await resumeThread(ctx, user.userId, (await params).id));
 });

@@ -60,6 +60,21 @@ People sign in with a **one-time code**: they enter their email, receive a
 the account and a personal workspace. Codes are stored hashed and a code stops
 working after 5 wrong attempts.
 
+Rate limits are counted in the database (table `rate_limit`), so they hold across
+every Worker isolate or Node process:
+
+| What | Limit |
+| --- | --- |
+| Any sign-in request, per client IP | 100 a minute |
+| Asking for a code, per client IP | 3 a minute |
+| Entering a code, per client IP | 10 a minute |
+| Codes emailed to one address, whatever the IP | 5 an hour (extra requests send nothing, and look the same) |
+| New personal access tokens, per user | 10 an hour |
+| New threads, and sandbox starts/resumes, per user | 30 a minute each |
+
+On Node, the client IP comes from `X-Forwarded-For`; make sure your proxy overwrites
+that header rather than passing on whatever the client sent.
+
 Email is sent with the first transport that is configured:
 
 1. **Cloudflare Email Service** — a `send_email` binding named `EMAIL` (Workers

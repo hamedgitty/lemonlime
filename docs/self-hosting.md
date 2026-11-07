@@ -374,6 +374,9 @@ Create the app at **GitHub → Settings → Developer settings → GitHub Apps �
   Metadata *Read-only*.
 - **Organization permissions**: Members *Read-only* (to check the person connecting an
   organization is one of its owners).
+- **Account permissions**: Email addresses *Read-only*. "Continue with GitHub" signs people
+  in with the same app, and without this it can't see the email of anyone who keeps it
+  private on GitHub (most people), so their sign-in fails.
 - **Where can this app be installed?** Any account, so other people can install it.
 
 Agents can push to any branch the token reaches. GitHub can't limit a token to one

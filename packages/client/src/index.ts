@@ -1,4 +1,4 @@
-import { parseServerMessage, type ClientMessage, type Thread, type ThreadEvent } from "@lemonlime/protocol";
+import { parseServerMessage, type ClientMessage, type SideChatSummary, type Thread, type ThreadEvent } from "@lemonlime/protocol";
 
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "closed";
 
@@ -19,6 +19,11 @@ export interface RunnerClientOptions {
   onLogin?: (update: { state: "starting" | "open_url" | "needs_input" | "done" | "failed"; url?: string; code?: string; message?: string }) => void;
   /** The runner accepted a message: it started a turn, was queued, or was a repeat. */
   onAck?: (clientMsgId: string, result: "started" | "queued" | "duplicate") => void;
+  /** Side chats (never part of the thread's history). */
+  onSideChats?: (chats: SideChatSummary[]) => void;
+  onSideEvent?: (sideId: string, event: ThreadEvent) => void;
+  onSideHistory?: (sideId: string, events: ThreadEvent[]) => void;
+  onSideStarted?: (sideId: string, requestId?: string) => void;
   /** Max delay between reconnect attempts. */
   maxBackoffMs?: number;
 }
@@ -114,6 +119,24 @@ export class RunnerClient {
     this.post({ type: "compact" });
   }
 
+  /** Ask in a side chat (a new one without `sideId`). The chat's id arrives in onSideStarted. */
+  sideAsk(text: string, sideId?: string, requestId: string = newId()): string {
+    this.post({ type: "side_ask", text, ...(sideId ? { sideId } : {}), requestId });
+    return requestId;
+  }
+
+  sidePin(sideId: string, pinned: boolean): void {
+    this.post({ type: "side_pin", sideId, pinned });
+  }
+
+  sideClose(sideId: string): void {
+    this.post({ type: "side_close", sideId });
+  }
+
+  sideOpen(sideId: string): void {
+    this.post({ type: "side_open", sideId });
+  }
+
   /** Answer an approval request from the agent. */
   approve(requestId: string, decision: "allow" | "deny"): void {
     this.post({ type: "approve", requestId, decision });
@@ -184,6 +207,18 @@ export class RunnerClient {
         case "ack":
           this.unacked.delete(msg.clientMsgId);
           this.opts.onAck?.(msg.clientMsgId, msg.result);
+          break;
+        case "side_chats":
+          this.opts.onSideChats?.(msg.chats);
+          break;
+        case "side_event":
+          this.opts.onSideEvent?.(msg.sideId, msg.event);
+          break;
+        case "side_history":
+          this.opts.onSideHistory?.(msg.sideId, msg.events);
+          break;
+        case "side_started":
+          this.opts.onSideStarted?.(msg.sideId, msg.requestId);
           break;
         case "error":
           this.opts.onError?.(msg.message, msg.code);

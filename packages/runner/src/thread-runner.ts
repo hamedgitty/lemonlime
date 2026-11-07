@@ -3,6 +3,7 @@ import { isAbsolute, join, relative } from "node:path";
 import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
+import { SideChats } from "./side-chats.ts";
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
@@ -141,7 +142,20 @@ export class ThreadRunner {
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
     this.git = opts.git === false ? null : new GitWorkspace(opts.workdir, opts.credentialHelper);
+    const { autonomy: _a, ...session } = opts.session;
+    this.side = new SideChats({
+      threadId: opts.thread.id,
+      adapter: opts.adapter,
+      session,
+      cwd: opts.workdir,
+      dir: opts.dataDir ? join(opts.dataDir, "side-chats") : null,
+      recap: () => recapBefore(this.store.since(0), this.store.latestSeq + 1, "Here is the main thread so far, for context:"),
+      redact: createRedactor(this.redactions),
+    });
   }
+
+  /** Quick, read-only questions about the thread that stay out of its history. */
+  readonly side: SideChats;
 
   get thread(): Thread {
     return { ...this.opts.thread, status: this.status, latestSeq: this.store.latestSeq, updatedAt: new Date().toISOString() };
@@ -472,6 +486,7 @@ export class ThreadRunner {
 
   async close(): Promise<void> {
     this.closing = true;
+    await this.side.closeAll();
     if (this.limitTimer) clearTimeout(this.limitTimer);
     this.interrupt();
     await this.current?.catch(() => undefined);
@@ -773,7 +788,11 @@ export function tokensIn(json: string): string[] {
 const RECAP_CHARS = 24_000;
 
 /** The conversation before `toSeq`, as plain text a fresh agent conversation can start from. */
-export function recapBefore(events: readonly ThreadEvent[], toSeq: number): string | null {
+export function recapBefore(
+  events: readonly ThreadEvent[],
+  toSeq: number,
+  intro = "This conversation was rewound. Here is what was said before, for context (files are as they are now):",
+): string | null {
   const hidden: [number, number][] = [];
   for (const e of events) if (e.type === "rewind") hidden.push([e.toSeq, e.seq]);
   const lines: string[] = [];
@@ -786,5 +805,5 @@ export function recapBefore(events: readonly ThreadEvent[], toSeq: number): stri
   if (!lines.length) return null;
   let body = lines.join("\n\n");
   if (body.length > RECAP_CHARS) body = `…${body.slice(-RECAP_CHARS)}`;
-  return `This conversation was rewound. Here is what was said before, for context (files are as they are now):\n\n${body}\n\nThe user's next message follows.`;
+  return `${intro}\n\n${body}\n\nThe user's next message follows.`;
 }

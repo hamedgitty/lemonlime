@@ -26,7 +26,7 @@ class CodexSession implements AgentSession {
     const flags = ["--json", "--skip-git-repo-check"];
     if (this.opts.model) flags.push("--model", this.opts.model);
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
-    else flags.push("-c", 'sandbox_mode="workspace-write"');
+    else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
     const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, ctx.prompt] : ["exec", ...flags, ctx.prompt];
 
     let failure: string | null = null;

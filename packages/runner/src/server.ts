@@ -133,10 +133,16 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       send({ type: "caught_up", latestSeq: runner.store.latestSeq });
       // Sign-in progress goes to live connections only; it is never part of history.
       const offLogin = runner.onLogin(u => send({ type: "login", ...u }));
+      // Side chats too: live only, never in the thread's history.
+      send({ type: "side_chats", chats: runner.side.list() });
+      const offSide = runner.side.subscribe((sideId, event) => send({ type: "side_event", sideId, event }));
+      const offSideList = runner.side.onList(chats => send({ type: "side_chats", chats }));
       const offEvents = unsubscribe;
       unsubscribe = () => {
         offEvents?.();
         offLogin();
+        offSide();
+        offSideList();
       };
       return;
     }
@@ -152,6 +158,21 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         break;
       case "interrupt":
         runner.interrupt();
+        break;
+      case "side_ask": {
+        const r = runner.side.ask(msg.text, msg.sideId);
+        if (typeof r === "string") send({ type: "side_started", sideId: r, ...(msg.requestId ? { requestId: msg.requestId } : {}) });
+        else send({ type: "error", code: "bad_request", message: r.error });
+        break;
+      }
+      case "side_pin":
+        runner.side.pin(msg.sideId, msg.pinned);
+        break;
+      case "side_close":
+        void runner.side.close(msg.sideId);
+        break;
+      case "side_open":
+        send({ type: "side_history", sideId: msg.sideId, events: runner.side.history(msg.sideId) });
         break;
       case "rewind":
         void runner.rewind(msg.toSeq, msg.restoreFiles).then(r => {

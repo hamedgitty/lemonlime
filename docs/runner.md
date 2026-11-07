@@ -100,6 +100,15 @@ replaces the remote branch. History is never deleted: a `rewind` event marks wha
 leave out (`withoutRewound` in the protocol). `{"type":"compact"}` asks Claude Code to
 shrink its conversation (`/compact`); other agents say they can't.
 
+## Side chats
+
+`side_ask` (with no `sideId`) starts a side chat: a separate agent conversation, at the
+read-only autonomy level, that gets a recap of the thread and the question. It can read
+files but not change them (Claude Code: editing tools off and nothing else allowed;
+Codex: its read-only sandbox; ACP: only read, search and fetch). Its messages come back
+as `side_event`s and never enter the thread's history. Unpinned chats are discarded on
+`side_close` or when the runner stops; `side_pin` keeps one in the thread's data folder.
+
 ## Usage limits
 
 When an agent stops because the user's plan limit is reached (Claude says when it

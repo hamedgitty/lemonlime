@@ -202,10 +202,12 @@ class AcpSession implements AgentSession {
 
 /** Tool kinds that never need asking: they only read, or edit files (which "edits" allows). */
 const SAFE_KINDS = ["edit", "read", "search", "think", "fetch"];
+/** What a read-only session may do without anyone being asked. */
+const READ_KINDS = ["read", "search", "think", "fetch"];
 
 /** True when a permission request has to go to the user rather than be answered by policy. */
 export function needsApproval(params: Json | undefined, autonomy: Autonomy): boolean {
-  if (autonomy === "full") return false;
+  if (autonomy === "full" || autonomy === "read") return false;
   const toolKind = String((params?.toolCall as Json | undefined)?.kind ?? "");
   return !SAFE_KINDS.includes(toolKind);
 }
@@ -223,7 +225,8 @@ export function answerAgentRequest(
 ): { result: unknown } | { error: { code: number; message: string } } {
   if (method === "session/request_permission") {
     const options = (params?.options as { optionId: string; kind: string }[] | undefined) ?? [];
-    const allowed = needsApproval(params, autonomy) ? decision === "allow" : true;
+    const kind = String((params?.toolCall as Json | undefined)?.kind ?? "");
+    const allowed = autonomy === "read" ? READ_KINDS.includes(kind) : needsApproval(params, autonomy) ? decision === "allow" : true;
     const pick = allowed
       ? (options.find(o => o.kind === "allow_once") ?? options.find(o => o.kind === "allow_always"))
       : (options.find(o => o.kind === "reject_once") ?? options.find(o => o.kind === "reject_always"));

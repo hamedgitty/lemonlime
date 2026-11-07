@@ -74,6 +74,8 @@ class ClaudeCodeSession implements AgentSession {
     // Hooks run even with permissions skipped, so the guard holds at every autonomy level.
     if (this.opts.commandGuard !== false) args.push("--settings", JSON.stringify(commandGuardSettings()));
     if (this.opts.autonomy === "full") args.push("--dangerously-skip-permissions");
+    // Read-only: no editing tools, and with nobody to ask, anything needing permission is refused.
+    else if (this.opts.autonomy === "read") args.push("--permission-mode", "default", "--disallowedTools", "Edit,Write,MultiEdit,NotebookEdit");
     else {
       args.push("--permission-mode", "acceptEdits", "--mcp-config", await this.approvalConfig(), "--permission-prompt-tool", APPROVAL_TOOL);
       env.MCP_TOOL_TIMEOUT = String(APPROVAL_TOOL_TIMEOUT_MS);

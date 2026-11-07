@@ -6,7 +6,8 @@ import type { ApprovalDecision, ApprovalRequest } from "../approvals.ts";
  * - full:  run any command and edit any file (use inside isolated sandboxes)
  * - edits: edit files freely, but the agent's own safety rules apply to commands
  */
-export type Autonomy = "full" | "edits";
+/** `full`: anything. `edits`: edits files, asks before the rest. `read`: looks, never changes anything (side chats). */
+export type Autonomy = "full" | "edits" | "read";
 
 export interface SessionOptions {
   cwd: string;

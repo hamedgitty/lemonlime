@@ -57,6 +57,22 @@ export const ClientRewind = z.object({ type: z.literal("rewind"), toSeq: z.numbe
 export const ClientCompact = z.object({ type: z.literal("compact") });
 
 /**
+ * Side chats: questions about the thread answered by a separate, read-only agent
+ * conversation, kept out of the thread's history. `side_ask` without `sideId` starts one.
+ * Unpinned chats are discarded when closed.
+ */
+export const ClientSideAsk = z.object({
+  type: z.literal("side_ask"),
+  text: z.string().min(1).max(200_000),
+  sideId: z.string().max(100).optional(),
+  requestId: z.string().max(100).optional(),
+});
+export const ClientSidePin = z.object({ type: z.literal("side_pin"), sideId: z.string().max(100), pinned: z.boolean() });
+export const ClientSideClose = z.object({ type: z.literal("side_close"), sideId: z.string().max(100) });
+/** Ask for a side chat's messages so far (answered with `side_history`). */
+export const ClientSideOpen = z.object({ type: z.literal("side_open"), sideId: z.string().max(100) });
+
+/**
  * Sign the agent in to the user's own model account (cloud sandboxes). Login traffic uses
  * these messages only and never becomes part of the thread's history.
  */
@@ -77,6 +93,10 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientEditQueue,
   ClientRewind,
   ClientCompact,
+  ClientSideAsk,
+  ClientSidePin,
+  ClientSideClose,
+  ClientSideOpen,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -124,7 +144,28 @@ export const ServerLogin = z.object({
   message: z.string().max(2000).optional(),
 });
 
-export const ServerMessage = z.discriminatedUnion("type", [ServerWelcome, ServerEvent, ServerCaughtUp, ServerPong, ServerError, ServerAck, ServerLogin]);
+export const SideChatSummary = z.object({ id: z.string(), title: z.string(), pinned: z.boolean(), createdAt: z.string(), busy: z.boolean() });
+export type SideChatSummary = z.infer<typeof SideChatSummary>;
+/** The side chats this thread has; sent after `caught_up` and whenever they change. */
+export const ServerSideChats = z.object({ type: z.literal("side_chats"), chats: z.array(SideChatSummary) });
+export const ServerSideEvent = z.object({ type: z.literal("side_event"), sideId: z.string(), event: ThreadEvent });
+export const ServerSideHistory = z.object({ type: z.literal("side_history"), sideId: z.string(), events: z.array(ThreadEvent) });
+/** A `side_ask` was taken: `sideId` is the chat it went to (new, if none was given). */
+export const ServerSideStarted = z.object({ type: z.literal("side_started"), sideId: z.string(), requestId: z.string().optional() });
+
+export const ServerMessage = z.discriminatedUnion("type", [
+  ServerWelcome,
+  ServerEvent,
+  ServerCaughtUp,
+  ServerPong,
+  ServerError,
+  ServerAck,
+  ServerLogin,
+  ServerSideChats,
+  ServerSideEvent,
+  ServerSideHistory,
+  ServerSideStarted,
+]);
 export type ServerMessage = z.infer<typeof ServerMessage>;
 
 /** Parse a raw WebSocket frame. Returns null instead of throwing on bad input. */

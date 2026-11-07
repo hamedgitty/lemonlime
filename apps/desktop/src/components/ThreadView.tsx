@@ -12,6 +12,7 @@ import {
   Play,
   Power,
   RotateCw,
+  MessagesSquare,
   Shrink,
   SquareTerminal,
   Trash2,
@@ -28,6 +29,7 @@ import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Composer, type ComposerHandle } from "./Composer.tsx";
 import { TerminalPanel } from "./TerminalPanel.tsx";
+import { SideChatPanel } from "./SideChatPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { Menu, MenuItem, Tip } from "./primitives.tsx";
 import { Button, StatusDot, cx, openExternal } from "./ui.tsx";
@@ -176,7 +178,7 @@ function ThreadSessionView({
     session.rewind(seq, restoreFiles);
     composerRef.current?.fill(text);
   };
-  const [panelTab, setPanelTab] = useState<"changes" | "terminal">("changes");
+  const [panelTab, setPanelTab] = useState<"changes" | "terminal" | "side">("changes");
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -347,8 +349,8 @@ function SidePanel({
   session,
   onClose,
 }: {
-  tab: "changes" | "terminal";
-  onTab: (t: "changes" | "terminal") => void;
+  tab: "changes" | "terminal" | "side";
+  onTab: (t: "changes" | "terminal" | "side") => void;
   session: ReturnType<typeof useThreadSession>;
   onClose: () => void;
 }) {
@@ -375,6 +377,10 @@ function SidePanel({
           <SquareTerminal aria-hidden="true" className="size-3.5" />
           Terminal
         </button>
+        <button type="button" role="tab" aria-selected={tab === "side"} onClick={() => onTab("side")} className={tabClass(tab === "side")}>
+          <MessagesSquare aria-hidden="true" className="size-3.5" />
+          Side chat
+        </button>
         <span className="flex-1" />
         <button
           type="button"
@@ -386,6 +392,7 @@ function SidePanel({
         </button>
       </div>
       {tab === "changes" && <ChangesList events={session.events} />}
+      {tab === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
       {terminalSeen && (
         <div className={cx("min-h-0 flex-1 flex-col", tab === "terminal" ? "flex" : "hidden")}>
           <TerminalPanel connection={session.connection} />

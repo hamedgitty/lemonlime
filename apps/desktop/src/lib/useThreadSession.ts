@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RunnerClient } from "@lemonlime/client";
-import { signToken, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
+import { signToken, type SideChatSummary, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
 import { appendEvents, contiguousSeq, type PendingMessage } from "./timeline.ts";
 import { forgetEvents, loadEvents, saveEvents, type LocalThreadMeta } from "./storage.ts";
 import { isLocalRunnerRunning, startLocalRunner } from "./native.ts";
@@ -56,6 +56,16 @@ export interface ThreadSession {
   editQueued: EditQueuedFn;
   rewind: (toSeq: number, restoreFiles: boolean) => void;
   compact: () => void;
+  /** Side chats: read-only questions about the thread, outside its history. */
+  side: {
+    chats: SideChatSummary[];
+    events: Record<string, ThreadEvent[]>;
+    /** Ask in `sideId`, or in a new chat; resolves to the chat's id. */
+    ask: (text: string, sideId?: string) => Promise<string>;
+    pin: (sideId: string, pinned: boolean) => void;
+    close: (sideId: string) => void;
+    open: (sideId: string) => void;
+  };
   /** Tear down and connect again (starting the local runner if needed). */
   restart: () => void;
   /** Close the connection on purpose and show the thread as offline. */
@@ -73,6 +83,9 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const [status, setStatus] = useState<ThreadStatus | null>(null);
   const [generation, setGeneration] = useState(0);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [sideChats, setSideChats] = useState<SideChatSummary[]>([]);
+  const [sideEvents, setSideEvents] = useState<Record<string, ThreadEvent[]>>({});
+  const sideWaiters = useRef(new Map<string, (sideId: string) => void>());
 
   const eventsRef = useRef(events);
   eventsRef.current = events;
@@ -188,6 +201,14 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
             setGeneration(g => g + 1);
           }
         },
+        onSideChats: chats => !cancelled && setSideChats(chats),
+        onSideEvent: (sideId, e) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: [...(m[sideId] ?? []).filter(x => x.seq < e.seq), e] })),
+        onSideHistory: (sideId, events) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: events })),
+        onSideStarted: (sideId, requestId) => {
+          if (!requestId) return;
+          sideWaiters.current.get(requestId)?.(sideId);
+          sideWaiters.current.delete(requestId);
+        },
         onEvent: ev => {
           if (cancelled) return;
           buffer.push(ev);
@@ -290,6 +311,24 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const editQueued = useCallback<EditQueuedFn>((id, change) => clientRef.current?.editQueued(id, change), []);
   const rewind = useCallback((toSeq: number, restoreFiles: boolean) => clientRef.current?.rewind(toSeq, restoreFiles), []);
   const compact = useCallback(() => clientRef.current?.compact(), []);
+  const sideAsk = useCallback(
+    (text: string, sideId?: string) =>
+      new Promise<string>((resolve, reject) => {
+        const client = clientRef.current;
+        if (!client) return reject(new Error("Not connected to the runner."));
+        const requestId = client.sideAsk(text, sideId);
+        sideWaiters.current.set(requestId, resolve);
+      }),
+    [],
+  );
+  const side = {
+    chats: sideChats,
+    events: sideEvents,
+    ask: sideAsk,
+    pin: useCallback((id: string, pinned: boolean) => clientRef.current?.sidePin(id, pinned), []),
+    close: useCallback((id: string) => clientRef.current?.sideClose(id), []),
+    open: useCallback((id: string) => clientRef.current?.sideOpen(id), []),
+  };
   const restart = useCallback(() => setGeneration(g => g + 1), []);
   const disconnect = useCallback(() => {
     disconnectedRef.current = true;
@@ -300,7 +339,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, rewind, compact, restart, disconnect };
+  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, rewind, compact, side, restart, disconnect };
 }
 
 function newClientMsgId(): string {

@@ -22,6 +22,15 @@ import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { RUNNER_VERSION } from "./version.ts";
 
+// Output piped into something that stops reading early (`lemonlime-runner --help | head`):
+// stop quietly instead of crashing with a stack trace. 141 is what a shell reports for a
+// closed pipe, and being non-zero, a service manager still restarts a runner that hit it.
+for (const stream of [process.stdout, process.stderr])
+  stream.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EPIPE") process.exit(141);
+    throw err;
+  });
+
 const HELP = `lemonlime-runner — run one coding agent and stream its work
 
 Usage: lemonlime-runner --thread <id> --agent <kind> [options]

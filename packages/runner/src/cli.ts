@@ -7,6 +7,7 @@ import { AgentKind, branchForThread, ThreadId, type Thread } from "@lemonlime/pr
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { GitWorkspace } from "./git.ts";
 import { secretsFromEnv } from "./redact.ts";
+import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
 import { startHeartbeat } from "./heartbeat.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
@@ -87,6 +88,15 @@ export function worktreePathFor(home: string, sourceRepo: string, threadId: stri
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
+  if (argv[0] === "git-credential") {
+    const input = await new Promise<string>(resolve => {
+      let data = "";
+      process.stdin.on("data", d => (data += d));
+      process.stdin.on("end", () => resolve(data));
+    });
+    process.stdout.write(await gitCredential(argv[1] ?? "", input));
+    return;
+  }
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -158,6 +168,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     updatedAt: now,
   };
 
+  // Cloud threads: git asks the control plane for short-lived tokens, and the branch is
+  // pushed after every turn. The variables reach git and the agent through our environment.
+  const cloudGit = Boolean(values["control-plane"] && values.repo && !values["no-git"]);
+  if (cloudGit) {
+    process.env.LEMONLIME_THREAD_ID = id;
+    process.env.LEMONLIME_CONTROL_PLANE_URL = values["control-plane"]!;
+  }
+
   const runner = new ThreadRunner({
     thread,
     workdir,
@@ -170,6 +188,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     checkAgentVersion: true,
     bundledSkills: !values["no-bundled-skills"],
     redact: secretsFromEnv(),
+    ...(cloudGit ? { pushBranch: true, credentialHelper: credentialHelperCommand() } : {}),
     extraSkillDirs: (values.skills ?? []).map(d => resolve(d)),
   });
 

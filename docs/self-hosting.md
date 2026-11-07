@@ -269,6 +269,29 @@ sandbox is paused:
   wakes the sandbox; the runner picks it up when it starts. The apps do this when you
   send to a paused thread.
 
+## GitHub App
+
+Cloud threads clone private repositories, push their branch after every turn, and open
+pull requests through a GitHub App that each workspace installs on the repositories it
+chooses. Sandboxes never hold a long-lived credential: git's credential helper asks the
+control plane for a token that only works on that thread's repository and expires
+within the hour.
+
+Create the app at **GitHub → Settings → Developer settings → GitHub Apps → New**:
+
+- **Callback URL** and **Setup URL**: `<LEMONLIME_PUBLIC_URL>/api/github/setup`
+- Turn on **Request user authorization (OAuth) during installation** (LemonLime uses it
+  to check that whoever installs the app can manage that installation).
+- **Webhook**: off.
+- **Repository permissions**: Contents *Read and write*, Pull requests *Read and write*,
+  Metadata *Read-only*.
+- **Where can this app be installed?** Any account, so other people can install it.
+
+Then generate a private key and set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL
+name), `GITHUB_APP_PRIVATE_KEY` (the PEM; newlines may be written as `\n`),
+`GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. People connect it under
+**Settings → GitHub**.
+
 ## Secrets
 
 People add secrets (keys and tokens their agents need, like `NPM_TOKEN`) under

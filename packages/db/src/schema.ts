@@ -176,6 +176,8 @@ export const threads = sqliteTable(
     drainRequestedAt: text("drain_requested_at"),
     /** When the runner said it had drained. */
     drainedAt: text("drained_at"),
+    /** Pull request opened for the thread's branch, if any. */
+    pullRequestUrl: text("pull_request_url"),
     createdAt: text("created_at").notNull().$defaultFn(nowIso),
     updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
   },
@@ -218,6 +220,24 @@ export const sandboxRuns = sqliteTable(
     check("sandbox_runs_runtime", sql`${t.runtimeSeconds} >= 0`),
     check("sandbox_runs_end_reason", sql`${t.endReason} in ('idle', 'user', 'policy', 'error', 'replaced')`),
   ],
+);
+
+// ─── GitHub App installations linked to a workspace ──────────────────────────
+
+export const githubInstallations = sqliteTable(
+  "github_installations",
+  {
+    /** GitHub's installation id. */
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    /** The user or organization the app is installed on. */
+    accountLogin: text("account_login").notNull(),
+    linkedBy: text("linked_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: text("created_at").notNull().$defaultFn(nowIso),
+  },
+  t => [index("github_installations_workspace_idx").on(t.workspaceId)],
 );
 
 // ─── Secrets (environment variables for cloud sandboxes) ─────────────────────

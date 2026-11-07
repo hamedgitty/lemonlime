@@ -3,19 +3,24 @@ import { renderSlot } from "@lemonlime/plugins";
 import { listAccessTokens, resolveWorkspace } from "@/lib/access.ts";
 import { requirePageUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
+import { githubAppConfig, listInstallations } from "@/lib/github.ts";
 import { listSecrets } from "@/lib/secrets.ts";
+import { GitHubSection } from "./github-section.tsx";
 import { SecretsManager } from "./secrets-manager.tsx";
 import { TokensManager } from "./tokens-manager.tsx";
 
 export const metadata: Metadata = { title: "Settings" };
 
-export default async function SettingsPage() {
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ github?: string }> }) {
   const ctx = await getAppContext();
   const user = await requirePageUser(ctx, "/settings");
   const workspaceId = await resolveWorkspace(ctx.db, user.userId);
   const { billingUI } = ctx.plugin;
   const tokens = await listAccessTokens(ctx.db, user.userId);
   const secretList = await listSecrets(ctx, workspaceId);
+  const githubEnabled = githubAppConfig(ctx.vars) !== null;
+  const installations = githubEnabled ? await listInstallations(ctx, workspaceId) : [];
+  const githubResult = (await searchParams).github ?? null;
   const controlPlaneUrl = ctx.vars.LEMONLIME_PUBLIC_URL ?? "";
 
   return (
@@ -41,6 +46,17 @@ export default async function SettingsPage() {
       </section>
 
       {renderSlot(billingUI.accountSection, { workspaceId })}
+
+      <section aria-labelledby="github-heading" className="card p-6">
+        <h2 id="github-heading" className="text-xl font-semibold">
+          GitHub
+        </h2>
+        <p className="mt-1 text-sm text-muted">
+          Install the LemonLime app on the repositories you choose. Cloud threads then clone them, push their branch after every turn, and open pull requests,
+          each with a token that only works on that repository and expires within the hour.
+        </p>
+        <GitHubSection enabled={githubEnabled} initial={installations} result={githubResult} />
+      </section>
 
       <section aria-labelledby="secrets-heading" className="card p-6">
         <h2 id="secrets-heading" className="text-xl font-semibold">

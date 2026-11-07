@@ -18,7 +18,11 @@ export interface FileChange {
 
 /** Git operations for one thread's working directory. */
 export class GitWorkspace {
-  constructor(readonly dir: string) {}
+  constructor(
+    readonly dir: string,
+    /** git `credential.helper` to use for clone, fetch and push (cloud threads). */
+    private readonly credentialHelper?: string,
+  ) {}
 
   async git(args: string[], opts: { allowFail?: boolean } = {}): Promise<string> {
     try {
@@ -34,10 +38,41 @@ export class GitWorkspace {
   async ensureRepo(repoUrl?: string): Promise<void> {
     mkdirSync(this.dir, { recursive: true });
     const empty = readdirSync(this.dir).length === 0;
+    const helper = this.credentialHelper ? ["-c", `credential.helper=${this.credentialHelper}`] : [];
     if (empty && repoUrl) {
-      await run("git", ["clone", "--no-single-branch", repoUrl, "."], { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
+      await run("git", [...helper, "clone", "--no-single-branch", repoUrl, "."], { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
     } else if (!existsSync(join(this.dir, ".git"))) {
       await this.git(["init", "-q"]);
+    }
+    // Later fetches and pushes, by the runner or the agent, use the same helper. The
+    // empty value first clears any helper inherited from system or global config.
+    if (this.credentialHelper) {
+      await this.git(["config", "--replace-all", "credential.helper", ""]);
+      await this.git(["config", "--add", "credential.helper", this.credentialHelper]);
+    }
+  }
+
+  /**
+   * Push the current branch to `origin`, setting it as upstream. Returns null on success,
+   * or git's error. Never forces: if the remote has moved on, the push is refused.
+   */
+  async push(branch: string): Promise<string | null> {
+    const remotes = (await this.git(["remote"], { allowFail: true })).split("\n").map(r => r.trim());
+    if (!remotes.includes("origin")) return "no remote named origin";
+    try {
+      await run("git", ["push", "-q", "-u", "origin", `HEAD:refs/heads/${branch}`], {
+        cwd: this.dir,
+        maxBuffer: 4 * 1024 * 1024,
+        timeout: 120_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      });
+      return null;
+    } catch (err) {
+      return String((err as { stderr?: string }).stderr ?? err)
+        .trim()
+        .split("\n")
+        .slice(-3)
+        .join("\n");
     }
   }
 

@@ -39,6 +39,10 @@ export interface ThreadRunnerOptions {
   extraSkillDirs?: string[];
   /** Secret values (by name) to keep out of every event. */
   redact?: Record<string, string>;
+  /** Push the thread branch to origin after every turn that commits (cloud threads). */
+  pushBranch?: boolean;
+  /** git credential helper for clone/fetch/push (cloud threads; see git-credential.ts). */
+  credentialHelper?: string;
 }
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60_000;
@@ -115,7 +119,7 @@ export class ThreadRunner {
   constructor(private readonly opts: ThreadRunnerOptions) {
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(opts.redact ?? {}));
     this.status = opts.thread.status;
-    this.git = opts.git === false ? null : new GitWorkspace(opts.workdir);
+    this.git = opts.git === false ? null : new GitWorkspace(opts.workdir, opts.credentialHelper);
   }
 
   get thread(): Thread {
@@ -419,7 +423,21 @@ export class ThreadRunner {
     const changes = await this.git.collectChanges();
     for (const c of changes) this.store.append({ type: "file_diff", path: c.path, change: c.change, diff: c.diff, truncated: c.truncated });
     if (changes.length) await this.git.commit(commitSubject(prompt));
+    if (this.opts.pushBranch && (changes.length || this.unpushed)) {
+      const problem = await this.git.push(this.opts.thread.branch);
+      this.unpushed = problem !== null;
+      if (problem) {
+        this.store.append({
+          type: "notice",
+          code: "push_failed",
+          message: `Couldn't push ${this.opts.thread.branch} to GitHub, so the changes are only in the sandbox for now. LemonLime tries again after the next turn. Git said: ${problem}`,
+        });
+      }
+    }
   }
+
+  /** A commit that hasn't reached origin yet, retried after the next turn. */
+  private unpushed = false;
 
   private setStatus(to: ThreadStatus, reason?: string): void {
     const from = this.status;

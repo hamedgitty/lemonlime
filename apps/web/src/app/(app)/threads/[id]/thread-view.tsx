@@ -35,7 +35,8 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   const [runnerError, setRunnerError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [denied, setDenied] = useState<PolicyDenied | null>(null);
-  const [busy, setBusy] = useState<null | "pause" | "resume" | "close">(null);
+  const [busy, setBusy] = useState<null | "pause" | "resume" | "close" | "pr">(null);
+  const [pullRequestUrl, setPullRequestUrl] = useState<string | null>(initial.pullRequestUrl);
   const [draft, setDraft] = useState("");
 
   const clientRef = useRef<RunnerClient | null>(null);
@@ -155,6 +156,18 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
     else setActionError(res.message);
   }, [id, apply]);
 
+  /** Open (or find) the pull request for this thread's branch on GitHub. */
+  async function openPullRequest() {
+    setBusy("pr");
+    setActionError(null);
+    const res = await apiFetch<{ url: string; created: boolean }>(`/api/threads/${id}/pull-request`, { method: "POST", body: {} });
+    setBusy(null);
+    if (res.ok) {
+      setPullRequestUrl(res.data.url);
+      window.open(res.data.url, "_blank", "noopener");
+    } else setActionError(res.message);
+  }
+
   async function pause() {
     setBusy("pause");
     setActionError(null);
@@ -269,6 +282,17 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
                 {busy === "resume" ? "Resuming..." : "Resume"}
               </button>
             )}
+            {isCloud &&
+              /github\.com[/:]/.test(thread.repo.url) &&
+              (pullRequestUrl ? (
+                <a href={pullRequestUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost h-8">
+                  View pull request
+                </a>
+              ) : (
+                <button type="button" className="btn-ghost h-8" onClick={openPullRequest} disabled={busy !== null}>
+                  {busy === "pr" ? "Opening..." : "Open pull request"}
+                </button>
+              ))}
             <button type="button" className="btn-danger h-8" onClick={closeThread} disabled={busy !== null}>
               {busy === "close" ? "Closing..." : "Close thread"}
             </button>

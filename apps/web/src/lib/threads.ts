@@ -24,7 +24,7 @@ import { issueClientToken, threadSecret } from "./tokens.ts";
 export type { ThreadRow };
 
 /** Response for one thread: the protocol shape plus the first prompt, if the thread has one. */
-export type ThreadResponse = ThreadWithEndpoint & { initialPrompt: string | null };
+export type ThreadResponse = ThreadWithEndpoint & { initialPrompt: string | null; pullRequestUrl: string | null };
 
 const iso = (value: string): string => new Date(value).toISOString();
 const isoOrNull = (value: string | null): string | null => (value ? iso(value) : null);
@@ -103,7 +103,7 @@ export async function endpointFor(ctx: AppContext, row: ThreadRow, userId: strin
 }
 
 export async function threadResponse(ctx: AppContext, row: ThreadRow, userId: string): Promise<ThreadResponse> {
-  return { thread: rowToThread(row), endpoint: await endpointFor(ctx, row, userId), initialPrompt: row.initialPrompt };
+  return { thread: rowToThread(row), endpoint: await endpointFor(ctx, row, userId), initialPrompt: row.initialPrompt, pullRequestUrl: row.pullRequestUrl };
 }
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────

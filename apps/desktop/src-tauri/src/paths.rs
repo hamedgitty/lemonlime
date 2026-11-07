@@ -178,10 +178,19 @@ fn is_executable(path: &Path) -> bool {
     path.is_file()
 }
 
-/// Resolves a user setting that may be a bare program name or a path.
+/// The runner that ships inside the app (a Tauri sidecar next to the main executable).
+pub fn bundled_runner() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "lemonlime-runner.exe" } else { "lemonlime-runner" };
+    let path = std::env::current_exe().ok()?.parent()?.join(name);
+    path.is_file().then_some(path)
+}
+
+/// Resolves a user setting that may be a bare program name or a path. With no setting,
+/// the runner bundled with the app wins, then one on the PATH.
 pub fn resolve_program(setting: Option<&str>, default_name: &str) -> Result<PathBuf, String> {
     let wanted = setting.map(str::trim).filter(|s| !s.is_empty());
     match wanted {
+        None if default_name == "lemonlime-runner" && bundled_runner().is_some() => Ok(bundled_runner().unwrap()),
         None => find_program(default_name).ok_or_else(|| {
             format!("Could not find {default_name} on your PATH. Install it, or set its location in Settings.")
         }),

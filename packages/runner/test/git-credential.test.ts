@@ -54,8 +54,8 @@ describe("git credential helper", () => {
   });
 
   it("quotes paths with spaces for git", () => {
-    expect(credentialHelperCommand("/usr/bin/node", "/opt/my apps/lemonlime-runner.js")).toBe(
-      "!'/usr/bin/node' '/opt/my apps/lemonlime-runner.js' git-credential",
+    expect(credentialHelperCommand(["/usr/bin/node", "/opt/my apps/lemonlime-runner.js", "git-credential"])).toBe(
+      "!'/usr/bin/node' '/opt/my apps/lemonlime-runner.js' 'git-credential'",
     );
   });
 });

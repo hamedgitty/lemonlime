@@ -23,7 +23,8 @@ jobs:
         include:
           - os: macos-latest
             args: --target aarch64-apple-darwin
-          - os: macos-latest
+          # Intel Macs get their own build: the bundled runner can't be cross-built.
+          - os: macos-13
             args: --target x86_64-apple-darwin
           - os: windows-latest
             args: ""
@@ -47,6 +48,8 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - run: pnpm install --frozen-lockfile
+      # The runner, as one executable the app ships inside it.
+      - run: pnpm --filter @lemonlime/runner build:sea ${{ contains(matrix.args, 'x86_64-apple-darwin') && 'x86_64-apple-darwin' || '' }}
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

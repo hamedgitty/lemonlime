@@ -234,6 +234,12 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         if let Some(b) = non_empty(req.base_branch) {
             cmd.arg("--base").arg(b);
         }
+        // Skills ship as an app resource; the bundled runner can't find them on its own.
+        if let Ok(skills) = app.path().resolve("skills", tauri::path::BaseDirectory::Resource) {
+            if skills.is_dir() {
+                cmd.env("LEMONLIME_SKILLS_DIR", skills);
+            }
+        }
         cmd.env("LEMONLIME_THREAD_SECRET", &secret)
             .env("PATH", paths::search_path())
             .env_remove("LEMONLIME_RUNNER_PORT")

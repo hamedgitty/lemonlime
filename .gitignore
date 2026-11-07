@@ -25,3 +25,7 @@ apps/desktop/src-tauri/gen/
 
 # local SQLite databases
 apps/web/data/
+
+# Single-file runner built for the desktop app (scripts/build-sea.mjs)
+apps/desktop/src-tauri/binaries/
+packages/runner/dist/

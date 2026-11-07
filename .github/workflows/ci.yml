@@ -61,4 +61,6 @@ jobs:
           workspaces: apps/desktop/src-tauri
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @lemonlime/desktop build
+      # The app ships the runner as one executable; Tauri's build needs the file to exist.
+      - run: pnpm --filter @lemonlime/runner build:sea
       - run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml -- -D warnings

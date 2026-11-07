@@ -11,5 +11,7 @@ export { RUNNER_VERSION } from "./version.ts";
 export { createRedactor, secretsFromEnv } from "./redact.ts";
 export { LOGIN_PLANS, LoginSession, type AgentCredential, type LoginUpdate } from "./login.ts";
 export { credentialHelperCommand, gitCredential, RUNNER_BIN } from "./git-credential.ts";
+export { isSingleExecutable, selfCommand } from "./self.ts";
+export { runApprovalMcp } from "./approval-mcp.ts";
 export { BUNDLED_SKILLS_DIR, installSkills, listSkills, skillsDirFor } from "./skills.ts";
 export * from "./agents/index.ts";

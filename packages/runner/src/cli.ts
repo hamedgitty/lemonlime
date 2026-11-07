@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { AgentKind, branchForThread, signToken, ThreadId, type Thread } from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
+import { runApprovalMcp } from "./approval-mcp.ts";
 import { GitWorkspace } from "./git.ts";
 import { secretsFromEnv } from "./redact.ts";
 import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
@@ -89,6 +90,7 @@ export function worktreePathFor(home: string, sourceRepo: string, threadId: stri
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
+  if (argv[0] === "approval-mcp") return runApprovalMcp();
   if (argv[0] === "git-credential") {
     const input = await new Promise<string>(resolve => {
       let data = "";

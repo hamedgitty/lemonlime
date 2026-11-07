@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { NewEvent } from "@lemonlime/protocol";
 import { ApprovalBridge, type ApprovalDecision, type ApprovalRequest } from "../approvals.ts";
+import { selfCommand } from "../self.ts";
 import { runLineProcess, tryJson } from "./process.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
@@ -18,8 +18,8 @@ export const claudeCodeAdapter: AgentAdapter = {
   },
 };
 
-/** The approval helper Claude Code starts as an MCP server (see bin/approval-mcp.mjs). */
-const APPROVAL_MCP = fileURLToPath(new URL("../../bin/approval-mcp.mjs", import.meta.url));
+/** The approval helper Claude Code starts as an MCP server: `lemonlime-runner approval-mcp`. */
+const approvalMcp = () => selfCommand("approval-mcp");
 /** Name Claude Code gives the helper's tool: mcp__<server>__<tool>. */
 export const APPROVAL_TOOL = "mcp__lemonlime__approve";
 /** Claude Code gives up on an MCP tool call after this; keep it above the approval timeout. */
@@ -49,8 +49,8 @@ class ClaudeCodeSession implements AgentSession {
       const config = {
         mcpServers: {
           lemonlime: {
-            command: process.execPath,
-            args: [APPROVAL_MCP],
+            command: approvalMcp()[0],
+            args: approvalMcp().slice(1),
             env: { LEMONLIME_APPROVAL_URL: this.bridge.url, LEMONLIME_APPROVAL_TOKEN: this.bridge.token },
           },
         },

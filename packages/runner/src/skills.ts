@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 import type { AgentKind } from "@lemonlime/protocol";
 import type { GitWorkspace } from "./git.ts";
 
-/** Skills that ship with LemonLime and are copied into every thread. */
-export const BUNDLED_SKILLS_DIR = fileURLToPath(new URL("../skills", import.meta.url));
+/**
+ * Skills that ship with LemonLime and are copied into every thread. The desktop app's
+ * single-file runner can't find files next to its source, so it is told where they are.
+ */
+export const BUNDLED_SKILLS_DIR = process.env.LEMONLIME_SKILLS_DIR || fileURLToPath(new URL("../skills", import.meta.url));
 
 /**
  * Where each agent looks for project skills. Claude Code reads `.claude/skills`, Codex

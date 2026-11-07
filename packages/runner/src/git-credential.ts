@@ -1,14 +1,14 @@
-import { fileURLToPath } from "node:url";
 import { signToken } from "@lemonlime/protocol";
+import { RUNNER_SCRIPT, selfCommand } from "./self.ts";
 
-/** The runner's own entry point, for git to call back into. */
-export const RUNNER_BIN = fileURLToPath(new URL("../bin/lemonlime-runner.js", import.meta.url));
+/** The runner's own entry point, for git to call back into (when running from source). */
+export const RUNNER_BIN = RUNNER_SCRIPT;
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** The `credential.helper` value that makes git ask this runner for credentials. */
-export function credentialHelperCommand(node = process.execPath, bin = RUNNER_BIN): string {
-  return `!${q(node)} ${q(bin)} git-credential`;
+export function credentialHelperCommand(command: string[] = selfCommand("git-credential")): string {
+  return `!${command.map(q).join(" ")}`;
 }
 
 /**

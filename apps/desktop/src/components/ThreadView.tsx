@@ -8,6 +8,7 @@ import {
   ExternalLink,
   FileDiff,
   GitBranch,
+  KeyRound,
   Globe,
   Laptop,
   PanelRight,
@@ -38,6 +39,7 @@ import { Composer, type ComposerHandle } from "./Composer.tsx";
 import { TerminalPanel } from "./TerminalPanel.tsx";
 import { SideChatPanel } from "./SideChatPanel.tsx";
 import { PreviewPanel } from "./PreviewPanel.tsx";
+import { SignInPanel } from "./SignInPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
@@ -195,6 +197,15 @@ function ThreadSessionView({
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
   const [moving, setMoving] = useState<string | null>(null);
+  const [showSignIn, setShowSignIn] = useState(false);
+  // The cloud agent said it isn't signed in (and the user hasn't finished signing it in since).
+  const needsSignIn = useMemo(
+    () => session.events.some(e => e.type === "error" && e.code === "auth_required") && session.login.update?.state !== "done",
+    [session.events, session.login.update],
+  );
+  useEffect(() => {
+    if (session.login.update) setShowSignIn(true);
+  }, [session.login.update]);
   const move = async () => {
     if (!onMove || !session.connection) return;
     const ok = await confirmAction(
@@ -314,6 +325,11 @@ function ThreadSessionView({
                   {entry.mode === "local" ? "Move to the cloud" : "Move to this computer"}
                 </MenuItem>
               )}
+              {entry.mode === "cloud" && (summary.agent.kind === "claude-code" || summary.agent.kind === "codex") && (
+                <MenuItem icon={<KeyRound />} disabled={session.state !== "live"} onSelect={() => setShowSignIn(true)}>
+                  Sign the agent in…
+                </MenuItem>
+              )}
               {entry.mode === "cloud" && (
                 <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
                   <MenuLabel>What the agent may do on this computer</MenuLabel>
@@ -394,6 +410,14 @@ function ThreadSessionView({
           </div>
         )}
 
+        {entry.mode === "cloud" &&
+          session.state === "live" &&
+          (showSignIn || needsSignIn) &&
+          (summary.agent.kind === "claude-code" || summary.agent.kind === "codex") && (
+            <div className="px-6">
+              <SignInPanel agentLabel={AGENT_LABELS[summary.agent.kind]} login={session.login} onClose={() => setShowSignIn(false)} />
+            </div>
+          )}
         <Timeline
           items={items}
           working={working && items[items.length - 1]?.kind !== "agent"}

@@ -20,6 +20,13 @@ export type SessionState =
 
 export type SessionTarget = { mode: "local"; meta: LocalThreadMeta; runnerPath: string } | { mode: "cloud"; thread: Thread; api: CloudApi };
 
+export interface LoginUpdate {
+  state: "starting" | "open_url" | "needs_input" | "done" | "failed";
+  url?: string;
+  code?: string;
+  message?: string;
+}
+
 export type EditQueuedFn = (
   clientMsgId: string,
   change: { action: "update"; text: string } | { action: "remove" } | { action: "move"; toIndex: number } | { action: "send_now" },
@@ -60,6 +67,13 @@ export interface ThreadSession {
   editQueued: EditQueuedFn;
   rewind: (toSeq: number, restoreFiles: boolean) => void;
   compact: () => void;
+  /** Signing a cloud thread's agent in to the user's own account (never part of the history). */
+  login: {
+    update: LoginUpdate | null;
+    start: () => void;
+    input: (text: string) => void;
+    cancel: () => void;
+  };
   /** Side chats: read-only questions about the thread, outside its history. */
   side: {
     chats: SideChatSummary[];
@@ -87,6 +101,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const [status, setStatus] = useState<ThreadStatus | null>(null);
   const [generation, setGeneration] = useState(0);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [loginUpdate, setLoginUpdate] = useState<LoginUpdate | null>(null);
   const [sideChats, setSideChats] = useState<SideChatSummary[]>([]);
   const [sideEvents, setSideEvents] = useState<Record<string, ThreadEvent[]>>({});
   const sideWaiters = useRef(new Map<string, (sideId: string) => void>());
@@ -213,6 +228,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
               },
             }
           : {}),
+        onLogin: update => !cancelled && setLoginUpdate(update),
         onSideChats: chats => !cancelled && setSideChats(chats),
         onSideEvent: (sideId, e) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: [...(m[sideId] ?? []).filter(x => x.seq < e.seq), e] })),
         onSideHistory: (sideId, events) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: events })),
@@ -333,6 +349,18 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       }),
     [],
   );
+  const login = {
+    update: loginUpdate,
+    start: useCallback(() => {
+      setLoginUpdate({ state: "starting" });
+      clientRef.current?.startLogin();
+    }, []),
+    input: useCallback((text: string) => clientRef.current?.loginInput(text), []),
+    cancel: useCallback(() => {
+      clientRef.current?.cancelLogin();
+      setLoginUpdate(null);
+    }, []),
+  };
   const side = {
     chats: sideChats,
     events: sideEvents,
@@ -351,7 +379,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, rewind, compact, side, restart, disconnect };
+  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, rewind, compact, login, side, restart, disconnect };
 }
 
 function newClientMsgId(): string {

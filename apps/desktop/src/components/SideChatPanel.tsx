@@ -6,6 +6,8 @@ import { Timeline } from "./Timeline.tsx";
 import { Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 
+const NONE: never[] = [];
+
 /**
  * Side chats: ask about the thread without interrupting it. A separate agent answers from
  * a recap of the thread and can read files but never change them; nothing here goes into
@@ -16,8 +18,8 @@ export function SideChatPanel({ side, connected }: { side: ThreadSession["side"]
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const chat = side.chats.find(c => c.id === current) ?? null;
-  const events = current ? (side.events[current] ?? []) : [];
-  const items = useMemo(() => buildTimeline(events), [events]);
+  const events = current ? side.events[current] : undefined;
+  const items = useMemo(() => buildTimeline(events ?? NONE), [events]);
 
   // A pinned chat opened from the list: fetch its messages.
   useEffect(() => {

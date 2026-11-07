@@ -207,6 +207,16 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       });
       clientRef.current = client;
       client.connect();
+      // After sleep or a dropped network, reconnect straight away instead of waiting.
+      const wake = () => client?.reconnectNow();
+      window.addEventListener("online", wake);
+      window.addEventListener("focus", wake);
+      document.addEventListener("visibilitychange", wake);
+      removeWakeListeners = () => {
+        window.removeEventListener("online", wake);
+        window.removeEventListener("focus", wake);
+        document.removeEventListener("visibilitychange", wake);
+      };
 
       // Local threads carry their first prompt until it has been handed over.
       const t = targetRef.current;
@@ -219,10 +229,12 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       }
     };
 
+    let removeWakeListeners = () => {};
     void run();
 
     return () => {
       cancelled = true;
+      removeWakeListeners();
       if (flushHandle) clearTimeout(flushHandle);
       if (buffer.length > 0) {
         const batch = buffer;

@@ -133,7 +133,19 @@ function ThreadSessionView({
     if (ok) onRemoveLocal(summary.id);
   };
 
-  const errorText = actionError ?? session.error;
+  // While the computer is offline, a quiet pill says so instead of error cards.
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
+  }, []);
+  const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
 
   return (
@@ -151,7 +163,17 @@ function ThreadSessionView({
               <span className="truncate">{repoName(summary.repo)}</span>
             </span>
           </div>
-          <ConnectionBadge state={session.state} status={liveStatus} />
+          {!online ? (
+            <span
+              role="status"
+              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-cream-deep px-2.5 text-[12.5px] font-medium text-ink-soft"
+            >
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-control" />
+              Offline
+            </span>
+          ) : (
+            <ConnectionBadge state={session.state} status={liveStatus} />
+          )}
           {entry.mode === "local" ? (
             session.state === "offline" || session.state === "error" ? (
               <Button size="sm" variant="ghost" onClick={session.restart} disabled={busy}>

@@ -48,6 +48,11 @@ impl Runners {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// True while any runner process is still alive.
+    pub fn any_alive(&self) -> bool {
+        self.lock().values_mut().any(|p| p.alive())
+    }
+
     /// Stops every runner. Called when the app exits.
     pub fn stop_all(&self) {
         let procs: Vec<RunnerProcess> = self.lock().drain().map(|(_, p)| p).collect();

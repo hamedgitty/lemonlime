@@ -64,6 +64,19 @@ export class RunnerClient {
     return clientMsgId;
   }
 
+  /**
+   * Try to reconnect now instead of waiting for the next retry, e.g. after the computer
+   * wakes from sleep or the network comes back. Does nothing while connected.
+   */
+  reconnectNow(): void {
+    if (this.closedByUser || this.live) return;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (this.ws && this.ws.readyState <= 1) return; // already connecting
+    this.attempts = Math.max(1, this.attempts);
+    void this.open();
+  }
+
   /** Stop the agent's current turn. */
   interrupt(): void {
     this.post({ type: "interrupt" });

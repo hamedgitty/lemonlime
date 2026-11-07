@@ -51,7 +51,14 @@ export function Timeline({ items, working, empty, onApprove }: { items: Timeline
         aria-label="Thread timeline"
       >
         <div className="mx-auto flex max-w-[860px] flex-col gap-4 px-6 pt-6 pb-10">
-          {items.length === 0 ? empty : items.map(item => <Item key={item.key} item={item} onApprove={onApprove} />)}
+          {items.length === 0
+            ? empty
+            : items.map((item, i) => (
+                // Off-screen messages skip layout and paint, so long chats stay fast.
+                <div key={item.key} className={i < items.length - 30 ? "[contain-intrinsic-size:auto_96px] [content-visibility:auto]" : undefined}>
+                  <Item item={item} onApprove={onApprove} />
+                </div>
+              ))}
           {working && (
             <div className="flex items-center gap-2.5 pl-1 text-[13px] text-ink-soft">
               <span className="flex gap-1" aria-hidden="true">

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
 import { branchForThread, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
@@ -9,7 +9,7 @@ import { ThreadView } from "./components/ThreadView.tsx";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
-import { inDesktopShell, listLocalRunners, loadAccessToken, removeLocalThread, saveAccessToken, stopLocalRunner } from "./lib/native.ts";
+import { confirmAction, inDesktopShell, listLocalRunners, loadAccessToken, removeLocalThread, saveAccessToken, stopLocalRunner } from "./lib/native.ts";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import {
@@ -77,6 +77,27 @@ export function App() {
     })();
     // Runs once at start.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Quitting while an agent on this computer is mid-turn asks first (the app holds the quit).
+  const workingLocally = localThreads.some(m => m.status === "running" && running.has(m.id));
+  const workingRef = useRef(workingLocally);
+  workingRef.current = workingLocally;
+  useEffect(() => {
+    if (!inDesktopShell()) return;
+    let off: () => void = () => undefined;
+    void (async () => {
+      const [{ listen }, { invoke }] = await Promise.all([import("@tauri-apps/api/event"), import("@tauri-apps/api/core")]);
+      off = await listen("confirm-quit", async () => {
+        if (
+          workingRef.current &&
+          !(await confirmAction("An agent on this computer is still working. Quit anyway? It stops now, and what it changed so far stays on its branch."))
+        )
+          return;
+        await invoke("confirm_quit");
+      });
+    })();
+    return () => off();
   }, []);
 
   // Coming back from "Sign in with your browser": keep the token and connect.

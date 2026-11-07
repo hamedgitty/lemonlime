@@ -129,6 +129,10 @@ export const UiPrefs = z.object({
   organize: z.enum(["project", "place", "agent"]).default("project"),
   sort: z.enum(["recent", "name"]).default("recent"),
   pinned: z.array(z.string()).default([]),
+  /** Archived threads, by id, with when (ISO). Out of the list; local ones are cleaned up after 21 days. */
+  archived: z.record(z.string(), z.string()).default({}),
+  /** The archive explanation has been shown once. */
+  archivedHint: z.boolean().default(false),
   sidebarCollapsed: z.boolean().default(false),
   /** Projects (repository folders) used for local threads, most recent first. */
   recentProjects: z.array(z.string()).default([]),

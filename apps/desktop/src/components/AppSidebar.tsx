@@ -1,5 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowDownUp,
   ChevronDown,
   ChevronLeft,
@@ -42,6 +44,7 @@ export interface AppSidebarProps {
   onForward: (() => void) | null;
   /** Card above the footer, e.g. cloud hours left (from the deployment). */
   usageCard?: ReactNode;
+  onArchive: (t: ThreadSummary, archive: boolean) => void;
   /** Shows traffic lights' room in the capsule (macOS app window). */
   macChrome: boolean;
   searchOpen: boolean;
@@ -67,7 +70,16 @@ export function AppSidebar(p: AppSidebarProps) {
     return p.prefs.sort === "name" ? [...list].sort((a, b) => a.title.localeCompare(b.title)) : list;
   }, [p.threads, query, p.prefs.sort]);
 
-  const groups = useMemo(() => groupThreads(filtered, p.prefs), [filtered, p.prefs]);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const archived = useMemo(() => filtered.filter(t => p.prefs.archived[t.id]), [filtered, p.prefs.archived]);
+  const groups = useMemo(
+    () =>
+      groupThreads(
+        filtered.filter(t => !p.prefs.archived[t.id]),
+        p.prefs,
+      ),
+    [filtered, p.prefs],
+  );
 
   const navAction = (item: NavItem) => (item === "new" ? p.onNew() : p.onSearchOpen(!p.searchOpen));
 
@@ -258,12 +270,44 @@ export function AppSidebar(p: AppSidebarProps) {
                       pinned={p.prefs.pinned.includes(t.id)}
                       onSelect={p.onSelect}
                       onPin={pin => p.onPrefs({ pinned: pin ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) })}
+                      archived={false}
+                      onArchive={a => p.onArchive(t, a)}
                     />
                   ))}
                 </ul>
               </section>
             ))
           ))}
+        {threadsOpen && archived.length > 0 && (
+          <section aria-label="Archived" className="mb-2">
+            <button
+              type="button"
+              aria-expanded={archivedOpen}
+              onClick={() => setArchivedOpen(o => !o)}
+              className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12.5px] font-medium text-ink-faint hover:text-ink"
+            >
+              <Archive aria-hidden="true" className="size-3.5" />
+              <span className="flex-1">Archived</span>
+              <span className="tabular-nums">{archived.length}</span>
+            </button>
+            {archivedOpen && (
+              <ul className="flex flex-col gap-px">
+                {archived.map(t => (
+                  <ThreadRow
+                    key={`${t.mode}:${t.id}`}
+                    t={t}
+                    selected={t.id === p.selectedId}
+                    pinned={false}
+                    onSelect={p.onSelect}
+                    onPin={() => undefined}
+                    archived
+                    onArchive={a => p.onArchive(t, a)}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
         {p.cloudError && <p className="px-2 py-1 text-[13px] leading-snug text-danger">{p.cloudError}</p>}
       </div>
 
@@ -333,12 +377,16 @@ function ThreadRow({
   pinned,
   onSelect,
   onPin,
+  archived,
+  onArchive,
 }: {
   t: ThreadSummary;
   selected: boolean;
   pinned: boolean;
   onSelect: (t: ThreadSummary) => void;
   onPin: (pin: boolean) => void;
+  archived: boolean;
+  onArchive: (archive: boolean) => void;
 }) {
   const working = t.status === "running" || t.status === "provisioning";
   return (
@@ -378,8 +426,13 @@ function ThreadRow({
             </button>
           }
         >
-          <MenuItem icon={pinned ? <PinOff /> : <Pin />} onSelect={() => onPin(!pinned)}>
-            {pinned ? "Unpin" : "Pin to top"}
+          {!archived && (
+            <MenuItem icon={pinned ? <PinOff /> : <Pin />} onSelect={() => onPin(!pinned)}>
+              {pinned ? "Unpin" : "Pin to top"}
+            </MenuItem>
+          )}
+          <MenuItem icon={archived ? <ArchiveRestore /> : <Archive />} onSelect={() => onArchive(!archived)}>
+            {archived ? "Unarchive" : "Archive"}
           </MenuItem>
           <MenuItem icon={<FolderGit2 />} onSelect={() => void navigator.clipboard?.writeText(t.branch)}>
             Copy branch name

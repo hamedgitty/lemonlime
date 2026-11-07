@@ -36,6 +36,8 @@ const RUNNER_POLL_MS = 5_000;
 
 /** The macOS app window draws its traffic lights over the sidebar. */
 const MAC_CHROME = inDesktopShell() && /Mac/.test(navigator.userAgent);
+/** Archived threads on this computer are removed after this many days. */
+const ARCHIVE_KEEP_DAYS = 21;
 
 export function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
@@ -245,6 +247,43 @@ export function App() {
     [refreshRunners, localThreads, settings.runnerPath, go],
   );
 
+  const onArchive = useCallback(
+    async (t: ThreadSummary, archive: boolean) => {
+      const archived = { ...prefs.archived };
+      if (archive) {
+        if (t.mode === "local" && !prefs.archivedHint) {
+          const ok = await confirmAction(
+            "Archive this thread? Its agent stops and it moves to Archived. Archived threads on this computer are removed after 21 days; their branch stays in your repository.",
+          );
+          if (!ok) return;
+          onPrefs({ archivedHint: true });
+        }
+        archived[t.id] = new Date().toISOString();
+        // Free what it was using: nothing runs for an archived thread.
+        if (t.mode === "local") void stopLocalRunner(t.id).finally(refreshRunners);
+      } else delete archived[t.id];
+      onPrefs({ archived, pinned: prefs.pinned.filter(id => id !== t.id) });
+    },
+    [prefs.archived, prefs.archivedHint, prefs.pinned, onPrefs, refreshRunners],
+  );
+
+  // Archived threads on this computer are removed after 21 days (worktree and history; the branch stays).
+  const cleanedUp = useRef(false);
+  useEffect(() => {
+    if (cleanedUp.current || !localThreads.length) return;
+    cleanedUp.current = true;
+    const cutoff = Date.now() - ARCHIVE_KEEP_DAYS * 86_400_000;
+    const old = localThreads.filter(m => prefs.archived[m.id] && Date.parse(prefs.archived[m.id]!) < cutoff);
+    for (const m of old) void removeLocalThread(m.id, m.repoPath, settings.runnerPath).catch(err => console.warn("Could not clean up an archived thread", err));
+    if (old.length) {
+      for (const m of old) forgetEvents(m.id);
+      setLocalThreads(list => list.filter(m => !old.some(o => o.id === m.id)));
+      const archived = { ...prefs.archived };
+      for (const m of old) delete archived[m.id];
+      onPrefs({ archived });
+    }
+  }, [localThreads, prefs.archived, settings.runnerPath, onPrefs]);
+
   // ── Creating threads ─────────────────────────────────────
   const createThread = async (input: NewThreadInput) => {
     const agent = {
@@ -379,6 +418,7 @@ export function App() {
         macChrome={MAC_CHROME}
         searchOpen={searchOpen}
         onSearchOpen={setSearchOpen}
+        onArchive={onArchive}
       />
     );
 

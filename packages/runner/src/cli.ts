@@ -6,6 +6,7 @@ import { parseArgs } from "node:util";
 import { AgentKind, branchForThread, ReasoningLevel, signToken, ThreadId, type Thread } from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { runApprovalMcp } from "./approval-mcp.ts";
+import { runSubagentsMcp } from "./subagents-mcp.ts";
 import { GitWorkspace } from "./git.ts";
 import { secretsFromEnv } from "./redact.ts";
 import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
@@ -105,6 +106,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const argv = args[0] === "--" ? args.slice(1) : args;
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
+  if (argv[0] === "subagents-mcp") return runSubagentsMcp();
   if (argv[0] === "preview") return previewCommand(argv.slice(1));
   if (argv[0] === "tunnel") return tunnelCommand(argv.slice(1));
   if (argv[0] === "command-guard") {

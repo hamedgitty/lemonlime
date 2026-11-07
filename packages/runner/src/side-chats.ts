@@ -145,7 +145,7 @@ export class SideChats {
     chat.busy = true;
     this.append(chat, { type: "user_message", text });
     const first = !chat.session && chat.events.filter(e => e.type === "user_message").length === 1;
-    chat.session ??= this.opts.adapter.createSession({ ...this.opts.session, autonomy: "read", cwd: this.opts.cwd, saved: {} });
+    chat.session ??= this.opts.adapter.createSession({ ...this.opts.session, autonomy: "read", subagents: false, cwd: this.opts.cwd, saved: {} });
     // A pinned chat reopened later has no agent conversation: give it the chat so far.
     const earlier = !first && chat.events.length > 1 ? sideRecap(chat.events.slice(0, -1)) : null;
     const prompt = [FRAMING, first ? chat.recap : earlier, text].filter(Boolean).join("\n\n");

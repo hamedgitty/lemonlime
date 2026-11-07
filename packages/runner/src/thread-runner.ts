@@ -4,6 +4,7 @@ import type { NewEvent, Preview, QueuedMessage, Thread, ThreadEvent, ThreadStatu
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
+import { Subagents } from "./subagents.ts";
 import { attachmentNote, Attachments, ATTACHMENTS_DIR, type Upload } from "./attachments.ts";
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
@@ -144,6 +145,15 @@ export class ThreadRunner {
     this.status = opts.thread.status;
     this.git = opts.git === false ? null : new GitWorkspace(opts.workdir, opts.credentialHelper);
     this.attachments = new Attachments(opts.workdir);
+    this.subagents = new Subagents({
+      adapter: opts.adapter,
+      session: opts.session,
+      cwd: opts.workdir,
+      toMain: (text, id) => {
+        if (!this.closing) this.sendMessage(text, `subagent-${id}`);
+      },
+      notice: (code, message) => this.store.append({ type: "notice", code, message }),
+    });
     const { autonomy: _a, ...session } = opts.session;
     this.side = new SideChats({
       threadId: opts.thread.id,
@@ -160,6 +170,8 @@ export class ThreadRunner {
   readonly side: SideChats;
   /** Files uploaded to send with messages. */
   readonly attachments: Attachments;
+  /** Agents the thread's agent started to work on parts of its task. */
+  readonly subagents: Subagents;
 
   private previewList: Preview[] = [];
 
@@ -515,6 +527,7 @@ export class ThreadRunner {
   async close(): Promise<void> {
     this.closing = true;
     await this.side.closeAll();
+    await this.subagents.close();
     if (this.limitTimer) clearTimeout(this.limitTimer);
     this.interrupt();
     await this.current?.catch(() => undefined);

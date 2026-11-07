@@ -22,6 +22,8 @@ export interface SessionOptions {
   commandGuard?: boolean;
   /** How hard the agent thinks (AGENT_CAPABILITIES lists what each accepts). */
   reasoning?: string;
+  /** Offer the subagents tools (an MCP server). On unless set to false (side chats). */
+  subagents?: boolean;
 }
 
 export interface TurnContext {

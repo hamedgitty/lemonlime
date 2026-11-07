@@ -37,7 +37,7 @@ const TERMINAL_SLOW_MS = 10_000;
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
-    if (path === "/capabilities" || path.startsWith("/attachments") || path === "/previews") {
+    if (path === "/capabilities" || path.startsWith("/attachments") || path === "/previews" || path.startsWith("/subagents")) {
       void handleHttpApi(req, res, path, runner, opts).catch(() => {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "internal" }));
@@ -357,6 +357,33 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     res.writeHead(204, CORS);
     res.end();
     return;
+  }
+  if (path.startsWith("/subagents")) {
+    // From the agents' own subagents MCP server: a runner token signed with the thread secret.
+    const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+    if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
+    const parent = new URL(req.url ?? "/", "http://runner").searchParams.get("parent") || null;
+    if (path === "/subagents" && req.method === "GET") return reply(res, 200, { subagents: runner.subagents.list(parent) });
+    const body = await readBody(req, 64 * 1024);
+    let parsed: { requestId?: unknown; task?: unknown; id?: unknown; text?: unknown } = {};
+    try {
+      parsed = JSON.parse(body?.toString() ?? "{}") as typeof parsed;
+    } catch {
+      return reply(res, 400, { error: "bad json" });
+    }
+    if (path === "/subagents/spawn" && req.method === "POST") {
+      const task = String(parsed.task ?? "").trim();
+      const requestId = String(parsed.requestId ?? "").trim();
+      if (!task || !requestId) return reply(res, 400, { error: "A subagent needs a task and a request_id." });
+      const r = runner.subagents.spawn({ requestId: requestId.slice(0, 200), task, parentId: parent });
+      return "error" in r ? reply(res, 409, r) : reply(res, 200, r);
+    }
+    if (path === "/subagents/message" && req.method === "POST") {
+      const r = runner.subagents.message(String(parsed.id ?? ""), String(parsed.text ?? ""), parent);
+      return r === true ? reply(res, 200, { ok: true }) : r === false ? reply(res, 404, { error: "No subagent with that id." }) : reply(res, 403, r);
+    }
+    return reply(res, 404, { error: "not_found" });
   }
   if (path === "/previews") {
     // From the agent's own `lemonlime-runner preview`: a runner token, signed with the thread secret it was given.

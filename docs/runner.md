@@ -125,6 +125,18 @@ DNS rebinding), and carries each connection to the sandbox over the runner's `/t
 socket, which takes a client token and only offered ports. HTTP, WebSockets and
 server-sent events all pass through as bytes; there is no public URL.
 
+## Subagents
+
+Agents get three MCP tools from `lemonlime-runner subagents-mcp` (Claude Code through
+`--mcp-config`, Codex through `-c mcp_servers…`): `spawn_subagent`, `list_subagents` and
+`message_subagent`. A subagent is another conversation with the same agent, in the same
+working folder, given one task. Spawning is idempotent per `request_id`; an agent can have
+3 working at once, and subagents can start their own once (2 levels). When a subagent
+finishes, its reply is queued to whoever started it as a message, so the work goes on
+with no app open; the thread shows `subagent_started` / `subagent_replied` notices.
+Only the agent that started a subagent can message it. The tools call the runner's
+`/subagents` routes with a runner token signed with the thread secret.
+
 ## Side chats
 
 `side_ask` (with no `sideId`) starts a side chat: a separate agent conversation, at the

@@ -26,6 +26,9 @@ export function commandGuardSettings(command: string[] = selfCommand("command-gu
   return { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: command.map(q).join(" "), timeout: 10 }] }] } };
 }
 
+const subagentsMcp = () => selfCommand("subagents-mcp");
+const SUBAGENTS_SERVER = "lemonlime-subagents";
+
 /** Name Claude Code gives the helper's tool: mcp__<server>__<tool>. */
 export const APPROVAL_TOOL = "mcp__lemonlime__approve";
 /** Claude Code gives up on an MCP tool call after this; keep it above the approval timeout. */
@@ -47,23 +50,21 @@ class ClaudeCodeSession implements AgentSession {
    * (most importantly, running commands). In print mode nobody can answer, so we hand
    * the question to the app through a small MCP tool.
    */
-  private async approvalConfig(): Promise<string> {
-    if (!this.bridge) {
-      this.bridge = await ApprovalBridge.start(req => (this.ask ? this.ask(req) : Promise.resolve("deny")));
-      this.configDir = mkdtempSync(join(tmpdir(), "lemonlime-claude-"));
-      this.configFile = join(this.configDir, "approvals.mcp.json");
-      const config = {
-        mcpServers: {
-          lemonlime: {
-            command: approvalMcp()[0],
-            args: approvalMcp().slice(1),
-            env: { LEMONLIME_APPROVAL_URL: this.bridge.url, LEMONLIME_APPROVAL_TOKEN: this.bridge.token },
-          },
-        },
+  private async mcpConfig(approvals: boolean): Promise<string> {
+    if (approvals && !this.bridge) this.bridge = await ApprovalBridge.start(req => (this.ask ? this.ask(req) : Promise.resolve("deny")));
+    this.configDir ??= mkdtempSync(join(tmpdir(), "lemonlime-claude-"));
+    const servers: Record<string, unknown> = {};
+    if (approvals && this.bridge) {
+      servers.lemonlime = {
+        command: approvalMcp()[0],
+        args: approvalMcp().slice(1),
+        env: { LEMONLIME_APPROVAL_URL: this.bridge.url, LEMONLIME_APPROVAL_TOKEN: this.bridge.token },
       };
-      writeFileSync(this.configFile, JSON.stringify(config), { mode: 0o600 });
     }
-    return this.configFile!;
+    if (this.opts.subagents !== false) servers[SUBAGENTS_SERVER] = { command: subagentsMcp()[0], args: subagentsMcp().slice(1) };
+    const file = join(this.configDir, approvals ? "mcp-approvals.json" : "mcp.json");
+    writeFileSync(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 });
+    return file;
   }
 
   async runTurn(ctx: TurnContext): Promise<void> {
@@ -74,13 +75,16 @@ class ClaudeCodeSession implements AgentSession {
     // Claude Code's thinking budget, in tokens.
     const thinking = { low: 4_000, medium: 12_000, high: 31_999, xhigh: 31_999, max: 31_999, ultra: 31_999 }[this.opts.reasoning ?? ""];
     if (thinking) env.MAX_THINKING_TOKENS = String(thinking);
+    // Subagent tools, allowed without asking (starting one changes nothing by itself).
+    if (this.opts.subagents !== false && this.opts.autonomy !== "edits") args.push("--mcp-config", await this.mcpConfig(false));
+    if (this.opts.subagents !== false) args.push("--allowedTools", `mcp__${SUBAGENTS_SERVER}`);
     // Hooks run even with permissions skipped, so the guard holds at every autonomy level.
     if (this.opts.commandGuard !== false) args.push("--settings", JSON.stringify(commandGuardSettings()));
     if (this.opts.autonomy === "full") args.push("--dangerously-skip-permissions");
     // Read-only: no editing tools, and with nobody to ask, anything needing permission is refused.
     else if (this.opts.autonomy === "read") args.push("--permission-mode", "default", "--disallowedTools", "Edit,Write,MultiEdit,NotebookEdit");
     else {
-      args.push("--permission-mode", "acceptEdits", "--mcp-config", await this.approvalConfig(), "--permission-prompt-tool", APPROVAL_TOOL);
+      args.push("--permission-mode", "acceptEdits", "--mcp-config", await this.mcpConfig(true), "--permission-prompt-tool", APPROVAL_TOOL);
       env.MCP_TOOL_TIMEOUT = String(APPROVAL_TOOL_TIMEOUT_MS);
       this.ask = req => (ctx.requestApproval ? ctx.requestApproval(req) : Promise.resolve("deny"));
     }

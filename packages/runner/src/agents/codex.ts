@@ -1,5 +1,6 @@
 import type { NewEvent } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
+import { selfCommand } from "../self.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
@@ -26,6 +27,10 @@ class CodexSession implements AgentSession {
     const flags = ["--json", "--skip-git-repo-check"];
     if (this.opts.model) flags.push("--model", this.opts.model);
     if (this.opts.reasoning && /^[a-z]+$/.test(this.opts.reasoning)) flags.push("-c", `model_reasoning_effort="${this.opts.reasoning}"`);
+    if (this.opts.subagents !== false) {
+      const [cmd, ...rest] = selfCommand("subagents-mcp");
+      flags.push("-c", `mcp_servers.lemonlime_subagents.command=${JSON.stringify(cmd)}`, "-c", `mcp_servers.lemonlime_subagents.args=${JSON.stringify(rest)}`);
+    }
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
     else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
     const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, ctx.prompt] : ["exec", ...flags, ctx.prompt];

@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { agentCredentials } from "@lemonlime/db";
-import type { AgentCredentialUpload } from "@lemonlime/protocol";
+import { isAllowedAgentCredential, type AgentCredentialUpload } from "@lemonlime/protocol";
 import type { AppContext } from "./context.ts";
 import { decryptSecret, encryptSecret } from "./secrets.ts";
 
@@ -9,6 +9,7 @@ const scope = (userId: string, agent: string) => `agent:${userId}:${agent}`;
 
 /** Keep (or replace) what a user's sign-in produced inside a sandbox. */
 export async function saveAgentCredential(ctx: AppContext, userId: string, c: Pick<AgentCredentialUpload, "agent" | "kind" | "name" | "value">): Promise<void> {
+  if (!isAllowedAgentCredential(c.agent, c.kind, c.name)) throw new Error(`Not a ${c.agent} credential: ${c.kind} ${c.name}`);
   const ciphertext = await encryptSecret(ctx, scope(userId, c.agent), `${c.kind}:${c.name}`, c.value);
   await ctx.db
     .insert(agentCredentials)
@@ -45,6 +46,8 @@ export async function credentialsForSandbox(
     .from(agentCredentials)
     .where(and(eq(agentCredentials.userId, userId), eq(agentCredentials.agent, agent)));
   for (const r of rows) {
+    // Saved before the allowlist existed, or written some other way: never hand it out.
+    if (!isAllowedAgentCredential(agent, r.kind, r.name)) continue;
     try {
       const value = await decryptSecret(ctx, scope(userId, agent), `${r.kind}:${r.name}`, r.ciphertext);
       if (r.kind === "env") out.env[r.name] = value;

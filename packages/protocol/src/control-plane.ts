@@ -120,16 +120,30 @@ export type ThreadHistoryResponse = z.infer<typeof ThreadHistoryResponse>;
  * `env`: an environment variable (e.g. CLAUDE_CODE_OAUTH_TOKEN). `file`: a file under the
  * agent user's home directory (e.g. .codex/auth.json).
  */
-export const AgentCredentialUpload = z.object({
-  threadId: ThreadId,
-  agent: z.enum(["claude-code", "codex", "opencode"]),
-  kind: z.enum(["env", "file"]),
-  /** Variable name, or path relative to the home directory. */
-  name: z
-    .string()
-    .min(1)
-    .max(200)
-    .regex(/^(?![/.])[A-Za-z0-9_./-]+$/),
-  value: z.string().min(1).max(64_000),
-});
+/**
+ * The only credentials that may be saved, per agent. Anything else is refused: code in a
+ * sandbox can reach this endpoint, and a saved value lands in every later sandbox, so an
+ * open list would let it plant e.g. NODE_OPTIONS in all of them.
+ */
+export const AGENT_CREDENTIALS = {
+  "claude-code": [{ kind: "env", name: "CLAUDE_CODE_OAUTH_TOKEN" }],
+  codex: [{ kind: "file", name: ".codex/auth.json" }],
+  opencode: [],
+} as const satisfies Record<string, readonly { kind: "env" | "file"; name: string }[]>;
+
+export function isAllowedAgentCredential(agent: string, kind: string, name: string): boolean {
+  const list: readonly { kind: string; name: string }[] = AGENT_CREDENTIALS[agent as keyof typeof AGENT_CREDENTIALS] ?? [];
+  return list.some(c => c.kind === kind && c.name === name);
+}
+
+export const AgentCredentialUpload = z
+  .object({
+    threadId: ThreadId,
+    agent: z.enum(["claude-code", "codex", "opencode"]),
+    kind: z.enum(["env", "file"]),
+    /** Variable name, or path relative to the home directory. One of AGENT_CREDENTIALS. */
+    name: z.string().min(1).max(200),
+    value: z.string().min(1).max(64_000),
+  })
+  .refine(c => isAllowedAgentCredential(c.agent, c.kind, c.name), { message: "Not a credential this agent uses.", path: ["name"] });
 export type AgentCredentialUpload = z.infer<typeof AgentCredentialUpload>;

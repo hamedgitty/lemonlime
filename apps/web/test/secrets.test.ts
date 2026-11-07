@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { secrets } from "@lemonlime/db";
+import { agentCredentials, secrets } from "@lemonlime/db";
+import { AgentCredentialUpload } from "@lemonlime/protocol";
 import { decryptSecret, deleteSecret, encryptSecret, listSecrets, setSecret, validateSecretName } from "../src/lib/secrets.ts";
 import { saveAgentCredential } from "../src/lib/agent-credentials.ts";
 import { createThread, resumeThread, pauseThread } from "../src/lib/threads.ts";
@@ -103,5 +104,30 @@ describe("secrets", () => {
 
     await createThread(ctx, bob.userId, bob.workspaceId, req("claude-code"));
     expect(sandbox.created[2]!.runner.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it("only keep the credential each agent really uses", async () => {
+    const upload = (agent: string, kind: string, name: string) =>
+      AgentCredentialUpload.safeParse({ threadId: "thread-cred-1", agent, kind, name, value: "x" }).success;
+    expect(upload("claude-code", "env", "CLAUDE_CODE_OAUTH_TOKEN")).toBe(true);
+    expect(upload("codex", "file", ".codex/auth.json")).toBe(true);
+    // Code in a sandbox can call the upload route; these would follow the user into every sandbox.
+    expect(upload("claude-code", "env", "NODE_OPTIONS")).toBe(false);
+    expect(upload("codex", "env", "GIT_CONFIG_COUNT")).toBe(false);
+    expect(upload("codex", "file", ".bashrc")).toBe(false);
+    expect(upload("opencode", "env", "OPENAI_API_KEY")).toBe(false);
+
+    const { ctx, db, sandbox } = await createTestApp();
+    const alice = await addUser(db, "alice@example.com");
+    await expect(saveAgentCredential(ctx, alice.userId, { agent: "claude-code", kind: "env", name: "BASH_ENV", value: "/tmp/x" })).rejects.toThrow();
+    // A row that got in some other way is still never handed to a sandbox.
+    await db.insert(agentCredentials).values({ userId: alice.userId, agent: "claude-code", kind: "env", name: "BASH_ENV", ciphertext: "junk" });
+    await createThread(ctx, alice.userId, alice.workspaceId, {
+      agent: { kind: "claude-code" },
+      repo: { url: "https://github.com/acme/app.git", baseBranch: "main" },
+      mode: "cloud",
+      sandboxSize: "small",
+    });
+    expect(sandbox.created[0]!.runner.env.BASH_ENV).toBeUndefined();
   });
 });

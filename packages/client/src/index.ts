@@ -282,3 +282,4 @@ function newId(): string {
 }
 export { TerminalClient, terminalUrl, type TerminalClientOptions, type TerminalState } from "./terminal.ts";
 export { runnerHttpBase, uploadAttachment, type UploadOptions } from "./attachments.ts";
+export { teleportThread, type RunnerAddress, type TeleportProgress } from "./teleport.ts";

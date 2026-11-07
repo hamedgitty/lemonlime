@@ -11,6 +11,8 @@ use crate::paths;
 pub struct RepoInfo {
     /// Current branch, or None for a detached HEAD.
     branch: Option<String>,
+    /// The `origin` remote's URL, if it has one (to start a cloud copy of a thread).
+    origin: Option<String>,
 }
 
 /// Checks that `path` is inside a git work tree and returns its current branch.
@@ -36,7 +38,13 @@ fn inspect_blocking(dir: PathBuf) -> Result<RepoInfo, String> {
     } else {
         None
     };
-    Ok(RepoInfo { branch })
+    let remote = git(&dir, &["remote", "get-url", "origin"])?;
+    let origin = remote
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&remote.stdout).trim().to_string())
+        .filter(|u| !u.is_empty());
+    Ok(RepoInfo { branch, origin })
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<Output, String> {

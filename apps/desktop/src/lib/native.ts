@@ -71,6 +71,8 @@ export async function listLocalRunners(): Promise<string[]> {
 export interface RepoInfo {
   /** Current branch, or null for a detached HEAD. */
   branch: string | null;
+  /** The `origin` remote's URL, or null. */
+  origin: string | null;
 }
 
 /** Checks that a folder is a git repository and returns its current branch. */

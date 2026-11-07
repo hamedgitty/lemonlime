@@ -9,7 +9,19 @@ import { ThreadView } from "./components/ThreadView.tsx";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { repoName, titleFromPrompt } from "./lib/format.ts";
-import { confirmAction, inDesktopShell, listLocalRunners, loadAccessToken, removeLocalThread, saveAccessToken, stopLocalRunner } from "./lib/native.ts";
+import {
+  confirmAction,
+  inDesktopShell,
+  inspectRepo,
+  listLocalRunners,
+  loadAccessToken,
+  pickFolder,
+  removeLocalThread,
+  saveAccessToken,
+  stopLocalRunner,
+} from "./lib/native.ts";
+import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
+import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
@@ -337,6 +349,80 @@ export function App() {
     }
   };
 
+  // ── Moving a thread between this computer and the cloud ───
+  const moveThread = async (entry: ThreadEntry, from: Connection, onStep: (text: string) => void) => {
+    const retry = async <T,>(fn: () => Promise<T>, what: string): Promise<T> => {
+      // A new cloud sandbox takes a little while to start; keep trying for a few minutes.
+      let last: unknown;
+      for (let i = 0; i < 40; i++) {
+        try {
+          return await fn();
+        } catch (err) {
+          last = err;
+          if (/work of its own|checksum|missing the commit|too big/.test(String(err))) throw err;
+          onStep(`${what}…`);
+          await new Promise(r => setTimeout(r, 5000));
+        }
+      }
+      throw last;
+    };
+    if (entry.mode === "local") {
+      if (!cloudApi) throw new Error("Connect LemonLime Cloud in Settings first.");
+      const meta = entry.meta;
+      const repo = await inspectRepo(meta.repoPath);
+      if (!repo.origin) throw new Error("This repository has no remote named origin, so the cloud can't clone it. Push it to GitHub first.");
+      onStep("Starting a cloud sandbox…");
+      const created = await cloudApi.createThread({
+        title: meta.title,
+        agent: meta.agent,
+        repo: { url: repo.origin, baseBranch: meta.baseBranch },
+        mode: "cloud",
+        sandboxSize: "small",
+      });
+      setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
+      const to = await retry(async () => {
+        const c = await resolveConnection({ mode: "cloud", thread: created.thread, api: cloudApi });
+        if (!c) throw new Error("not up yet");
+        return c;
+      }, "Waiting for the cloud sandbox");
+      onStep("Moving the conversation and commits…");
+      await retry(() => teleportThread({ from, to, fromLabel: "computer" }), "Waiting for the cloud sandbox");
+      await stopLocalRunner(meta.id).catch(() => undefined);
+      onPrefs({ archived: { ...prefs.archived, [meta.id]: new Date().toISOString() } });
+      void refreshRunners();
+      go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
+      return;
+    }
+    const folder = await pickFolder();
+    if (!folder) return;
+    await inspectRepo(folder);
+    const thread = entry.thread;
+    const id = newThreadId();
+    const now = new Date().toISOString();
+    const meta: LocalThreadMeta = {
+      id,
+      title: thread.title,
+      agent: thread.agent,
+      repoPath: folder,
+      baseBranch: thread.repo.baseBranch,
+      branch: branchForThread(id),
+      status: "idle",
+      lastSeq: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    onStep("Starting it on this computer…");
+    const to = await resolveConnection({ mode: "local", meta, runnerPath: settings.runnerPath });
+    if (!to) throw new Error("Couldn't start the runner on this computer.");
+    onStep("Moving the conversation and commits…");
+    await teleportThread({ from, to, fromLabel: "cloud" });
+    setLocalThreads(list => [meta, ...list]);
+    onPrefs({ archived: { ...prefs.archived, [thread.id]: now } });
+    await cloudApi?.pauseThread(thread.id).catch(() => undefined);
+    void refreshRunners();
+    go({ view: "thread", selection: { mode: "local", id } });
+  };
+
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -500,6 +586,7 @@ export function App() {
                 onRemoveLocal={onRemoveLocal}
                 onCloudRefresh={refreshCloud}
                 onRunnersChanged={refreshRunners}
+                {...(cloudConfigured || selectedEntry.mode === "cloud" ? { onMove: moveThread } : {})}
                 computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
                 onComputerLevel={level => {
                   if (selectedEntry.mode !== "cloud") return;

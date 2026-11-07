@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import type { NewEvent, Preview, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from "@lemonlime/protocol";
+import { withoutRewound, type NewEvent, type Preview, type QueuedMessage, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
 import { Subagents } from "./subagents.ts";
 import { ComputerBridge } from "./computer.ts";
+import { exportThread, importThread, type ImportResult, type TeleportExport } from "./teleport.ts";
 import { attachmentNote, Attachments, ATTACHMENTS_DIR, type Upload } from "./attachments.ts";
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
@@ -191,6 +192,10 @@ export class ThreadRunner {
         ? others
         : [...others, { port, name: name.slice(0, 80) || `Port ${port}`, addedAt: new Date().toISOString() }].sort((a, b) => a.port - b.port);
     this.store.append({ type: "preview_update", previews: this.previewList });
+  }
+
+  get workdir(): string {
+    return this.opts.workdir;
   }
 
   get thread(): Thread {
@@ -771,6 +776,62 @@ export class ThreadRunner {
     this.store.append({ type: "rewind", toSeq, ...(restoredTo ? { restoredTo } : {}), ...(backupRef ? { backupRef } : {}) });
     this.saveState();
     return { text: target.text };
+  }
+
+  /** Where moved threads are packed and unpacked. */
+  private get teleportDir(): string {
+    return this.opts.dataDir ? join(this.opts.dataDir, "teleport") : join(this.opts.workdir, ATTACHMENTS_DIR, ".teleport");
+  }
+
+  /** Pack this thread to move it to another computer or the cloud. */
+  async exportForTeleport(): Promise<TeleportExport> {
+    await this.current?.catch(() => undefined);
+    return exportThread({ git: this.git, baseBranch: this.opts.thread.repo.baseBranch, events: withoutRewound(this.store.since(0)), dir: this.teleportDir });
+  }
+
+  /** A packed file, by transfer id and name ("bundle" or "history.json"). */
+  teleportFile(transferId: string, name: "bundle" | "history.json"): string | null {
+    if (!/^[0-9a-f-]{36}$/.test(transferId)) return null;
+    const file = join(this.teleportDir, transferId, name);
+    return existsSync(file) ? file : null;
+  }
+
+  /**
+   * Take in a thread moved from elsewhere: its commits onto this (still empty) branch, its
+   * history, and a recap so the agent carries on the same conversation.
+   */
+  async importTeleport(o: { transferId: string; checksum: string; bundle: Buffer | null; history: Buffer; from: string }): Promise<ImportResult> {
+    if (this.status === "running" || this.current) return { ok: false, status: 409, error: "The agent is working; try again when it's done." };
+    const r = await importThread({
+      git: this.git,
+      baseBranch: this.opts.thread.repo.baseBranch,
+      transferId: o.transferId,
+      checksum: o.checksum,
+      bundle: o.bundle,
+      history: o.history,
+      markerDir: join(this.teleportDir, "imported"),
+    });
+    if (!r.ok || r.already) return r;
+    for (const e of r.events) this.store.append(e);
+    if (r.headCommit) {
+      this.headCommit = r.headCommit;
+      this.unpushed = Boolean(this.opts.pushBranch);
+    }
+    this.store.append({
+      type: "notice",
+      code: "teleported",
+      message: `Moved here from ${o.from}, with its history${r.headCommit ? " and commits" : ""}. The agent carries on from a recap.`,
+    });
+    await this.session?.dispose();
+    this.session = null;
+    this.agentState = {};
+    this.recap = recapBefore(
+      this.store.since(0),
+      this.store.latestSeq + 1,
+      `This conversation was moved here from ${o.from}. Here is what was said before, for context:`,
+    );
+    this.saveState();
+    return r;
   }
 
   /** Shrink the agent's conversation. Only Claude Code has a way to do it from outside. */

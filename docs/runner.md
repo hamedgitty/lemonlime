@@ -148,6 +148,18 @@ look-alikes can't hide anything) or **Full**. Paths must be absolute and are nev
 followed through symbolic links; reads stop at 1 MB, commands at 60 seconds and 256 KB of
 output. With no desktop app open, the agent is told the computer can't be reached.
 
+## Moving a thread (teleport)
+
+A thread can move between this computer and the cloud as one conversation. The desktop
+app asks the source runner to pack it (`POST /teleport/export`): its own commits (from
+where it left the base branch) as a git bundle, and its history, with a sha256 checksum.
+It downloads both (`GET /teleport/<id>/bundle|history.json?offset=`), uploads them to the
+target runner as attachments, and calls `POST /teleport/import`. The target checks the
+checksum, refuses a branch that already has work of its own (nothing is overwritten),
+needs the base commit to exist there (push the base branch first otherwise), applies
+the commits, adds the history and gives the agent a recap. Importing the same transfer
+twice does nothing. Afterwards the old copy is archived (and a cloud one paused).
+
 ## Side chats
 
 `side_ask` (with no `sideId`) starts a side chat: a separate agent conversation, at the

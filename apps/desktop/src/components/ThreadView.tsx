@@ -3,6 +3,7 @@ import {
   ArrowUpCircle,
   Bot,
   Cloud,
+  CloudUpload,
   Ellipsis,
   ExternalLink,
   FileDiff,
@@ -24,7 +25,7 @@ import {
 } from "lucide-react";
 import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
-import { useThreadSession, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
+import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
 import { COMPUTER_LEVELS, type ComputerLevel } from "../lib/computer.ts";
 import type { ThreadEntry } from "../lib/threads.ts";
@@ -39,7 +40,7 @@ import { SideChatPanel } from "./SideChatPanel.tsx";
 import { PreviewPanel } from "./PreviewPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
-import { Button, StatusDot, cx, openExternal } from "./ui.tsx";
+import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface ThreadViewProps {
   entry: ThreadEntry;
@@ -53,6 +54,8 @@ export interface ThreadViewProps {
   onRemoveLocal: (id: string) => void;
   onCloudRefresh: () => void;
   onRunnersChanged: () => void;
+  /** Move this thread to the cloud (local) or to this computer (cloud), one conversation. */
+  onMove?: (entry: ThreadEntry, from: Connection, onStep: (text: string) => void) => Promise<void>;
   /** Cloud threads: what the agent may do on this computer. */
   computerLevel: ComputerLevel;
   onComputerLevel: (level: ComputerLevel) => void;
@@ -87,6 +90,7 @@ function ThreadSessionView({
   runnerPath,
   computerLevel,
   onComputerLevel,
+  onMove,
 }: ThreadViewProps & { target: SessionTarget }) {
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
@@ -190,6 +194,25 @@ function ThreadSessionView({
   }, []);
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
+  const [moving, setMoving] = useState<string | null>(null);
+  const move = async () => {
+    if (!onMove || !session.connection) return;
+    const ok = await confirmAction(
+      entry.mode === "local"
+        ? "Move this thread to the cloud? Its conversation and commits go to a new cloud sandbox, so it keeps working after you close your laptop. This copy is archived."
+        : "Move this thread to this computer? You'll pick the repository folder; its conversation and commits come here and the cloud sandbox is paused.",
+    );
+    if (!ok) return;
+    setActionError(null);
+    setMoving("Starting…");
+    try {
+      await onMove(entry, session.connection, setMoving);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setMoving(null);
+    }
+  };
   const composerRef = useRef<ComposerHandle>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const files = useAttachments(session.connection);
@@ -282,6 +305,15 @@ function ThreadSessionView({
                   Compact conversation
                 </MenuItem>
               )}
+              {onMove && (
+                <MenuItem
+                  icon={entry.mode === "local" ? <CloudUpload /> : <Laptop />}
+                  disabled={!session.connection || working || moving !== null}
+                  onSelect={() => void move()}
+                >
+                  {entry.mode === "local" ? "Move to the cloud" : "Move to this computer"}
+                </MenuItem>
+              )}
               {entry.mode === "cloud" && (
                 <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
                   <MenuLabel>What the agent may do on this computer</MenuLabel>
@@ -344,6 +376,12 @@ function ThreadSessionView({
           </div>
         )}
 
+        {moving && (
+          <div role="status" className="flex items-center gap-3 border-b border-line bg-lemon-soft px-6 py-2.5 text-[13.5px] text-ink">
+            <Spinner />
+            <p className="min-w-0 flex-1">{moving}</p>
+          </div>
+        )}
         {errorText && (
           <div className="flex items-center gap-3 border-b border-danger/20 bg-danger-soft px-6 py-2.5 text-[13.5px]" role="alert">
             <p className="min-w-0 flex-1 text-ink">{errorText}</p>

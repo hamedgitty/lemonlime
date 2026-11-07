@@ -358,7 +358,8 @@ function newClientMsgId(): string {
   return globalThis.crypto.randomUUID();
 }
 
-async function resolveConnection(target: SessionTarget): Promise<Connection | null> {
+/** Where a thread's runner is (starting it, for a local thread); null while a cloud one is paused or booting. */
+export async function resolveConnection(target: SessionTarget): Promise<Connection | null> {
   if (target.mode === "local") {
     const { meta, runnerPath } = target;
     const info = await startLocalRunner({

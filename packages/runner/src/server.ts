@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createConnection, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -44,7 +46,14 @@ const TERMINAL_SLOW_MS = 10_000;
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
-    if (path === "/capabilities" || path.startsWith("/attachments") || path === "/previews" || path.startsWith("/subagents") || path === "/computer") {
+    if (
+      path === "/capabilities" ||
+      path.startsWith("/attachments") ||
+      path === "/previews" ||
+      path.startsWith("/subagents") ||
+      path === "/computer" ||
+      path.startsWith("/teleport")
+    ) {
       void handleHttpApi(req, res, path, runner, opts).catch(() => {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "internal" }));
@@ -453,6 +462,52 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
   const auth = token ? await verifyToken(token, opts.threadSecret) : null;
   if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
 
+  if (path === "/teleport/export" && req.method === "POST") {
+    try {
+      return reply(res, 200, await runner.exportForTeleport());
+    } catch (err) {
+      return reply(res, 422, { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  const pack = /^\/teleport\/([0-9a-f-]{36})\/(bundle|history\.json)$/.exec(path);
+  if (pack && req.method === "GET") {
+    const file = runner.teleportFile(pack[1]!, pack[2] as "bundle" | "history.json");
+    if (!file) return reply(res, 404, { error: "not found" });
+    const all = readFileSync(file);
+    const offset = Math.max(0, Number(new URL(req.url ?? "/", "http://runner").searchParams.get("offset")) || 0);
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "x-total-bytes": String(all.length),
+      "access-control-expose-headers": "x-total-bytes",
+      ...CORS,
+    });
+    res.end(all.subarray(offset, offset + ATTACHMENT_CHUNK_BYTES));
+    return;
+  }
+  if (path === "/teleport/import" && req.method === "POST") {
+    const body = await readBody(req, 16 * 1024);
+    let p: { transferId?: unknown; checksum?: unknown; bundleUpload?: unknown; historyUpload?: unknown; from?: unknown } = {};
+    try {
+      p = JSON.parse(body?.toString() ?? "{}") as typeof p;
+    } catch {
+      return reply(res, 400, { error: "bad json" });
+    }
+    const fileOf = (uploadId: unknown) => {
+      const u = typeof uploadId === "string" ? runner.attachments.get(uploadId) : null;
+      return u?.done && u.path ? readFileSync(join(runner.workdir, u.path)) : null;
+    };
+    const history = fileOf(p.historyUpload);
+    const bundle = p.bundleUpload ? fileOf(p.bundleUpload) : null;
+    if (!history || (p.bundleUpload && !bundle)) return reply(res, 400, { error: "Upload the files first." });
+    const r = await runner.importTeleport({
+      transferId: String(p.transferId ?? ""),
+      checksum: String(p.checksum ?? ""),
+      bundle,
+      history,
+      from: p.from === "cloud" ? "the cloud" : "another computer",
+    });
+    return r.ok ? reply(res, 200, { ok: true, already: r.already }) : reply(res, r.status, { error: r.error });
+  }
   const id = path.split("/")[2];
   if (path === "/attachments" && req.method === "POST") {
     const body = await readBody(req, 16 * 1024);

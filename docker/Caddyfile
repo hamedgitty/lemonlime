@@ -16,7 +16,7 @@
 {$LEMONLIME_SITE_ADDRESS::80} {
 	encode zstd gzip
 
-	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/ws|/terminal|/tunnel|/healthz|/capabilities|/attachments(?:/[A-Za-z0-9_-]{8,64})?)$
+	@runner path_regexp runner ^/sandbox/(lemonlime-[a-z0-9][a-z0-9-]{5,63})(/ws|/terminal|/tunnel|/healthz|/capabilities|/attachments(?:/[A-Za-z0-9_-]{8,64})?|/teleport/(?:export|import|[0-9a-f-]{36}/(?:bundle|history\.json)))$
 	handle @runner {
 		rewrite * {re.runner.2}
 		reverse_proxy {re.runner.1}:7420 {

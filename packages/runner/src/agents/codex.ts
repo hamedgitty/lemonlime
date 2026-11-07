@@ -29,7 +29,20 @@ class CodexSession implements AgentSession {
     if (this.opts.reasoning && /^[a-z]+$/.test(this.opts.reasoning)) flags.push("-c", `model_reasoning_effort="${this.opts.reasoning}"`);
     if (this.opts.subagents !== false) {
       const [cmd, ...rest] = selfCommand("subagents-mcp");
-      flags.push("-c", `mcp_servers.lemonlime_subagents.command=${JSON.stringify(cmd)}`, "-c", `mcp_servers.lemonlime_subagents.args=${JSON.stringify(rest)}`);
+      flags.push(
+        "-c",
+        `mcp_servers.lemonlime_subagents.command=${JSON.stringify(cmd)}`,
+        "-c",
+        `mcp_servers.lemonlime_subagents.args=${JSON.stringify(rest)}`,
+        // In exec mode nobody can approve a tool call, and LemonLime's own tools are safe to run
+        // (computer access is decided in the user's desktop app), so they're pre-approved.
+        "-c",
+        'mcp_servers.lemonlime_subagents.default_tools_approval_mode="approve"',
+        // Codex starts MCP servers with a clean environment; these say which thread and runner
+        // this is, passed by name so the secret never appears in a command line.
+        "-c",
+        `mcp_servers.lemonlime_subagents.env_vars=${JSON.stringify(["LEMONLIME_RUNNER_URL", "LEMONLIME_THREAD_ID", "LEMONLIME_THREAD_SECRET", "LEMONLIME_SUBAGENT_ID", "LEMONLIME_COMPUTER_TOOLS"])}`,
+      );
     }
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
     else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');

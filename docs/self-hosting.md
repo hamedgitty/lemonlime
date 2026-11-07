@@ -438,6 +438,9 @@ Agents run as an unprivileged `agent` user. People bring their own model
 accounts; no credentials are baked into the image.
 
 Push it wherever your provider pulls from and set `LEMONLIME_SANDBOX_IMAGE`.
+Forks get it built for them: the **Sandbox image** workflow publishes
+`ghcr.io/<owner>/lemonlime-sandbox:latest` on every change to the runner (make the
+package public under the repository's **Packages** so providers can pull it).
 
 ## Plugins
 

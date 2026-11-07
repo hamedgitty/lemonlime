@@ -10,6 +10,7 @@ regexes = [
   # Test-only thread secrets, e.g. "thread-secret-for-tests-0123456789".
   '''[a-z-]+-secret-for-tests-0123456789''',
   '''secret-for-heartbeat-tests-0123''',
+  '''wrong-secret-0123456789''',
   # Made-up value in the redaction tests.
   '''npm_abc123secret''',
   # Docs examples that read the secret from an environment variable.

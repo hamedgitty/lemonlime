@@ -250,7 +250,7 @@ export class ThreadRunner {
     if (!clientMsgId.startsWith("auto-continue-")) this.clearUsageLimit();
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
-    if (this.status === "running" || this.current || this.queue.length > 0) {
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held) {
       this.queue.push({ clientMsgId, text, queuedAt: new Date().toISOString() });
       this.publishQueue();
       this.saveState();
@@ -442,6 +442,28 @@ export class ThreadRunner {
     return true;
   }
 
+  private held: string | null = null;
+
+  /**
+   * Stop the current turn and start no new ones until `release()`; messages sent meanwhile
+   * wait in the queue. Used when the computer or sandbox is out of room.
+   */
+  hold(reason: string): void {
+    if (this.held) return;
+    this.held = reason;
+    this.interrupt();
+  }
+
+  release(): void {
+    if (!this.held) return;
+    this.held = null;
+    this.startNext();
+  }
+
+  get heldFor(): string | null {
+    return this.held;
+  }
+
   /** Stop the agent's current turn. Queued messages still run afterwards. */
   interrupt(): void {
     this.abort?.abort();
@@ -471,7 +493,7 @@ export class ThreadRunner {
 
   /** Start the oldest queued message if the agent is free. */
   private startNext(): void {
-    if (this.closing || this.status === "running" || this.current || !this.queue.length) return;
+    if (this.closing || this.held || this.status === "running" || this.current || !this.queue.length) return;
     const next = this.queue.shift()!;
     this.publishQueue();
     this.startTurn(next.text, next.clientMsgId);

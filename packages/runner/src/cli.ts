@@ -11,8 +11,10 @@ import { secretsFromEnv } from "./redact.ts";
 import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
 import type { AgentCredential } from "./login.ts";
 import { startHeartbeat } from "./heartbeat.ts";
-import { formatGb, MemoryGuard } from "./memory-guard.ts";
+import { formatGb, MemoryGuard, prioritizeMemory } from "./memory-guard.ts";
 import { loadPty } from "./terminal.ts";
+import { biggestWriter, DiskGuard, formatBytes } from "./disk-guard.ts";
+import { runCommandGuardHook } from "./command-guard.ts";
 import { startServer } from "./server.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { RUNNER_VERSION } from "./version.ts";
@@ -43,6 +45,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable).
                            Skills in ~/.lemonlime/skills are always copied too.
   --no-bundled-skills      Don't copy LemonLime's own skills into the thread
+  --no-command-guard       Let the agent run commands that wipe the computer or home
+                           folder, erase disks or fork-bomb (blocked by default; Claude Code)
   --memory-limit-mb <n>    Local threads: stop the agent when what it started uses more
                            than this much memory (default: half the computer's)
   --no-git                 Don't manage a branch or commit changes
@@ -98,6 +102,16 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const argv = args[0] === "--" ? args.slice(1) : args;
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
+  if (argv[0] === "command-guard") {
+    const input = await new Promise<string>(resolve => {
+      let data = "";
+      process.stdin.on("data", d => (data += d));
+      process.stdin.on("end", () => resolve(data));
+    });
+    const verdict = runCommandGuardHook(input);
+    if (verdict.stderr) process.stderr.write(`${verdict.stderr}\n`);
+    process.exit(verdict.code);
+  }
   if (argv[0] === "git-credential") {
     const input = await new Promise<string>(resolve => {
       let data = "";
@@ -127,6 +141,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       skills: { type: "string", multiple: true },
       "no-bundled-skills": { type: "boolean", default: false },
       "memory-limit-mb": { type: "string" },
+      "no-command-guard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
@@ -192,7 +207,12 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     workdir,
     dataDir,
     adapter: adapterFor(agent.data!),
-    session: { autonomy, ...(values.model ? { model: values.model } : {}), ...(command ? { command } : {}) },
+    session: {
+      autonomy,
+      ...(values.model ? { model: values.model } : {}),
+      ...(command ? { command } : {}),
+      ...(values["no-command-guard"] ? { commandGuard: false } : {}),
+    },
     git: !values["no-git"],
     ...(values.repo ? { repoUrl: values.repo } : {}),
     ...(sourceRepo ? { sourceRepo } : {}),
@@ -246,7 +266,40 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       }).start()
     : null;
 
+  const notice = (code: string, message: string) => runner.store.append({ type: "notice", code, message });
+  const diskGuard = new DiskGuard({
+    path: workdir,
+    onWarn: s => notice("disk_low", `The disk is getting full: ${formatBytes(s.freeBytes)} left. Builds and git start failing when it runs out.`),
+    onPause: s => {
+      runner.hold("disk_full");
+      notice(
+        "disk_full",
+        `Paused the agent: only ${formatBytes(s.freeBytes)} of disk space is left. It carries on, with any messages you send, once there's more room. Deleting build output or caches is usually enough.`,
+      );
+      log(`disk nearly full (${formatBytes(s.freeBytes)} free): agent paused`);
+    },
+    onResume: s => {
+      notice("disk_ok", `There's room again (${formatBytes(s.freeBytes)} free), so the agent carries on.`);
+      runner.release();
+    },
+    onStillFull: async () => {
+      const w = await biggestWriter();
+      if (!w) return;
+      try {
+        process.kill(w.pid, "SIGTERM");
+        notice("disk_full_killed", `${w.name} kept filling the disk after the agent paused (it wrote ${formatBytes(w.writtenBytes)}), so it was closed.`);
+      } catch {
+        /* already gone */
+      }
+    },
+  }).start();
+
+  const oomTimer = process.platform === "linux" ? setInterval(() => void prioritizeMemory().catch(() => 0), 15_000) : null;
+  oomTimer?.unref();
+
   const shutdown = async (code = 0) => {
+    if (oomTimer) clearInterval(oomTimer);
+    diskGuard.stop();
     memoryGuard?.stop();
     // Drain on the way out: one last history upload, bounded so a stop is never held up long.
     if (heartbeat) await Promise.race([heartbeat.beat(), new Promise(r => setTimeout(r, 5000))]);

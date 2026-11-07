@@ -20,6 +20,12 @@ export const claudeCodeAdapter: AgentAdapter = {
 
 /** The approval helper Claude Code starts as an MCP server: `lemonlime-runner approval-mcp`. */
 const approvalMcp = () => selfCommand("approval-mcp");
+const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+/** Claude Code settings with a PreToolUse hook that runs `lemonlime-runner command-guard` on shell commands. */
+export function commandGuardSettings(command: string[] = selfCommand("command-guard")) {
+  return { hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: command.map(q).join(" "), timeout: 10 }] }] } };
+}
+
 /** Name Claude Code gives the helper's tool: mcp__<server>__<tool>. */
 export const APPROVAL_TOOL = "mcp__lemonlime__approve";
 /** Claude Code gives up on an MCP tool call after this; keep it above the approval timeout. */
@@ -65,6 +71,8 @@ class ClaudeCodeSession implements AgentSession {
     if (this.sessionId) args.push("--resume", this.sessionId);
     if (this.opts.model) args.push("--model", this.opts.model);
     const env: Record<string, string> = { ...this.opts.env };
+    // Hooks run even with permissions skipped, so the guard holds at every autonomy level.
+    if (this.opts.commandGuard !== false) args.push("--settings", JSON.stringify(commandGuardSettings()));
     if (this.opts.autonomy === "full") args.push("--dangerously-skip-permissions");
     else {
       args.push("--permission-mode", "acceptEdits", "--mcp-config", await this.approvalConfig(), "--permission-prompt-tool", APPROVAL_TOOL);

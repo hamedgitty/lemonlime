@@ -17,6 +17,8 @@ export interface SessionOptions {
   env?: Record<string, string>;
   /** Saved adapter state from a previous runner process, e.g. the agent's session id. */
   saved?: Record<string, string>;
+  /** Block computer-wrecking commands (see command-guard.ts). On unless set to false. */
+  commandGuard?: boolean;
 }
 
 export interface TurnContext {

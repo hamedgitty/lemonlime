@@ -25,7 +25,9 @@ else replayOneShot();
 
 /** Values that differ on every run (temp file paths) are compared as placeholders. */
 function normalize(argv) {
-  return argv.map((a, i) => (argv[i - 1] === "--mcp-config" ? "<mcp-config>" : a));
+  // --settings carries LemonLime's command-guard hook, which doesn't change what the agent prints.
+  const kept = argv.filter((a, i) => a !== "--settings" && argv[i - 1] !== "--settings");
+  return kept.map((a, i) => (kept[i - 1] === "--mcp-config" ? "<mcp-config>" : a));
 }
 
 function replayOneShot() {

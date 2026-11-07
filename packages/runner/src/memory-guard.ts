@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import { totalmem } from "node:os";
 
 export interface Proc {
@@ -115,4 +116,35 @@ export class MemoryGuard {
       }
     }
   }
+}
+
+/** Out-of-memory score given to what the agent starts, so Linux kills a build before the agent. */
+export const OOM_SCORE_FOR_WORK = 500;
+
+/**
+ * When a sandbox runs out of memory, Linux kills the process with the highest score. The
+ * runner and the agent CLI it started keep theirs; everything further down (builds, test
+ * runs, dev servers, the terminal's commands) gets raised, which needs no privileges. So a
+ * runaway build is what dies, and the agent lives to say what happened. Linux only.
+ */
+export async function prioritizeMemory(rootPid = process.pid, list: () => Promise<Proc[] | null> = listProcesses, procRoot = "/proc"): Promise<number> {
+  if (process.platform !== "linux" && procRoot === "/proc") return 0;
+  const procs = await list();
+  if (!procs) return 0;
+  const direct = new Set(procs.filter(p => p.ppid === rootPid).map(p => p.pid));
+  let changed = 0;
+  for (const p of descendants(procs, rootPid)) {
+    if (direct.has(p.pid)) continue;
+    const file = `${procRoot}/${p.pid}/oom_score_adj`;
+    const now = Number((await readFile(file, "utf8").catch(() => "")).trim());
+    if (Number.isFinite(now) && now >= OOM_SCORE_FOR_WORK) continue;
+    if (
+      await writeFile(file, String(OOM_SCORE_FOR_WORK)).then(
+        () => true,
+        () => false,
+      )
+    )
+      changed++;
+  }
+  return changed;
 }

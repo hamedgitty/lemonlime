@@ -1,6 +1,6 @@
 import type { NewEvent } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
-import { turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
+import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
  * Codex CLI: `codex exec --json <prompt>`, then `codex exec resume <thread_id> --json <prompt>`
@@ -43,6 +43,7 @@ class CodexSession implements AgentSession {
         if (parsed.failure) failure = parsed.failure;
         parsed.events.forEach(e => ctx.emit(e));
       },
+      onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
     }).catch(err => (processError = err));
     // Codex exits non-zero after turn.failed; its own reason beats "exited with code 1".
     const err = turnFailure(failure, processError);

@@ -1,5 +1,5 @@
 import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ArrowDown, Check, ChevronRight, CircleAlert, Wrench } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, ChevronRight, CircleAlert, Info, Wrench } from "lucide-react";
 import type { ThreadStatus } from "@lemonlime/protocol";
 import type { TimelineItem } from "../lib/timeline.ts";
 import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
@@ -90,8 +90,19 @@ const Item = memo(function Item({ item }: { item: TimelineItem }) {
       return <StatusRow to={item.to} reason={item.reason} at={item.at} />;
     case "error":
       return <ErrorRow message={item.message} code={item.code} fatal={item.fatal} />;
+    case "notice":
+      return <NoticeRow message={item.message} />;
   }
 });
+
+function NoticeRow({ message }: { message: string }) {
+  return (
+    <div className="flex gap-2.5 rounded-xl border border-line bg-cream-deep/60 px-4 py-2.5 text-[13.5px] text-ink-soft" role="status">
+      <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
+      <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
+    </div>
+  );
+}
 
 function UserMessage({ text, at, pending, queued }: { text: string; at: string; pending: boolean; queued: boolean }) {
   return (

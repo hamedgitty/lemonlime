@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { ThreadEvent, type NewEvent } from "@lemonlime/protocol";
+import { capEvent } from "./limits.ts";
 
 type Listener = (event: ThreadEvent) => void;
 
@@ -40,7 +41,7 @@ export class EventStore {
   /** Assign seq + timestamp, persist, then notify subscribers. */
   append(event: NewEvent): ThreadEvent {
     const full = ThreadEvent.parse({
-      ...event,
+      ...capEvent(event),
       threadId: this.threadId,
       seq: this.events.length + 1,
       at: new Date().toISOString(),

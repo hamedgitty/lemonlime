@@ -55,7 +55,7 @@ function Item({ item }: { item: TimelineItem }) {
           <div className={`max-w-[85%] rounded-2xl rounded-br-md bg-ink px-4 py-2.5 text-sm leading-relaxed text-cream ${item.pending ? "opacity-60" : ""}`}>
             <p className="whitespace-pre-wrap break-words">{item.text}</p>
           </div>
-          {item.queued ? <p className="mt-1 pr-1 text-[13.5px] text-ink-3">Queued, runs when the agent finishes</p> : null}
+          {item.queued ? <p className="mt-1 pr-1 text-[13.5px] text-muted">Queued, runs when the agent finishes</p> : null}
         </div>
       );
     case "agent":
@@ -81,6 +81,12 @@ function Item({ item }: { item: TimelineItem }) {
             {item.event.reason ? `: ${item.event.reason}` : ""} · {time(item.event.at)}
           </span>
           <span className="h-px flex-1 bg-line" />
+        </div>
+      );
+    case "notice":
+      return (
+        <div role="status" className="rounded-xl border border-line bg-cream px-4 py-2.5 text-[13.5px] text-muted">
+          <p className="whitespace-pre-wrap break-words">{item.event.message}</p>
         </div>
       );
     case "error":

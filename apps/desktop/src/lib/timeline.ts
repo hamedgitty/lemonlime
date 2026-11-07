@@ -31,7 +31,8 @@ export type TimelineItem =
       truncated: boolean;
     }
   | { kind: "status"; key: string; seq: number; at: string; from: ThreadStatus; to: ThreadStatus; reason?: string }
-  | { kind: "error"; key: string; seq: number; at: string; message: string; code?: string; fatal: boolean };
+  | { kind: "error"; key: string; seq: number; at: string; message: string; code?: string; fatal: boolean }
+  | { kind: "notice"; key: string; seq: number; at: string; message: string; code: string };
 
 /**
  * Turns an event history into what the thread view shows:
@@ -140,6 +141,9 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
           to: ev.to,
           ...(ev.reason ? { reason: ev.reason } : {}),
         });
+        break;
+      case "notice":
+        items.push({ kind: "notice", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, message: ev.message, code: ev.code });
         break;
       case "error":
         items.push({

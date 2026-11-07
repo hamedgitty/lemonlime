@@ -65,3 +65,9 @@ export function turnFailure(reason: string | null, processError?: unknown): Erro
   if (reason) return new AgentError(reason, classifyAgentFailure(reason));
   return processError instanceof Error ? processError : processError === undefined ? null : new AgentError(String(processError));
 }
+
+/** Notice for an output line the agent printed that was too long to keep. */
+export function oversizeNotice(bytes: number): NewEvent {
+  const mb = (bytes / (1024 * 1024)).toFixed(1);
+  return { type: "notice", code: "output_too_large", message: `The agent printed one piece of output of ${mb} MB, too large to keep, so it was left out of the history.` };
+}

@@ -74,6 +74,24 @@ Environment:
   restart it commits whatever the agent left behind, records an error with code
   `turn_outcome_unknown`, then carries on with the queue.
 
+## Safety limits
+
+- **Huge output.** A single line from an agent over 16 MB is dropped without being
+  buffered, and the history says so (`notice` with code `output_too_large`). Tool
+  input and output over 256 KB, and agent messages over 512 KB, keep their start and
+  note how much was left out.
+- **Quiet agents.** After 15 minutes with no output, the runner adds a `notice`
+  (`agent_quiet`). It doesn't stop the agent, since long builds are often silent.
+- **Runaway turns.** A turn is stopped after 4 hours (`turn_timeout`). Its changes
+  are kept.
+- **Crashes.** If the agent is killed from outside (out of memory, a signal), the
+  runner restarts it once and continues the same conversation (`agent_restarted`).
+  If it crashes again straight away, the runner stops restarting it and reports
+  `process_lost`; the next message starts it fresh.
+- **Sign-in and updates.** `auth_required` and `agent_outdated` errors carry the
+  agent's own words plus the command that fixes it, such as `claude auth login` or
+  `codex update`.
+
 ## Tokens
 
 The control plane derives a per-thread secret with `deriveThreadSecret(master, threadId)`

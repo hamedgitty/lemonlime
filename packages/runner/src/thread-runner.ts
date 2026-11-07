@@ -22,6 +22,37 @@ export interface ThreadRunnerOptions {
    * so the thread never switches the user's branch or touches their uncommitted work.
    */
   sourceRepo?: string;
+  /** Tell the user when the agent has printed nothing for this long. Default 15 minutes. */
+  quietNoticeMs?: number;
+  /** Stop a turn that runs longer than this. Default 4 hours. */
+  turnTimeoutMs?: number;
+}
+
+const DEFAULT_QUIET_MS = 15 * 60_000;
+const DEFAULT_TURN_TIMEOUT_MS = 4 * 60 * 60_000;
+
+/** How to fix the common agent problems, per agent, in words a user can act on. */
+const SIGN_IN: Partial<Record<string, string>> = {
+  "claude-code": "claude auth login",
+  codex: "codex login",
+  opencode: "opencode auth login",
+};
+const UPDATE: Partial<Record<string, string>> = {
+  "claude-code": "claude update",
+  codex: "codex update",
+  opencode: "opencode upgrade",
+};
+
+export function fixHint(code: string | undefined, agent: string): string | null {
+  if (code === "auth_required") {
+    const cmd = SIGN_IN[agent];
+    return cmd ? `Sign the agent in by running \`${cmd}\` in a terminal, then send your message again.` : "Sign the agent in, then send your message again.";
+  }
+  if (code === "agent_outdated") {
+    const cmd = UPDATE[agent];
+    return cmd ? `Update the agent by running \`${cmd}\`, then send your message again.` : "Update the agent, then send your message again.";
+  }
+  return null;
 }
 
 /** @deprecated Messages sent while the agent is busy are queued now; this is never thrown. */
@@ -57,6 +88,10 @@ export class ThreadRunner {
   private readonly git: GitWorkspace | null;
   private readonly statusListeners = new Set<(s: ThreadStatus) => void>();
   private queue: QueuedMessage[] = [];
+  private initialised = false;
+  /** Crashes in a row; the agent is restarted after the first and left alone after the second. */
+  private crashes = 0;
+  private agentState: Record<string, string> = {};
   /** Every clientMsgId this thread has accepted, so a resend never runs twice. */
   private readonly seen = new Set<string>();
 
@@ -94,11 +129,9 @@ export class ThreadRunner {
         if (rel && !rel.startsWith("..") && !isAbsolute(rel)) await this.git.excludePath(rel);
       }
     }
-    this.session = this.opts.adapter.createSession({
-      ...this.opts.session,
-      cwd: this.opts.workdir,
-      saved: saved?.agentState,
-    });
+    this.agentState = saved?.agentState ?? {};
+    this.session = this.newSession();
+    this.initialised = true;
     for (const e of this.store.since(0)) if (e.type === "user_message" && e.clientMsgId) this.seen.add(e.clientMsgId);
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
     for (const q of this.queue) this.seen.add(q.clientMsgId);
@@ -126,7 +159,7 @@ export class ThreadRunner {
    * A message whose `clientMsgId` the thread already has is ignored, so retries are safe.
    */
   sendMessage(text: string, clientMsgId: string = randomUUID()): SendResult {
-    if (!this.session) throw new Error("runner not initialised");
+    if (!this.initialised) throw new Error("runner not initialised");
     if (this.seen.has(clientMsgId)) return { clientMsgId, result: "duplicate" };
     this.seen.add(clientMsgId);
     // `current` is still set for a moment after a turn ends; queue then too, so two
@@ -189,13 +222,61 @@ export class ThreadRunner {
     this.store.append({ type: "queue_update", queue: this.queue.map(q => ({ ...q })) });
   }
 
+  private newSession(): AgentSession {
+    return this.opts.adapter.createSession({ ...this.opts.session, cwd: this.opts.workdir, saved: this.agentState });
+  }
+
   private async runTurn(prompt: string, abort: AbortController): Promise<void> {
-    const emit = (e: NewEvent) => this.store.append(e);
+    const quietMs = this.opts.quietNoticeMs ?? DEFAULT_QUIET_MS;
+    const timeoutMs = this.opts.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
+    const started = Date.now();
+    let lastOutput = started;
+    let toldQuiet = false;
+    let timedOut = false;
+    const emit = (e: NewEvent) => {
+      lastOutput = Date.now();
+      toldQuiet = false;
+      this.store.append(e);
+    };
+    const watchdog = setInterval(
+      () => {
+        const now = Date.now();
+        if (now - started >= timeoutMs) {
+          timedOut = true;
+          abort.abort();
+        } else if (!toldQuiet && now - lastOutput >= quietMs) {
+          toldQuiet = true;
+          const minutes = Math.round((now - lastOutput) / 60_000);
+          this.store.append({
+            type: "notice",
+            code: "agent_quiet",
+            message: `The agent hasn't printed anything for ${minutes > 0 ? `${minutes} minutes` : "a while"}. It may be running a long command, or it may be stuck. You can stop it at any time.`,
+          });
+        }
+      },
+      Math.max(10, Math.min(30_000, Math.floor(quietMs / 4), Math.floor(timeoutMs / 4))),
+    );
+    watchdog.unref?.();
+
     try {
-      await this.session!.runTurn({ prompt, signal: abort.signal, emit });
+      if (!this.session) this.session = this.newSession();
+      await this.session.runTurn({ prompt, signal: abort.signal, emit });
+      this.crashes = 0;
     } catch (err) {
       const code = (err as { code?: string }).code;
-      emit({ type: "error", message: err instanceof Error ? err.message : String(err), ...(code ? { code } : {}), fatal: false });
+      const message = err instanceof Error ? err.message : String(err);
+      if (code === "agent_crashed") await this.handleCrash(message, emit);
+      else {
+        this.crashes = 0;
+        const hint = fixHint(code, this.opts.adapter.kind);
+        emit({ type: "error", message: hint ? `${message}\n\n${hint}` : message, ...(code ? { code } : {}), fatal: false });
+      }
+    } finally {
+      clearInterval(watchdog);
+    }
+    if (timedOut) {
+      const hours = Math.round((timeoutMs / 3_600_000) * 10) / 10;
+      emit({ type: "error", code: "turn_timeout", message: `Stopped the agent after ${hours} hours on one message. Its changes so far are kept. Send a message to continue.`, fatal: false });
     }
     try {
       await this.recordChanges(prompt);
@@ -204,7 +285,30 @@ export class ThreadRunner {
     }
     this.abort = null;
     this.idleSince = new Date().toISOString();
-    this.setStatus("idle", abort.signal.aborted ? "interrupted" : undefined);
+    this.setStatus("idle", timedOut ? "timed out" : abort.signal.aborted ? "interrupted" : undefined);
+  }
+
+  /** Restart a crashed agent once; if it crashes again straight away, stop trying. */
+  private async handleCrash(message: string, emit: (e: NewEvent) => void): Promise<void> {
+    this.crashes += 1;
+    const old = this.session;
+    this.session = null;
+    if (old) {
+      this.agentState = old.saveState();
+      await old.dispose().catch(() => undefined);
+    }
+    if (this.crashes === 1) {
+      emit({ type: "error", code: "agent_crashed", message, fatal: false });
+      this.session = this.newSession();
+      emit({ type: "notice", code: "agent_restarted", message: "The agent stopped unexpectedly, so it was restarted. Your next message continues the same conversation." });
+    } else {
+      emit({
+        type: "error",
+        code: "process_lost",
+        message: `The agent stopped unexpectedly again (${message}), so LemonLime stopped restarting it. Sending a message starts it again; if this keeps happening, check that the agent works in a terminal.`,
+        fatal: false,
+      });
+    }
   }
 
   private async recordChanges(prompt: string): Promise<void> {
@@ -244,7 +348,7 @@ export class ThreadRunner {
     const f = this.stateFile();
     if (!f) return;
     mkdirSync(this.opts.dataDir!, { recursive: true });
-    const state: SavedState = { agentState: this.session?.saveState() ?? {}, status: this.status, queue: this.queue };
+    const state: SavedState = { agentState: this.session?.saveState() ?? this.agentState, status: this.status, queue: this.queue };
     writeFileSync(f, JSON.stringify(state, null, 2));
   }
 }

@@ -1,6 +1,6 @@
 import type { NewEvent } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
-import { turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
+import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
  * Claude Code in print mode: `claude -p <prompt> --output-format stream-json --verbose`.
@@ -41,6 +41,7 @@ class ClaudeCodeSession implements AgentSession {
         if (parsed.failure) failure = parsed.failure;
         parsed.events.forEach(e => ctx.emit(e));
       },
+      onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
     }).catch(err => (processError = err));
     // Claude exits non-zero after a failed result; its own reason beats "exited with code 1".
     const err = turnFailure(failure, processError);

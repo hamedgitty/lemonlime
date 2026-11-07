@@ -67,6 +67,17 @@ export const ErrorEvent = z.object({
   fatal: z.boolean().default(false),
 });
 
+/**
+ * Something worth telling the user that isn't a failure: the agent was restarted, it has
+ * been quiet for a long time, some output was too large to keep. Never ends a turn.
+ */
+export const NoticeEvent = z.object({
+  ...base,
+  type: z.literal("notice"),
+  code: z.string(),
+  message: z.string(),
+});
+
 /** A message waiting for the agent to finish its current turn. */
 export const QueuedMessage = z.object({
   clientMsgId: z.string(),
@@ -95,6 +106,7 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   StatusChangeEvent,
   ErrorEvent,
   QueueUpdateEvent,
+  NoticeEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface } from "node:readline";
 import type { AgentKind, NewEvent } from "@lemonlime/protocol";
+import { lineSplitter } from "./lines.ts";
 import { killGently, tryJson } from "./process.ts";
-import { AgentError, classifyAgentFailure, type AgentAdapter, type AgentSession, type Autonomy, type SessionOptions, type TurnContext } from "./types.ts";
+import { AgentError, classifyAgentFailure, oversizeNotice, type AgentAdapter, type AgentSession, type Autonomy, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
  * Agent Client Protocol (https://agentclientprotocol.com): JSON-RPC 2.0 over stdio.
@@ -42,6 +42,7 @@ class AcpSession implements AgentSession {
   private turn: TurnContext | null = null;
   private translator = new AcpTranslator();
   private stderr = "";
+  private disposed = false;
 
   constructor(private readonly opts: SessionOptions & { command: string[] }) {
     this.sessionId = opts.saved?.sessionId;
@@ -59,9 +60,18 @@ class AcpSession implements AgentSession {
       });
       this.child = child;
       child.stderr?.on("data", (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-4000)));
-      createInterface({ input: child.stdout! }).on("line", line => this.onLine(line));
-      child.on("exit", code => {
-        const err = new AgentError(`${cmd} exited (code ${code})${this.stderr.trim() ? `: ${this.stderr.trim()}` : ""}`);
+      const lines = lineSplitter(
+        line => this.onLine(line),
+        bytes => this.turn?.emit(oversizeNotice(bytes)),
+      );
+      child.stdout!.on("data", (d: Buffer) => lines.write(d));
+      child.stdout!.on("end", () => lines.end());
+      child.on("exit", (code, signal) => {
+        // A long-lived ACP agent should never exit on its own while we're using it.
+        const how = signal ? `stopped unexpectedly (${signal})` : `exited (code ${code})`;
+        const reason = classifyAgentFailure(this.stderr);
+        const errCode = this.disposed ? "agent_failed" : reason !== "agent_failed" ? reason : "agent_crashed";
+        const err = new AgentError(`${cmd} ${how}${this.stderr.trim() ? `: ${this.stderr.trim()}` : ""}`, errCode);
         for (const p of this.pending.values()) p.reject(err);
         this.pending.clear();
         this.child = null;
@@ -119,6 +129,7 @@ class AcpSession implements AgentSession {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     if (this.child) killGently(this.child);
   }
 

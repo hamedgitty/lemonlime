@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface } from "node:readline";
+import { lineSplitter } from "./lines.ts";
 import { AgentError, classifyAgentFailure } from "./types.ts";
 
 export interface LineProcessOptions {
@@ -9,6 +9,8 @@ export interface LineProcessOptions {
   env?: Record<string, string>;
   signal: AbortSignal;
   onLine(line: string): void;
+  /** A line too long to keep was dropped. */
+  onOversize?(bytes: number): void;
 }
 
 /** Last bytes of stderr, for error messages. */
@@ -37,10 +39,9 @@ export function runLineProcess(o: LineProcessOptions): Promise<void> {
     child.stderr?.on("data", (d: Buffer) => {
       stderr = (stderr + d.toString()).slice(-STDERR_TAIL);
     });
-    const rl = createInterface({ input: child.stdout! });
-    rl.on("line", line => {
-      if (line.trim()) o.onLine(line);
-    });
+    const lines = lineSplitter(o.onLine, bytes => o.onOversize?.(bytes));
+    child.stdout!.on("data", (d: Buffer) => lines.write(d));
+    child.stdout!.on("end", () => lines.end());
 
     const stop = () => killGently(child);
     if (o.signal.aborted) stop();
@@ -51,11 +52,15 @@ export function runLineProcess(o: LineProcessOptions): Promise<void> {
       const notFound = (err as NodeJS.ErrnoException).code === "ENOENT";
       reject(new AgentError(notFound ? `${o.command} is not installed or not on PATH` : err.message, notFound ? "agent_not_found" : "agent_failed"));
     });
-    child.on("close", code => {
+    child.on("close", (code, signal) => {
       o.signal.removeEventListener("abort", stop);
-      rl.close();
       if (o.signal.aborted) return resolve();
       if (code === 0) return resolve();
+      if (code === null && signal) {
+        // Killed from outside (out of memory, the OS, a crash): not something the agent decided.
+        reject(new AgentError(`${o.command} stopped unexpectedly (${signal})${stderr.trim() ? `: ${stderr.trim()}` : ""}`, "agent_crashed"));
+        return;
+      }
       reject(new AgentError(`${o.command} exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`, classifyAgentFailure(stderr)));
     });
   });

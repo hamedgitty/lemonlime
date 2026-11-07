@@ -7,7 +7,8 @@ export type TimelineItem =
   | { kind: "tool"; key: string; call: EventOf<"tool_call">; result: EventOf<"tool_result"> | null }
   | { kind: "diff"; key: string; event: EventOf<"file_diff"> }
   | { kind: "status"; key: string; event: EventOf<"status_change"> }
-  | { kind: "error"; key: string; event: EventOf<"error"> };
+  | { kind: "error"; key: string; event: EventOf<"error"> }
+  | { kind: "notice"; key: string; event: EventOf<"notice"> };
 
 export interface PendingMessage {
   clientMsgId: string;
@@ -84,6 +85,9 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
         break;
       case "error":
         items.push({ kind: "error", key: `e${e.seq}`, event: e });
+        break;
+      case "notice":
+        items.push({ kind: "notice", key: `e${e.seq}`, event: e });
         break;
     }
   }

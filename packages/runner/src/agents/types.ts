@@ -1,4 +1,5 @@
 import type { AgentKind, NewEvent } from "@lemonlime/protocol";
+import type { ApprovalDecision, ApprovalRequest } from "../approvals.ts";
 
 /**
  * How much the agent may do without asking.
@@ -22,6 +23,11 @@ export interface TurnContext {
   prompt: string;
   signal: AbortSignal;
   emit(event: NewEvent): void;
+  /**
+   * Ask the user whether the agent may use a tool. Resolves "deny" if nobody answers in
+   * time or the turn ends first. Without it, anything that needs asking is denied.
+   */
+  requestApproval?(req: ApprovalRequest): Promise<ApprovalDecision>;
 }
 
 export interface AgentSession {

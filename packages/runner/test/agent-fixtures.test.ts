@@ -59,20 +59,23 @@ function expectPairedTools(events: NewEvent[]) {
 }
 
 describe("Claude Code 2.1 (recorded)", () => {
-  it("fixes a bug, reports the refused command, and resumes the same session", async () => {
+  it("fixes a bug, runs the test once approved, and resumes the same session", async () => {
     const { turns, state } = await replayFixture("claude-code", "fix-bug");
     expect(turns).toHaveLength(2);
     const [first, second] = turns as [Turn, Turn];
     expect(first.error).toBeUndefined();
     expectPairedTools(first.events);
-    expect(ofType(first.events, "tool_call").map(e => e.name)).toEqual(expect.arrayContaining(["Bash", "Read", "Edit"]));
-    // At autonomy "edits" Claude may edit files but needs approval to run commands.
-    expect(ofType(first.events, "tool_result").some(e => e.isError && /requires approval/.test(String(e.output)))).toBe(true);
+    const calls = ofType(first.events, "tool_call");
+    expect(calls.map(e => e.name)).toEqual(expect.arrayContaining(["Bash", "Edit"]));
+    // At autonomy "edits" the command went through the approval tool and was allowed.
+    const testRun = calls.find(e => (e.input as { command?: string }).command === "node test.js")!;
+    expect(ofType(first.events, "tool_result").find(e => e.callId === testRun.callId)).toMatchObject({ isError: false });
+    expect(String(ofType(first.events, "tool_result").find(e => e.callId === testRun.callId)?.output)).toContain("1 test passed");
     expect(ofType(first.events, "agent_message").at(-1)?.text).toMatch(/add\.js/);
 
     // The replay only answers when called with `--resume <the session id from turn 1>`.
     expect(second.error).toBeUndefined();
-    expect(ofType(second.events, "agent_message").map(e => e.text)).toEqual(["I changed `add.js`."]);
+    expect(ofType(second.events, "agent_message").map(e => e.text)).toEqual(["I changed only `add.js`."]);
     expect(state.sessionId).toMatch(/^[0-9a-f-]{36}$/);
   });
 

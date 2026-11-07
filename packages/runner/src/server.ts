@@ -125,6 +125,9 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       case "interrupt":
         runner.interrupt();
         break;
+      case "approve":
+        runner.answerApproval(msg.requestId, msg.decision);
+        break;
       case "ping":
         send({ type: "pong", ...(msg.t !== undefined ? { t: msg.t } : {}) });
         break;

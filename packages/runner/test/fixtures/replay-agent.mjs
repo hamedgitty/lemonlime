@@ -20,16 +20,22 @@ const out = line => process.stdout.write(line + "\n");
 if (meta.cli.endsWith(" acp")) replayAcp();
 else replayOneShot();
 
+/** Values that differ on every run (temp file paths) are compared as placeholders. */
+function normalize(argv) {
+  return argv.map((a, i) => (argv[i - 1] === "--mcp-config" ? "<mcp-config>" : a));
+}
+
 function replayOneShot() {
   const turns = [];
   for (const r of rows) {
-    if (r.dir === "argv") turns.push({ argv: JSON.parse(r.line).slice(1), out: [], exit: 0 });
+    if (r.dir === "argv") turns.push({ argv: normalize(JSON.parse(r.line).slice(1)), out: [], exit: 0 });
     else if (r.dir === "out") turns.at(-1).out.push(r.line);
     else if (r.dir === "exit") turns.at(-1).exit = JSON.parse(r.line).code ?? 1;
   }
-  const turn = turns.find(t => JSON.stringify(t.argv) === JSON.stringify(args));
+  const given = normalize(args);
+  const turn = turns.find(t => JSON.stringify(t.argv) === JSON.stringify(given));
   if (!turn) {
-    process.stderr.write(`replay-agent: no recorded turn has these args:\n${JSON.stringify(args)}\nrecorded:\n${turns.map(t => JSON.stringify(t.argv)).join("\n")}\n`);
+    process.stderr.write(`replay-agent: no recorded turn has these args:\n${JSON.stringify(given)}\nrecorded:\n${turns.map(t => JSON.stringify(t.argv)).join("\n")}\n`);
     process.exit(3);
   }
   turn.out.forEach(out);

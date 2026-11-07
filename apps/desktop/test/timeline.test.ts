@@ -115,6 +115,15 @@ describe("buildTimeline", () => {
     expect(items[0]).toMatchObject({ kind: "agent", text: "Working", streaming: true });
   });
 
+  it("shows an approval request as waiting until it's decided", () => {
+    seq = 0;
+    const request = ev({ type: "approval_request", requestId: "r1", tool: "Bash", input: { command: "npm test" }, summary: "npm test" });
+    expect(buildTimeline([request])[0]).toMatchObject({ kind: "approval", state: "waiting", summary: "npm test" });
+    const decided = buildTimeline([request, ev({ type: "approval_result", requestId: "r1", decision: "deny", by: "timeout" })]);
+    expect(decided).toHaveLength(1);
+    expect(decided[0]).toMatchObject({ kind: "approval", state: "denied", by: "timeout" });
+  });
+
   it("ignores duplicate and stale seqs", () => {
     seq = 0;
     const a = ev({ type: "user_message", text: "one" });

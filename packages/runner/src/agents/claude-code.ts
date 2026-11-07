@@ -1,4 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { NewEvent } from "@lemonlime/protocol";
+import { ApprovalBridge, type ApprovalDecision, type ApprovalRequest } from "../approvals.ts";
 import { runLineProcess, tryJson } from "./process.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
@@ -13,19 +18,59 @@ export const claudeCodeAdapter: AgentAdapter = {
   },
 };
 
+/** The approval helper Claude Code starts as an MCP server (see bin/approval-mcp.mjs). */
+const APPROVAL_MCP = fileURLToPath(new URL("../../bin/approval-mcp.mjs", import.meta.url));
+/** Name Claude Code gives the helper's tool: mcp__<server>__<tool>. */
+export const APPROVAL_TOOL = "mcp__lemonlime__approve";
+/** Claude Code gives up on an MCP tool call after this; keep it above the approval timeout. */
+const APPROVAL_TOOL_TIMEOUT_MS = 35 * 60_000;
+
 class ClaudeCodeSession implements AgentSession {
   private sessionId: string | undefined;
+  private bridge: ApprovalBridge | null = null;
+  private configDir: string | null = null;
+  private configFile: string | null = null;
+  private ask: ((req: ApprovalRequest) => Promise<ApprovalDecision>) | null = null;
 
   constructor(private readonly opts: SessionOptions) {
     this.sessionId = opts.saved?.sessionId;
+  }
+
+  /**
+   * At autonomy "edits" Claude Code edits files freely but asks before anything else
+   * (most importantly, running commands). In print mode nobody can answer, so we hand
+   * the question to the app through a small MCP tool.
+   */
+  private async approvalConfig(): Promise<string> {
+    if (!this.bridge) {
+      this.bridge = await ApprovalBridge.start(req => (this.ask ? this.ask(req) : Promise.resolve("deny")));
+      this.configDir = mkdtempSync(join(tmpdir(), "lemonlime-claude-"));
+      this.configFile = join(this.configDir, "approvals.mcp.json");
+      const config = {
+        mcpServers: {
+          lemonlime: {
+            command: process.execPath,
+            args: [APPROVAL_MCP],
+            env: { LEMONLIME_APPROVAL_URL: this.bridge.url, LEMONLIME_APPROVAL_TOKEN: this.bridge.token },
+          },
+        },
+      };
+      writeFileSync(this.configFile, JSON.stringify(config), { mode: 0o600 });
+    }
+    return this.configFile!;
   }
 
   async runTurn(ctx: TurnContext): Promise<void> {
     const args = ["-p", ctx.prompt, "--output-format", "stream-json", "--verbose"];
     if (this.sessionId) args.push("--resume", this.sessionId);
     if (this.opts.model) args.push("--model", this.opts.model);
+    const env: Record<string, string> = { ...this.opts.env };
     if (this.opts.autonomy === "full") args.push("--dangerously-skip-permissions");
-    else args.push("--permission-mode", "acceptEdits");
+    else {
+      args.push("--permission-mode", "acceptEdits", "--mcp-config", await this.approvalConfig(), "--permission-prompt-tool", APPROVAL_TOOL);
+      env.MCP_TOOL_TIMEOUT = String(APPROVAL_TOOL_TIMEOUT_MS);
+      this.ask = req => (ctx.requestApproval ? ctx.requestApproval(req) : Promise.resolve("deny"));
+    }
 
     let failure: string | null = null;
     let processError: unknown;
@@ -33,7 +78,7 @@ class ClaudeCodeSession implements AgentSession {
       command: this.opts.command?.[0] ?? "claude",
       args: [...(this.opts.command?.slice(1) ?? []), ...args],
       cwd: this.opts.cwd,
-      env: this.opts.env,
+      env,
       signal: ctx.signal,
       onLine: line => {
         const parsed = parseClaudeLine(line);
@@ -42,7 +87,9 @@ class ClaudeCodeSession implements AgentSession {
         parsed.events.forEach(e => ctx.emit(e));
       },
       onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
-    }).catch(err => (processError = err));
+    })
+      .catch(err => (processError = err))
+      .finally(() => (this.ask = null));
     // Claude exits non-zero after a failed result; its own reason beats "exited with code 1".
     const err = turnFailure(failure, processError);
     if (err) throw err;
@@ -52,7 +99,12 @@ class ClaudeCodeSession implements AgentSession {
     return this.sessionId ? { sessionId: this.sessionId } : {};
   }
 
-  async dispose(): Promise<void> {}
+  async dispose(): Promise<void> {
+    await this.bridge?.close();
+    this.bridge = null;
+    if (this.configDir) rmSync(this.configDir, { recursive: true, force: true });
+    this.configDir = null;
+  }
 }
 
 export interface ParsedLine {

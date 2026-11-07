@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { EventOf } from "@lemonlime/protocol";
 import { diffLines, type DiffLineKind, type TimelineItem } from "@/lib/timeline.ts";
 
@@ -35,19 +36,62 @@ const STATUS_TEXT: Record<string, string> = {
 
 const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
-export function Timeline({ items }: { items: TimelineItem[] }) {
+export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
+
+export function Timeline({ items, onApprove }: { items: TimelineItem[]; onApprove?: ApproveFn }) {
   return (
     <ol className="space-y-4">
       {items.map(item => (
         <li key={item.key}>
-          <Item item={item} />
+          <Item item={item} onApprove={onApprove} />
         </li>
       ))}
     </ol>
   );
 }
 
-function Item({ item }: { item: TimelineItem }) {
+const DECLINED_BECAUSE: Record<string, string> = {
+  timeout: "nobody answered in time",
+  interrupted: "the turn was stopped",
+  expired: "the runner restarted before anyone answered",
+};
+
+function Approval({ item, onApprove }: { item: Extract<TimelineItem, { kind: "approval" }>; onApprove?: ApproveFn | undefined }) {
+  const [sent, setSent] = useState<"allow" | "deny" | null>(null);
+  const { request, result } = item;
+  if (result) {
+    const why = result.decision === "deny" && result.by !== "user" ? DECLINED_BECAUSE[result.by] : undefined;
+    return (
+      <p className="text-[13.5px] text-muted">
+        {result.decision === "allow" ? "Allowed" : "Not allowed"}
+        {why ? ` (${why})` : ""}: <code className="font-mono text-[12.5px] text-ink">{request.summary}</code>
+      </p>
+    );
+  }
+  const answer = (d: "allow" | "deny") => {
+    if (sent || !onApprove) return;
+    setSent(d);
+    onApprove(request.requestId, d);
+  };
+  const isCommand = /^(bash|shell|execute|run|terminal)/i.test(request.tool);
+  return (
+    <div role="group" aria-label="The agent is asking for permission" className="rounded-2xl border border-line bg-paper px-4 py-3.5">
+      <p className="font-medium">{isCommand ? "The agent wants to run this command" : `The agent wants to use ${request.tool}`}</p>
+      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-cream px-3 py-2 font-mono text-[12.5px]">{request.summary}</pre>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" className="btn-lemon h-8" disabled={sent !== null || !onApprove} onClick={() => answer("allow")}>
+          Allow
+        </button>
+        <button type="button" className="btn-ghost h-8" disabled={sent !== null || !onApprove} onClick={() => answer("deny")}>
+          Don&apos;t allow
+        </button>
+        <span className="text-[13.5px] text-muted">The agent waits for your answer.</span>
+      </div>
+    </div>
+  );
+}
+
+function Item({ item, onApprove }: { item: TimelineItem; onApprove?: ApproveFn | undefined }) {
   switch (item.kind) {
     case "user":
       return (
@@ -83,6 +127,8 @@ function Item({ item }: { item: TimelineItem }) {
           <span className="h-px flex-1 bg-line" />
         </div>
       );
+    case "approval":
+      return <Approval item={item} onApprove={onApprove} />;
     case "notice":
       return (
         <div role="status" className="rounded-xl border border-line bg-cream px-4 py-2.5 text-[13.5px] text-muted">

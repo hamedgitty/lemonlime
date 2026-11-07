@@ -65,6 +65,12 @@ async function main(): Promise<void> {
   const command = [process.execPath, join(here, "tee-agent.mjs"), log, ...cliCommand];
   const runner = new ThreadRunner({ thread, workdir: work, dataDir: join(root, "data"), adapter: adapterFor(kind), session: { autonomy: "edits", command } });
   await runner.init();
+  // Nobody is watching a recording, so answer every approval request the way a user who
+  // wants the standard session to work would: yes.
+  const autoApprove = process.env.LEMONLIME_RECORD_DENY ? "deny" : "allow";
+  runner.store.subscribe(e => {
+    if (e.type === "approval_request") setTimeout(() => runner.answerApproval(e.requestId, autoApprove), 50);
+  });
   for (const p of PROMPTS) {
     runner.sendMessage(p);
     await runner.settled();
@@ -100,7 +106,7 @@ export function sanitize(raw: string, meta: { agent: string; cli: string; versio
     const r = JSON.parse(raw_) as { dir: string; line: string };
     let line = r.line;
     if (r.dir === "argv") {
-      const argv = JSON.parse(line) as string[];
+      const argv = (JSON.parse(line) as string[]).map((a, i, all) => (all[i - 1] === "--mcp-config" ? "<mcp-config>" : a));
       argv.splice(0, 1, basename(argv[0]!));
       line = JSON.stringify(argv);
     } else if (r.dir === "in" || r.dir === "out") {

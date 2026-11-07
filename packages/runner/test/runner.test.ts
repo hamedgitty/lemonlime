@@ -238,14 +238,19 @@ describe("runner end to end", () => {
   it("drives an ACP agent over stdio, including permission requests", async () => {
     const adapter = acpAdapter("acp", ["node", join(here, "fixtures", "fake-acp-agent.mjs")]);
     const { runner } = await boot(adapter, "test-thread-5");
+    // Edits autonomy: running a command needs the user's OK, which arrives as an approval.
+    runner.store.subscribe(e => {
+      if (e.type === "approval_request") runner.answerApproval(e.requestId, "allow");
+    });
     runner.sendMessage("hello there");
     await runner.settled();
     const events = runner.store.since(0);
     const text = events.filter(e => e.type === "agent_message").map(e => (e as { text: string }).text).join("");
     expect(text).toBe("You said: hello there");
     expect(events.find(e => e.type === "tool_call")).toMatchObject({ name: "Run tests", input: { command: "npm test" } });
-    // Edits autonomy: "execute" tools are declined.
-    expect(events.find(e => e.type === "tool_result")).toMatchObject({ output: "permission=deny", isError: false });
+    expect(events.find(e => e.type === "approval_request")).toMatchObject({ tool: "Run tests", summary: "npm test" });
+    expect(events.find(e => e.type === "approval_result")).toMatchObject({ decision: "allow", by: "user" });
+    expect(events.find(e => e.type === "tool_result")).toMatchObject({ output: "permission=allow", isError: false });
   });
 
   it("reports a missing agent CLI as an error instead of crashing", async () => {

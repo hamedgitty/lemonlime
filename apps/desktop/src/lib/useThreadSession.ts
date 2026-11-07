@@ -45,6 +45,8 @@ export interface ThreadSession {
   status: ThreadStatus | null;
   send: (text: string) => void;
   interrupt: () => void;
+  /** Answer the agent's request for permission. */
+  approve: (requestId: string, decision: "allow" | "deny") => void;
   /** Tear down and connect again (starting the local runner if needed). */
   restart: () => void;
   /** Close the connection on purpose and show the thread as offline. */
@@ -228,6 +230,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   }, []);
 
   const interrupt = useCallback(() => clientRef.current?.interrupt(), []);
+  const approve = useCallback((requestId: string, decision: "allow" | "deny") => clientRef.current?.approve(requestId, decision), []);
   const restart = useCallback(() => setGeneration(g => g + 1), []);
   const disconnect = useCallback(() => {
     disconnectedRef.current = true;
@@ -237,7 +240,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, send, interrupt, restart, disconnect };
+  return { events, pending, state, error, status, send, interrupt, approve, restart, disconnect };
 }
 
 function newClientMsgId(): string {

@@ -4,6 +4,7 @@ import type { NewEvent, QueuedMessage, Thread, ThreadEvent, ThreadStatus } from 
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { EventStore } from "./event-store.ts";
+import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
 
 export interface ThreadRunnerOptions {
@@ -28,7 +29,11 @@ export interface ThreadRunnerOptions {
   turnTimeoutMs?: number;
   /** Check the agent CLI's version at start and note it if older than the tested one. */
   checkAgentVersion?: boolean;
+  /** How long an approval request waits for the user before it is declined. Default 30 minutes. */
+  approvalTimeoutMs?: number;
 }
+
+const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60_000;
 
 const DEFAULT_QUIET_MS = 15 * 60_000;
 const DEFAULT_TURN_TIMEOUT_MS = 4 * 60 * 60_000;
@@ -94,6 +99,8 @@ export class ThreadRunner {
   /** Crashes in a row; the agent is restarted after the first and left alone after the second. */
   private crashes = 0;
   private agentState: Record<string, string> = {};
+  /** Approval requests waiting for the user, by request id. */
+  private readonly approvals = new Map<string, (decision: ApprovalDecision, by: "user" | "timeout" | "interrupted") => void>();
   /** Every clientMsgId this thread has accepted, so a resend never runs twice. */
   private readonly seen = new Set<string>();
 
@@ -134,7 +141,14 @@ export class ThreadRunner {
     this.agentState = saved?.agentState ?? {};
     this.session = this.newSession();
     this.initialised = true;
-    for (const e of this.store.since(0)) if (e.type === "user_message" && e.clientMsgId) this.seen.add(e.clientMsgId);
+    const open = new Set<string>();
+    for (const e of this.store.since(0)) {
+      if (e.type === "user_message" && e.clientMsgId) this.seen.add(e.clientMsgId);
+      if (e.type === "approval_request") open.add(e.requestId);
+      if (e.type === "approval_result") open.delete(e.requestId);
+    }
+    // Questions from a runner that has since stopped can no longer be answered.
+    for (const requestId of open) this.store.append({ type: "approval_result", requestId, decision: "deny", by: "expired" });
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
     for (const q of this.queue) this.seen.add(q.clientMsgId);
 
@@ -188,6 +202,14 @@ export class ThreadRunner {
     }
     this.startTurn(text, clientMsgId);
     return { clientMsgId, result: "started" };
+  }
+
+  /** Answer an approval request. Returns false if it was already decided or doesn't exist. */
+  answerApproval(requestId: string, decision: ApprovalDecision): boolean {
+    const finish = this.approvals.get(requestId);
+    if (!finish) return false;
+    finish(decision, "user");
+    return true;
   }
 
   /** Messages waiting for the current turn to finish, oldest first. */
@@ -249,6 +271,7 @@ export class ThreadRunner {
     let lastOutput = started;
     let toldQuiet = false;
     let timedOut = false;
+    let waitingForUser = 0;
     const emit = (e: NewEvent) => {
       lastOutput = Date.now();
       toldQuiet = false;
@@ -260,7 +283,7 @@ export class ThreadRunner {
         if (now - started >= timeoutMs) {
           timedOut = true;
           abort.abort();
-        } else if (!toldQuiet && now - lastOutput >= quietMs) {
+        } else if (!toldQuiet && waitingForUser === 0 && now - lastOutput >= quietMs) {
           toldQuiet = true;
           const minutes = Math.round((now - lastOutput) / 60_000);
           this.store.append({
@@ -276,7 +299,16 @@ export class ThreadRunner {
 
     try {
       if (!this.session) this.session = this.newSession();
-      await this.session.runTurn({ prompt, signal: abort.signal, emit });
+      const requestApproval = async (req: ApprovalRequest): Promise<ApprovalDecision> => {
+        waitingForUser += 1;
+        try {
+          return await this.askUser(req, abort.signal);
+        } finally {
+          waitingForUser -= 1;
+          lastOutput = Date.now();
+        }
+      };
+      await this.session.runTurn({ prompt, signal: abort.signal, emit, requestApproval });
       this.crashes = 0;
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -302,6 +334,28 @@ export class ThreadRunner {
     this.abort = null;
     this.idleSince = new Date().toISOString();
     this.setStatus("idle", timedOut ? "timed out" : abort.signal.aborted ? "interrupted" : undefined);
+  }
+
+  /** Record an approval request and wait for the user, a timeout, or the turn ending. */
+  private askUser(req: ApprovalRequest, signal: AbortSignal): Promise<ApprovalDecision> {
+    const requestId = randomUUID();
+    return new Promise(resolve => {
+      const finish = (decision: ApprovalDecision, by: "user" | "timeout" | "interrupted") => {
+        if (!this.approvals.delete(requestId)) return;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        this.store.append({ type: "approval_result", requestId, decision, by });
+        resolve(decision);
+      };
+      const onAbort = () => finish("deny", "interrupted");
+      const timer = setTimeout(() => finish("deny", "timeout"), this.opts.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS);
+      timer.unref?.();
+      // Listen for the answer before announcing the question, so even an instant answer counts.
+      this.approvals.set(requestId, finish);
+      this.store.append({ type: "approval_request", requestId, tool: req.tool, input: req.input, summary: req.summary });
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   /** Restart a crashed agent once; if it crashes again straight away, stop trying. */

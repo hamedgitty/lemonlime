@@ -30,7 +30,7 @@ createInterface({ input: process.stdin }).on("line", async line => {
       update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
       const perm = await ask("session/request_permission", {
         sessionId: sid,
-        toolCall: { toolCallId: "t1", kind: "execute", title: "Run tests" },
+        toolCall: { toolCallId: "t1", kind: "execute", title: "Run tests", rawInput: { command: "npm test" } },
         options: [
           { optionId: "allow", kind: "allow_once", name: "Allow" },
           { optionId: "deny", kind: "reject_once", name: "Deny" },

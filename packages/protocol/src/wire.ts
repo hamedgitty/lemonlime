@@ -26,9 +26,16 @@ export const ClientSendMessage = z.object({
 });
 
 export const ClientInterrupt = z.object({ type: z.literal("interrupt") });
+
+/** Answer an `approval_request`. Answers for requests already decided are ignored. */
+export const ClientApprove = z.object({
+  type: z.literal("approve"),
+  requestId: z.string().min(1).max(100),
+  decision: z.enum(["allow", "deny"]),
+});
 export const ClientPing = z.object({ type: z.literal("ping"), t: z.number().optional() });
 
-export const ClientMessage = z.discriminatedUnion("type", [ClientHello, ClientSendMessage, ClientInterrupt, ClientPing]);
+export const ClientMessage = z.discriminatedUnion("type", [ClientHello, ClientSendMessage, ClientInterrupt, ClientPing, ClientApprove]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
 export const ServerWelcome = z.object({

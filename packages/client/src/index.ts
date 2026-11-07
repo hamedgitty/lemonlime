@@ -67,6 +67,11 @@ export class RunnerClient {
     this.post({ type: "interrupt" });
   }
 
+  /** Answer an approval request from the agent. */
+  approve(requestId: string, decision: "allow" | "deny"): void {
+    this.post({ type: "approve", requestId, decision });
+  }
+
   close(): void {
     this.closedByUser = true;
     if (this.timer) clearTimeout(this.timer);

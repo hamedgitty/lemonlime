@@ -32,7 +32,19 @@ export type TimelineItem =
     }
   | { kind: "status"; key: string; seq: number; at: string; from: ThreadStatus; to: ThreadStatus; reason?: string }
   | { kind: "error"; key: string; seq: number; at: string; message: string; code?: string; fatal: boolean }
-  | { kind: "notice"; key: string; seq: number; at: string; message: string; code: string };
+  | { kind: "notice"; key: string; seq: number; at: string; message: string; code: string }
+  | {
+      kind: "approval";
+      key: string;
+      seq: number;
+      at: string;
+      requestId: string;
+      tool: string;
+      summary: string;
+      /** "waiting" until the user (or a timeout) decides. */
+      state: "waiting" | "allowed" | "denied";
+      by?: "user" | "timeout" | "interrupted" | "expired";
+    };
 
 /**
  * Turns an event history into what the thread view shows:
@@ -47,6 +59,7 @@ export type TimelineItem =
 export function buildTimeline(events: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
+  const approvalIndex = new Map<string, number>();
   const confirmed = new Set<string>();
   let queue: EventOf<"queue_update">["queue"] = [];
   let lastSeq = 0;
@@ -145,6 +158,19 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
       case "notice":
         items.push({ kind: "notice", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, message: ev.message, code: ev.code });
         break;
+      case "approval_request":
+        approvalIndex.set(ev.requestId, items.length);
+        items.push({ kind: "approval", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, requestId: ev.requestId, tool: ev.tool, summary: ev.summary, state: "waiting" });
+        break;
+      case "approval_result": {
+        const i = approvalIndex.get(ev.requestId);
+        const item = i === undefined ? undefined : items[i];
+        if (item?.kind === "approval") {
+          item.state = ev.decision === "allow" ? "allowed" : "denied";
+          item.by = ev.by;
+        }
+        break;
+      }
       case "error":
         items.push({
           kind: "error",

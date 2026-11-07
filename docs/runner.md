@@ -74,6 +74,27 @@ Environment:
   restart it commits whatever the agent left behind, records an error with code
   `turn_outcome_unknown`, then carries on with the queue.
 
+## Approvals
+
+At autonomy `edits` (the default for local threads) agents edit files freely but ask
+before anything else, most importantly before running a command. The runner turns
+each question into an `approval_request` event; the app shows the exact command with
+Allow / Don't allow, and answers with an `approve` message. The decision is recorded
+as `approval_result` (`by`: `user`, `timeout` after 30 minutes, `interrupted` when the
+turn is stopped, or `expired` when the runner restarted before anyone answered).
+Anything not answered is declined.
+
+- **Claude Code** runs in print mode, where nobody can answer its prompts, so the
+  runner gives it a small MCP tool (`bin/approval-mcp.mjs`, passed with
+  `--permission-prompt-tool`). The tool reaches the runner through a private
+  127.0.0.1 endpoint guarded by a random token.
+- **ACP agents** (OpenCode and others) ask with `session/request_permission`. Reads,
+  searches and edits are allowed straight away; everything else is asked.
+- **Codex** runs commands inside its own OS sandbox (`workspace-write`), so it doesn't
+  ask.
+
+At autonomy `full` (cloud sandboxes) nothing is asked.
+
 ## Safety limits
 
 - **Huge output.** A single line from an agent over 16 MB is dropped without being

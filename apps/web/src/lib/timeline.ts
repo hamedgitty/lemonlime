@@ -8,7 +8,8 @@ export type TimelineItem =
   | { kind: "diff"; key: string; event: EventOf<"file_diff"> }
   | { kind: "status"; key: string; event: EventOf<"status_change"> }
   | { kind: "error"; key: string; event: EventOf<"error"> }
-  | { kind: "notice"; key: string; event: EventOf<"notice"> };
+  | { kind: "notice"; key: string; event: EventOf<"notice"> }
+  | { kind: "approval"; key: string; request: EventOf<"approval_request">; result: EventOf<"approval_result"> | null };
 
 export interface PendingMessage {
   clientMsgId: string;
@@ -27,6 +28,7 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
   const items: TimelineItem[] = [];
   const tools = new Map<string, Extract<TimelineItem, { kind: "tool" }>>();
   const echoed = new Set<string>();
+  const approvals = new Map<string, Extract<TimelineItem, { kind: "approval" }>>();
   let streaming: Extract<TimelineItem, { kind: "agent" }> | null = null;
 
   let queue: EventOf<"queue_update">["queue"] = [];
@@ -89,6 +91,17 @@ export function buildTimeline(events: readonly ThreadEvent[], pending: readonly 
       case "notice":
         items.push({ kind: "notice", key: `e${e.seq}`, event: e });
         break;
+      case "approval_request": {
+        const item = { kind: "approval" as const, key: `e${e.seq}`, request: e, result: null as EventOf<"approval_result"> | null };
+        approvals.set(e.requestId, item);
+        items.push(item);
+        break;
+      }
+      case "approval_result": {
+        const item = approvals.get(e.requestId);
+        if (item) item.result = e;
+        break;
+      }
     }
   }
 

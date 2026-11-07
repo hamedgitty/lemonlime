@@ -4,9 +4,11 @@ import type { ThreadStatus } from "@lemonlime/protocol";
 import type { TimelineItem } from "../lib/timeline.ts";
 import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
 import { DiffView } from "./DiffView.tsx";
-import { LogoMark, Spinner, cx } from "./ui.tsx";
+import { Button, LogoMark, Spinner, cx } from "./ui.tsx";
 
-export function Timeline({ items, working, empty }: { items: TimelineItem[]; working: boolean; empty: ReactNode }) {
+export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
+
+export function Timeline({ items, working, empty, onApprove }: { items: TimelineItem[]; working: boolean; empty: ReactNode; onApprove?: ApproveFn }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
@@ -49,7 +51,7 @@ export function Timeline({ items, working, empty }: { items: TimelineItem[]; wor
         aria-label="Thread timeline"
       >
         <div className="mx-auto flex max-w-[860px] flex-col gap-4 px-6 pt-6 pb-10">
-          {items.length === 0 ? empty : items.map(item => <Item key={item.key} item={item} />)}
+          {items.length === 0 ? empty : items.map(item => <Item key={item.key} item={item} onApprove={onApprove} />)}
           {working && (
             <div className="flex items-center gap-2.5 pl-1 text-[13px] text-ink-soft">
               <span className="flex gap-1" aria-hidden="true">
@@ -76,7 +78,7 @@ export function Timeline({ items, working, empty }: { items: TimelineItem[]; wor
   );
 }
 
-const Item = memo(function Item({ item }: { item: TimelineItem }) {
+const Item = memo(function Item({ item, onApprove }: { item: TimelineItem; onApprove?: ApproveFn | undefined }) {
   switch (item.kind) {
     case "user":
       return <UserMessage text={item.text} at={item.at} pending={item.pending} queued={item.queued ?? false} />;
@@ -92,8 +94,62 @@ const Item = memo(function Item({ item }: { item: TimelineItem }) {
       return <ErrorRow message={item.message} code={item.code} fatal={item.fatal} />;
     case "notice":
       return <NoticeRow message={item.message} />;
+    case "approval":
+      return <ApprovalCard item={item} onApprove={onApprove} />;
   }
 });
+
+const COMMAND_TOOLS = /^(bash|shell|execute|run|terminal)/i;
+
+const DECLINED_BECAUSE: Record<string, string> = {
+  timeout: "nobody answered in time",
+  interrupted: "the turn was stopped",
+  expired: "the runner restarted before anyone answered",
+};
+
+function ApprovalCard({ item, onApprove }: { item: Extract<TimelineItem, { kind: "approval" }>; onApprove?: ApproveFn | undefined }) {
+  const [sent, setSent] = useState<"allow" | "deny" | null>(null);
+  const isCommand = COMMAND_TOOLS.test(item.tool);
+
+  if (item.state !== "waiting") {
+    const allowed = item.state === "allowed";
+    const why = !allowed && item.by && item.by !== "user" ? DECLINED_BECAUSE[item.by] : undefined;
+    return (
+      <div className="flex items-start gap-2.5 px-1 text-[13.5px] text-ink-soft" role="note">
+        {allowed ? <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" /> : <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />}
+        <p className="min-w-0 [overflow-wrap:anywhere]">
+          {allowed ? "Allowed" : "Not allowed"}
+          {why ? ` (${why})` : ""}: <code className="font-mono text-[12.5px] text-ink">{item.summary}</code>
+        </p>
+      </div>
+    );
+  }
+
+  const answer = (decision: "allow" | "deny") => {
+    if (sent || !onApprove) return;
+    setSent(decision);
+    onApprove(item.requestId, decision);
+  };
+  return (
+    <div className="animate-rise rounded-2xl border border-[#f0d95c] bg-lemon-soft/70 px-4 py-3.5" role="group" aria-label="The agent is asking for permission">
+      <p className="font-medium text-ink">{isCommand ? "The agent wants to run this command" : `The agent wants to use ${item.tool}`}</p>
+      <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-line bg-white px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
+        {item.summary}
+      </pre>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {/* Neither button takes focus by itself, so a stray Enter never approves anything. */}
+        <Button variant="primary" size="sm" disabled={sent !== null || !onApprove} onClick={() => answer("allow")}>
+          {sent === "allow" ? <Spinner /> : <Check aria-hidden="true" className="size-3.5" />}
+          Allow
+        </Button>
+        <Button variant="secondary" size="sm" disabled={sent !== null || !onApprove} onClick={() => answer("deny")}>
+          Don&apos;t allow
+        </Button>
+        <span className="text-[13.5px] text-ink-soft">The agent waits for your answer.</span>
+      </div>
+    </div>
+  );
+}
 
 function NoticeRow({ message }: { message: string }) {
   return (

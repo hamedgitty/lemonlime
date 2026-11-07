@@ -262,7 +262,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
             {items.length === 0 ? (
               <EmptyState status={thread.status} connected={conn === "live"} />
             ) : (
-              <Timeline items={items} />
+              <Timeline items={items} onApprove={(id, d) => clientRef.current?.approve(id, d)} />
             )}
             <div ref={bottomRef} />
           </section>

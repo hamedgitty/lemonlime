@@ -78,6 +78,30 @@ export const NoticeEvent = z.object({
   message: z.string(),
 });
 
+/**
+ * The agent wants to do something that needs the user's OK (usually run a command).
+ * The turn waits until an `approval_result` with the same `requestId` follows.
+ */
+export const ApprovalRequestEvent = z.object({
+  ...base,
+  type: z.literal("approval_request"),
+  requestId: z.string(),
+  /** The agent's own name for the tool, e.g. "Bash". */
+  tool: z.string(),
+  input: z.unknown(),
+  /** What will happen, in one line, e.g. the exact command. */
+  summary: z.string(),
+});
+
+export const ApprovalResultEvent = z.object({
+  ...base,
+  type: z.literal("approval_result"),
+  requestId: z.string(),
+  decision: z.enum(["allow", "deny"]),
+  /** Who decided: the user, or nobody in time (timeout), or the turn ended first. */
+  by: z.enum(["user", "timeout", "interrupted", "expired"]),
+});
+
 /** A message waiting for the agent to finish its current turn. */
 export const QueuedMessage = z.object({
   clientMsgId: z.string(),
@@ -107,6 +131,8 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   ErrorEvent,
   QueueUpdateEvent,
   NoticeEvent,
+  ApprovalRequestEvent,
+  ApprovalResultEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

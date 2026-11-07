@@ -10,7 +10,8 @@ export { runLineProcess } from "./process.ts";
 export { compareVersions, detectVersion, parseVersion, TESTED_AGENTS, versionNotice, type TestedAgent } from "./versions.ts";
 export { parseClaudeLine } from "./claude-code.ts";
 export { parseCodexLine } from "./codex.ts";
-export { AcpTranslator, answerAgentRequest, acpAdapter } from "./acp.ts";
+export { AcpTranslator, answerAgentRequest, acpAdapter, needsApproval } from "./acp.ts";
+export { APPROVAL_TOOL } from "./claude-code.ts";
 
 const adapters: Record<AgentKind, AgentAdapter> = {
   "claude-code": claudeCodeAdapter,

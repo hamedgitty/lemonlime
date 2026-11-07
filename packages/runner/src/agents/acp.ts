@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentKind, NewEvent } from "@lemonlime/protocol";
+import { summarizeToolInput, type ApprovalDecision } from "../approvals.ts";
 import { lineSplitter } from "./lines.ts";
 import { killGently, tryJson } from "./process.ts";
 import { AgentError, classifyAgentFailure, oversizeNotice, type AgentAdapter, type AgentSession, type Autonomy, type SessionOptions, type TurnContext } from "./types.ts";
@@ -166,7 +167,21 @@ class AcpSession implements AgentSession {
     }
     // Request from the agent to us.
     if ("id" in msg && typeof msg.method === "string") {
-      this.send({ jsonrpc: "2.0", id: msg.id, ...answerAgentRequest(msg.method, msg.params as Json, this.opts.autonomy) });
+      const params = msg.params as Json | undefined;
+      if (msg.method === "session/request_permission" && needsApproval(params, this.opts.autonomy)) {
+        // Ask the user; the agent waits for our answer.
+        const toolCall = (params?.toolCall as Json | undefined) ?? {};
+        const known = this.translator.knownCall(String(toolCall.toolCallId ?? ""));
+        const tool = String(toolCall.title ?? known?.name ?? toolCall.kind ?? "tool");
+        const input = toolCall.rawInput ?? known?.input ?? null;
+        const ask = this.turn?.requestApproval;
+        const decision = ask ? ask({ tool, input, summary: summarizeToolInput(tool, input) }) : Promise.resolve<ApprovalDecision>("deny");
+        void decision
+          .catch((): ApprovalDecision => "deny")
+          .then(d => this.send({ jsonrpc: "2.0", id: msg.id, ...answerAgentRequest(msg.method as string, params, this.opts.autonomy, d) }));
+        return;
+      }
+      this.send({ jsonrpc: "2.0", id: msg.id, ...answerAgentRequest(msg.method, params, this.opts.autonomy) });
       return;
     }
     // Notification.
@@ -177,12 +192,30 @@ class AcpSession implements AgentSession {
   }
 }
 
-/** Reply to requests the agent sends us. We advertise no fs/terminal capabilities, so only permissions matter. */
-export function answerAgentRequest(method: string, params: Json | undefined, autonomy: Autonomy): { result: unknown } | { error: { code: number; message: string } } {
+/** Tool kinds that never need asking: they only read, or edit files (which "edits" allows). */
+const SAFE_KINDS = ["edit", "read", "search", "think", "fetch"];
+
+/** True when a permission request has to go to the user rather than be answered by policy. */
+export function needsApproval(params: Json | undefined, autonomy: Autonomy): boolean {
+  if (autonomy === "full") return false;
+  const toolKind = String((params?.toolCall as Json | undefined)?.kind ?? "");
+  return !SAFE_KINDS.includes(toolKind);
+}
+
+/**
+ * Reply to requests the agent sends us. We advertise no fs/terminal capabilities, so only
+ * permissions matter. `decision` is the user's answer for requests that needed asking;
+ * without one, such requests are declined.
+ */
+export function answerAgentRequest(
+  method: string,
+  params: Json | undefined,
+  autonomy: Autonomy,
+  decision?: ApprovalDecision,
+): { result: unknown } | { error: { code: number; message: string } } {
   if (method === "session/request_permission") {
     const options = (params?.options as { optionId: string; kind: string }[] | undefined) ?? [];
-    const toolKind = String((params?.toolCall as Json | undefined)?.kind ?? "");
-    const allowed = autonomy === "full" || ["edit", "read", "search", "think", "fetch"].includes(toolKind);
+    const allowed = needsApproval(params, autonomy) ? decision === "allow" : true;
     const pick = allowed
       ? options.find(o => o.kind === "allow_once") ?? options.find(o => o.kind === "allow_always")
       : options.find(o => o.kind === "reject_once") ?? options.find(o => o.kind === "reject_always");
@@ -201,6 +234,7 @@ export class AcpTranslator {
   /** Tool calls announced without their input yet, keyed by id. */
   private readonly waiting = new Map<string, { name: string; input: unknown }>();
   private readonly started = new Set<string>();
+  private readonly startedCalls = new Map<string, { name: string; input: unknown }>();
 
   update(u: Json): NewEvent[] {
     const out: NewEvent[] = [];
@@ -227,6 +261,7 @@ export class AcpTranslator {
             out.push(...this.endMessage());
             this.waiting.delete(id);
             this.started.add(id);
+            this.startedCalls.set(id, { name, input });
             out.push({ type: "tool_call", callId: id, name, input });
           } else this.waiting.set(id, { name, input });
         }
@@ -240,6 +275,11 @@ export class AcpTranslator {
       // agent_thought_chunk, plan, user_message_chunk, usage_update, available_commands_update: not shown.
     }
     return out;
+  }
+
+  /** Name and latest input of a tool call this turn has seen, if any. */
+  knownCall(id: string): { name: string; input: unknown } | undefined {
+    return this.waiting.get(id) ?? this.startedCalls.get(id);
   }
 
   /** Emit buffered streamed text as one partial agent message chunk. */

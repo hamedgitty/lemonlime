@@ -78,3 +78,15 @@ describe("folding finished turns", async () => {
     expect(foldFinishedTurns([user(1), tool(2), agent(3)])).toHaveLength(3);
   });
 });
+
+describe("side panel addresses", async () => {
+  const { normalizeUrl } = await import("../src/components/GlobalPanel.tsx");
+  it("fills in the scheme the way people expect", () => {
+    expect(normalizeUrl("localhost:3000")).toBe("http://localhost:3000/");
+    expect(normalizeUrl("127.0.0.1:5173/app")).toBe("http://127.0.0.1:5173/app");
+    expect(normalizeUrl("example.com")).toBe("https://example.com/");
+    expect(normalizeUrl("javascript:alert(1)")?.startsWith("https://")).not.toBe(false);
+    expect(normalizeUrl("file:///etc/passwd")).toMatch(/^https:/);
+    expect(normalizeUrl("")).toBeNull();
+  });
+});

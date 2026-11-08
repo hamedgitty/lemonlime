@@ -7,6 +7,7 @@ import { Home } from "./components/Home.tsx";
 import { SetupWizard } from "./components/SetupWizard.tsx";
 import { SkillsView } from "./components/SkillsView.tsx";
 import { PluginsView } from "./components/PluginsView.tsx";
+import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { needsUpdate } from "./components/settings/AgentsPage.tsx";
@@ -200,6 +201,23 @@ export function App() {
   // First run opens setup; it stays open until finished or skipped, even once chats are imported.
   const [setupOpen, setSetupOpen] = useState(() => !prefs.setupDone && localThreads.length === 0);
   const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
+
+  // ── The side panel on every page (terminals on this computer, a browser) ──
+  const [panelTabs, setPanelTabs] = useState<PanelTab[]>([]);
+  const [panelActive, setPanelActive] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const togglePanel = useCallback(() => {
+    setPanelOpen(open => {
+      if (!open)
+        setPanelTabs(tabs => {
+          if (tabs.length) return tabs;
+          const id = crypto.randomUUID();
+          setPanelActive(id);
+          return [{ id, kind: "new", title: "New tab" }];
+        });
+      return !open;
+    });
+  }, []);
 
   const cloudConfigured = isCloudConfigured(settings);
   const cloudApi = useMemo(
@@ -588,12 +606,14 @@ export function App() {
           return;
         }
         case "right-panel":
-          return void window.dispatchEvent(new Event("lemonlime:toggle-panel"));
+          // A thread has its own panel (changes, terminal, browser); everywhere else, the side panel.
+          if (here.view === "thread") return void window.dispatchEvent(new Event("lemonlime:toggle-panel"));
+          return togglePanel();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [go, onPrefs]);
+  }, [go, onPrefs, togglePanel]);
 
   // ── Derived lists ────────────────────────────────────────
   const summaries = useMemo(
@@ -726,6 +746,11 @@ export function App() {
         onNew={() => go({ view: "home" })}
         onAutomations={() => go({ view: "automations" })}
         onSkills={() => go({ view: "skills" })}
+        onPanel={() => {
+          if (place.view === "thread") window.dispatchEvent(new Event("lemonlime:toggle-panel"));
+          else togglePanel();
+        }}
+        panelOpen={panelOpen && place.view !== "thread"}
         onPlugins={() => go({ view: "plugins" })}
         onNewProject={() => void addProject()}
         agentUpdates={agentUpdates}
@@ -795,7 +820,17 @@ export function App() {
               )}
             </div>
           )}
-          <div className="flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 flex-1">
+            <GlobalPanel
+              tabs={panelTabs}
+              active={panelActive}
+              onTabs={setPanelTabs}
+              onActive={setPanelActive}
+              side={prefs.panelSide}
+              onSide={panelSide => onPrefs({ panelSide })}
+              onClose={() => setPanelOpen(false)}
+              hidden={!panelOpen || place.view === "thread" || place.view === "settings"}
+            />
             {place.view === "automations" ? (
               <AutomationsView
                 cloudApi={cloudApi}

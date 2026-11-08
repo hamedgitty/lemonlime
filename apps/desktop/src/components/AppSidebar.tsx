@@ -24,6 +24,7 @@ import {
   Search,
   Settings as SettingsIcon,
   SlidersHorizontal,
+  SquareTerminal,
   SquarePen,
   UserRound,
   X,
@@ -46,6 +47,9 @@ export interface AppSidebarProps {
   onNew: () => void;
   onAutomations: () => void;
   onSkills: () => void;
+  /** Shows or hides the side panel (terminals on this computer, a browser). */
+  onPanel: () => void;
+  panelOpen: boolean;
   onPlugins: () => void;
   /** Pick a folder to start threads in. */
   onNewProject: () => void;
@@ -356,6 +360,23 @@ export function AppSidebar(p: AppSidebarProps) {
         <Tip label={p.cloudConfigured ? "Cloud account" : "Connect a cloud account"}>
           <button type="button" onClick={() => p.onSettings("account")} aria-label="Account" className={FOOT}>
             <UserRound aria-hidden="true" />
+          </button>
+        </Tip>
+        <Tip
+          label={
+            <>
+              Terminal and browser <span className="font-normal opacity-75">⌘ ⇧ \</span>
+            </>
+          }
+        >
+          <button
+            type="button"
+            onClick={p.onPanel}
+            aria-label="Side panel"
+            aria-pressed={p.panelOpen}
+            className={cx(FOOT, p.panelOpen && "bg-cream-hover text-ink")}
+          >
+            <SquareTerminal aria-hidden="true" />
           </button>
         </Tip>
         <span className="flex-1" />

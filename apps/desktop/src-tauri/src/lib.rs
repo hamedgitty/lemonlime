@@ -3,6 +3,7 @@
 
 mod computer;
 mod history;
+mod host_terminal;
 mod paths;
 mod plugins;
 mod previews;
@@ -38,6 +39,7 @@ pub fn run() {
         .manage(runner::Runners::default())
         .manage(previews::Tunnels::default())
         .manage(system::Awake::default())
+        .manage(host_terminal::HostTerminals::default())
         .invoke_handler(tauri::generate_handler![
             runner::start_local_runner,
             runner::stop_local_runner,
@@ -67,6 +69,10 @@ pub fn run() {
             system::open_in_editor,
             system::local_runner_statuses,
             system::save_text_file,
+            host_terminal::host_terminal_open,
+            host_terminal::host_terminal_write,
+            host_terminal::host_terminal_resize,
+            host_terminal::host_terminal_close,
             history::scan_agent_history,
             history::import_agent_sessions,
             plugins::list_plugins,
@@ -96,6 +102,7 @@ pub fn run() {
                 app.state::<runner::Runners>().stop_all();
                 app.state::<previews::Tunnels>().stop_all();
                 app.state::<system::Awake>().release();
+                app.state::<host_terminal::HostTerminals>().close_all();
             }
             _ => {}
         });

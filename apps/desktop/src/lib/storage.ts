@@ -167,6 +167,8 @@ export const UiPrefs = z.object({
   lastAgent: z.enum(["claude-code", "codex", "opencode", "acp"]).default("claude-code"),
   lastPlace: z.enum(["local", "cloud"]).default("local"),
   rightPanel: z.boolean().default(false),
+  /** Which side the side panel (terminals, browser) sits on. */
+  panelSide: z.enum(["left", "right"]).default("right"),
   /** Light, dark, or follow the system. */
   theme: z.enum(["light", "dark", "system"]).default("light"),
   /** Open a thread as soon as it's created. */

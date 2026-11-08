@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ThreadOptions } from "./capabilities.ts";
-import { ThreadId, ThreadStatus } from "./thread.ts";
+import { AccountRef } from "./accounts.ts";
+import { AgentKind, ThreadId, ThreadStatus } from "./thread.ts";
 
 /** Fields every event carries. `seq` starts at 1 and increases by 1 per thread. */
 const base = {
@@ -230,6 +231,42 @@ export const PlanProposalEvent = z.object({
   plan: z.string(),
 });
 
+/**
+ * The agent hit its plan's usage limit and stopped. Apps show it as a row with what can
+ * carry the thread on: another signed-in account of the same agent (`accounts`), another
+ * agent signed in where the thread runs (`agents`), or waiting for the reset. What the
+ * runner then does by itself follows as notices or an `agent_switch`.
+ */
+export const LimitHitEvent = z.object({
+  ...base,
+  type: z.literal("limit_hit"),
+  agent: AgentKind,
+  /** The account that hit it, on computers with more than one. */
+  account: AccountRef.optional(),
+  /** When the limit lifts (ISO), if the agent said. */
+  resetAt: z.string().datetime().optional(),
+  /** The agent's own words. */
+  message: z.string(),
+  /** Other accounts of the same agent signed in here, when it was hit. */
+  accounts: z.array(AccountRef).default([]),
+  /** Other agents signed in here, when it was hit. */
+  agents: z.array(AgentKind).default([]),
+});
+
+/**
+ * The thread carried on with another account or another agent. `session`: the agent's own
+ * conversation came along; `handoff`: a fresh conversation, started from a summary of the
+ * thread. `auto`: LemonLime did it by itself (the "switch to my next account" setting).
+ */
+export const AgentSwitchEvent = z.object({
+  ...base,
+  type: z.literal("agent_switch"),
+  from: z.object({ agent: AgentKind, account: AccountRef.optional() }),
+  to: z.object({ agent: AgentKind, account: AccountRef.optional(), model: z.string().optional() }),
+  carried: z.enum(["session", "handoff"]),
+  auto: z.boolean().default(false),
+});
+
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
@@ -250,6 +287,8 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   QuestionResultEvent,
   ContextUsageEvent,
   PlanProposalEvent,
+  LimitHitEvent,
+  AgentSwitchEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

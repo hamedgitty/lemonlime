@@ -1,6 +1,7 @@
 import {
   parseServerMessage,
   type ClientMessage,
+  type ClientLimitAction,
   type ClientSetOptions,
   type ComputerRequest,
   type SideChatSummary,
@@ -137,6 +138,11 @@ export class RunnerClient {
   /** Change the model, reasoning level or permission mode from the agent's next turn. */
   setOptions(change: Omit<ClientSetOptions, "type">): void {
     this.post({ type: "set_options", ...change });
+  }
+
+  /** After a usage limit: carry on with another account or agent, or wait for the reset (see ClientLimitAction). */
+  limitAction(action: Omit<ClientLimitAction, "type">): void {
+    this.post({ type: "limit_action", ...action });
   }
 
   /** Answer the agent's questions (one list of picked labels or typed text per question), or decline with null. */

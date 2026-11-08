@@ -147,6 +147,9 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
           version: opts.version,
           agentVersion: runner.agentVersion,
           waitingApprovals: runner.waitingApprovals,
+          agent: t.agent.kind,
+          account: runner.currentAccount,
+          limit: runner.limitStopped,
         }),
       );
       return;
@@ -333,6 +336,24 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
           ...(msg.permission !== undefined ? { permission: msg.permission } : {}),
         });
         if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+        break;
+      }
+      case "limit_action": {
+        const action =
+          msg.action === "switch_account"
+            ? msg.accountId
+              ? { action: "switch_account" as const, accountId: msg.accountId }
+              : null
+            : msg.action === "switch_agent"
+              ? msg.agent
+                ? { action: "switch_agent" as const, agent: msg.agent, model: msg.model ?? null }
+                : null
+              : { action: "wait" as const };
+        if (!action) send({ type: "error", code: "bad_request", message: `${msg.action} needs ${msg.action === "switch_account" ? "accountId" : "agent"}` });
+        else
+          void runner.limitAction(action).then(r => {
+            if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+          });
         break;
       }
       case "start_login":

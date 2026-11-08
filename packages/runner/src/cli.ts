@@ -37,6 +37,7 @@ import { Relay, relayResponse } from "./relay.ts";
 import { startServer } from "./server.ts";
 import { importHistory, scanHistory } from "./history/index.ts";
 import { ThreadRunner } from "./thread-runner.ts";
+import { accountsCommand } from "./accounts-cli.ts";
 import { RUNNER_VERSION } from "./version.ts";
 
 // Output piped into something that stops reading early (`lemonlime-runner --help | head`):
@@ -59,6 +60,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                         saved on this computer, as JSON (they are only read)
        lemonlime-runner history import <id>...
                         Make local threads from conversations a scan listed, as JSON
+       lemonlime-runner accounts list|add|remove|default|rename|on-limit|login ...
+                        The agent accounts kept on this computer (see accounts --help)
 
   --thread <id>            Thread id (required)
   --agent <kind>           claude-code | codex | opencode | acp (required)
@@ -240,6 +243,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
   if (argv[0] === "keeper") return keeper(argv.slice(1));
   if (argv[0] === "history") return historyCommand(argv.slice(1));
+  if (argv[0] === "accounts") return accountsCommand(argv.slice(1), lemonlimeHome());
   if (argv[0] === "approval-mcp") return runApprovalMcp();
   if (argv[0] === "subagents-mcp") return runSubagentsMcp();
   if (argv[0] === "preview") return previewCommand(argv.slice(1));
@@ -437,6 +441,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     // The user's own skills (added in the desktop app's settings), then any given here.
     extraSkillDirs: [join(home, "skills"), ...(values.skills ?? []).map(d => resolve(d))],
     ...(values["plugins-dir"] ? { pluginsDir: resolve(values["plugins-dir"]) } : {}),
+    // Several accounts per agent live on the user's own computer only.
+    accountsHome: inSandbox ? null : home,
   });
 
   const log = (m: string) => process.stderr.write(`[runner ${id}] ${m}\n`);

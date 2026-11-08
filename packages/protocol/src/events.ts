@@ -230,6 +230,24 @@ export const PlanProposalEvent = z.object({
   plan: z.string(),
 });
 
+export const SubagentInfo = z.object({
+  id: z.string(),
+  /** The subagent that started this one; null when the thread's own agent did. */
+  parentId: z.string().nullable(),
+  task: z.string(),
+  /** working: on a turn; waiting: replied, but subagents it started are still working; idle: replied; failed: stopped with an error. */
+  status: z.enum(["working", "waiting", "idle", "failed"]),
+  startedAt: z.string().datetime(),
+});
+export type SubagentInfo = z.infer<typeof SubagentInfo>;
+
+/** The runner's subagents (see the subagents MCP tools), whole, each time one starts or finishes. */
+export const SubagentUpdateEvent = z.object({
+  ...base,
+  type: z.literal("subagent_update"),
+  subagents: z.array(SubagentInfo),
+});
+
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
@@ -250,6 +268,7 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   QuestionResultEvent,
   ContextUsageEvent,
   PlanProposalEvent,
+  SubagentUpdateEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

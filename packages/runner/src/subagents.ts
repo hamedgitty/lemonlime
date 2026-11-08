@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { NewEvent } from "@lemonlime/protocol";
+import type { NewEvent, SubagentInfo as SubagentSnapshot } from "@lemonlime/protocol";
 import type { AgentAdapter, AgentSession, SessionOptions } from "./agents/index.ts";
 
 /** A subagent may start its own, once: main thread → child → grandchild. */
@@ -32,6 +32,8 @@ export interface SubagentsOptions {
   toMain: (text: string, id: string) => void;
   /** Something for the thread's history, e.g. "started a subagent". */
   notice: (code: string, message: string) => void;
+  /** Every subagent and where it is, each time one starts or finishes (for the apps). */
+  changed?: (list: SubagentSnapshot[]) => void;
 }
 
 const FRAMING = (task: string) =>
@@ -53,6 +55,25 @@ export class Subagents {
     return [...this.agents.values()]
       .filter(a => parentId === undefined || a.parentId === parentId)
       .map(({ session: _s, inbox: _i, turns: _t, ...info }) => info);
+  }
+
+  /**
+   * What the apps show: each subagent's state, where an idle one whose own subagents are
+   * still working counts as waiting on them.
+   */
+  snapshot(): SubagentSnapshot[] {
+    const all = [...this.agents.values()];
+    return all.map(a => ({
+      id: a.id,
+      parentId: a.parentId,
+      task: a.task.slice(0, 300),
+      status: a.status === "idle" && all.some(c => c.parentId === a.id && c.status === "working") ? "waiting" : a.status,
+      startedAt: a.startedAt,
+    }));
+  }
+
+  private announce(): void {
+    this.opts.changed?.(this.snapshot());
   }
 
   spawn(o: { requestId: string; task: string; parentId: string | null }): { id: string; created: boolean } | { error: string } {
@@ -103,6 +124,7 @@ export class Subagents {
   private async run(agent: Subagent, prompt: string): Promise<void> {
     agent.status = "working";
     agent.turns++;
+    this.announce();
     let reply = "";
     try {
       await agent.session.runTurn({
@@ -119,6 +141,7 @@ export class Subagents {
     }
     agent.lastReply = reply || "(no reply)";
     this.deliver(agent);
+    this.announce();
     const next = agent.inbox.shift();
     if (next !== undefined && agent.status !== "failed") void this.run(agent, next);
   }

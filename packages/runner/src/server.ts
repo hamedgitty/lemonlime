@@ -5,6 +5,7 @@ import { createConnection, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   ComputerRequest,
+  FILES_LIMIT_MAX,
   RelayAnswers,
   parseClientMessage,
   parseTerminalClientMessage,
@@ -15,6 +16,7 @@ import {
 import { TerminalSession, type SpawnPty } from "./terminal.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
+import { listWorkdirFiles, searchFiles } from "./composer.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 import type { Relay } from "./relay.ts";
 
@@ -52,6 +54,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
     const path = new URL(req.url ?? "/", "http://runner").pathname;
     if (
       path === "/capabilities" ||
+      path === "/files" ||
+      path === "/commands" ||
       path.startsWith("/attachments") ||
       path === "/previews" ||
       path.startsWith("/subagents") ||
@@ -498,6 +502,14 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
   const auth = token ? await verifyToken(token, opts.threadSecret) : null;
   if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
 
+  // The composer's `@` and `/` menus (see packages/protocol/src/composer.ts).
+  if (path === "/files" && req.method === "GET") {
+    const params = new URL(req.url ?? "/", "http://runner").searchParams;
+    const limit = Math.min(FILES_LIMIT_MAX, Math.max(1, Number(params.get("limit")) || 50));
+    const files = await listWorkdirFiles(runner.workdir).catch(() => [] as string[]);
+    return reply(res, 200, searchFiles(files, (params.get("q") ?? "").slice(0, 200), limit));
+  }
+  if (path === "/commands" && req.method === "GET") return reply(res, 200, { commands: runner.agentCommands });
   if (path === "/teleport/export" && req.method === "POST") {
     try {
       return reply(res, 200, await runner.exportForTeleport());

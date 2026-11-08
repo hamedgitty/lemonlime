@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NewEvent } from "@lemonlime/protocol";
+import type { AgentCommand, NewEvent } from "@lemonlime/protocol";
 import { ApprovalBridge, type ApprovalDecision, type ApprovalRequest } from "../approvals.ts";
+import { commandsFromNames } from "../composer.ts";
 import { selfCommand } from "../self.ts";
 import { runLineProcess, tryJson } from "./process.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
@@ -40,9 +41,16 @@ class ClaudeCodeSession implements AgentSession {
   private configDir: string | null = null;
   private configFile: string | null = null;
   private ask: ((req: ApprovalRequest) => Promise<ApprovalDecision>) | null = null;
+  /** From the last init message; kept with the session so a restarted runner still knows them. */
+  private reported: AgentCommand[] = [];
 
   constructor(private readonly opts: SessionOptions) {
     this.sessionId = opts.saved?.sessionId;
+    try {
+      if (opts.saved?.commands) this.reported = commandsFromNames(JSON.parse(opts.saved.commands));
+    } catch {
+      /* listed again on the next turn */
+    }
   }
 
   /**
@@ -107,6 +115,7 @@ class ClaudeCodeSession implements AgentSession {
         if (parsed.sessionId) this.sessionId = parsed.sessionId;
         if (parsed.failure) failure = parsed.failure;
         if (parsed.limitResetAt) limitReset = parsed.limitResetAt;
+        if (parsed.commands) this.reported = parsed.commands;
         parsed.events.forEach(e => ctx.emit(e));
       },
       onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
@@ -119,7 +128,12 @@ class ClaudeCodeSession implements AgentSession {
   }
 
   saveState(): Record<string, string> {
-    return this.sessionId ? { sessionId: this.sessionId } : {};
+    if (!this.sessionId) return {};
+    return this.reported.length ? { sessionId: this.sessionId, commands: JSON.stringify(this.reported.map(c => c.name)) } : { sessionId: this.sessionId };
+  }
+
+  commands(): AgentCommand[] {
+    return this.reported;
   }
 
   async dispose(): Promise<void> {
@@ -136,6 +150,8 @@ export interface ParsedLine {
   failure?: string;
   /** The account's usage limit was hit; it lifts at this time (ISO). */
   limitResetAt?: string;
+  /** Slash commands listed in the init message. */
+  commands?: AgentCommand[];
 }
 
 type ContentBlock =
@@ -150,6 +166,10 @@ export function parseClaudeLine(line: string): ParsedLine {
   if (!msg || typeof msg !== "object") return { events: [] };
   const sessionId = typeof msg.session_id === "string" ? msg.session_id : undefined;
   const events: NewEvent[] = [];
+  if (msg.type === "system" && msg.subtype === "init") {
+    const commands = commandsFromNames(msg.slash_commands);
+    return { events, ...(sessionId ? { sessionId } : {}), ...(commands.length ? { commands } : {}) };
+  }
   if (msg.type === "rate_limit_event") {
     const info = msg.rate_limit_info as { status?: string; resetsAt?: number } | undefined;
     if (info?.status === "rejected" && typeof info.resetsAt === "number") {

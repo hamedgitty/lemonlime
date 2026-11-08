@@ -1,4 +1,4 @@
-import type { ReactElement, ReactNode } from "react";
+import { useId, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { Popover as BasePopover } from "@base-ui/react/popover";
 import { Switch as BaseSwitch } from "@base-ui/react/switch";
@@ -187,7 +187,7 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
       onCheckedChange={v => onChange(Boolean(v))}
       disabled={disabled}
       aria-label={label}
-      className="relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border border-control bg-cream-deep transition-colors duration-150 data-[checked]:border-[#6fa31c] data-[checked]:bg-lime data-[disabled]:opacity-50"
+      className="relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border border-control bg-cream-deep transition-colors duration-150 data-[checked]:border-lime-edge data-[checked]:bg-lime data-[disabled]:opacity-50"
     >
       <BaseSwitch.Thumb className="block size-3.5 translate-x-[2px] rounded-full bg-control transition-transform duration-150 ease-(--ease-out) data-[checked]:translate-x-[16px] data-[checked]:bg-ink" />
     </BaseSwitch.Root>
@@ -200,5 +200,70 @@ export function Kbd({ children }: { children: ReactNode }) {
     <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded-[5px] border border-line-strong bg-paper px-1.5 font-sans text-[12px] font-medium text-ink-soft">
       {children}
     </kbd>
+  );
+}
+
+export interface PageTab<T extends string> {
+  id: T;
+  label: string;
+  /** A count beside the label; `attention` draws it in lemon (updates, things to review). */
+  count?: number | undefined;
+  attention?: boolean;
+}
+
+/**
+ * Tabs across the top of a page (Skills, Plugins, Automations), in the same style as the
+ * Settings tabs: an ink underline under the chosen one. Arrow keys, Home and End move
+ * between them. The row they sit in draws the line under them.
+ */
+export function PageTabs<T extends string>({
+  value,
+  onChange,
+  tabs,
+  label,
+  className,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  tabs: PageTab<T>[];
+  label: string;
+  className?: string;
+}) {
+  const id = useId();
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = tabs.findIndex(t => t.id === value);
+    const n = tabs.length;
+    const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    onChange(tabs[to]!.id);
+    document.getElementById(`${id}-${tabs[to]!.id}`)?.focus();
+  };
+  return (
+    // oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take the focus
+    <div role="tablist" aria-label={label} onKeyDown={onKeyDown} className={cx("flex min-w-0 gap-1 overflow-x-auto [scrollbar-width:none]", className)}>
+      {tabs.map(t => (
+        <button
+          key={t.id}
+          id={`${id}-${t.id}`}
+          type="button"
+          role="tab"
+          aria-selected={value === t.id}
+          tabIndex={value === t.id ? 0 : -1}
+          onClick={() => onChange(t.id)}
+          className={cx(
+            "-mb-px inline-flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[14px] whitespace-nowrap transition-colors duration-100 focus-visible:-outline-offset-2",
+            value === t.id ? "border-ink font-medium text-ink" : "border-transparent text-ink-soft hover:text-ink",
+          )}
+        >
+          {t.label}
+          {t.count !== undefined && (
+            <span className={cx("rounded-full px-1.5 text-[12px] tabular-nums", t.attention ? "bg-lemon-soft text-ink" : "bg-cream-deep text-ink-soft")}>
+              {t.count}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }

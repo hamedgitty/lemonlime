@@ -14,9 +14,17 @@
   --color-lemon: #ffe135;
   --color-lemon-soft: #fff4b0;
   --color-lemon-2: #ffd60a;
+  /* Edges for lemon fills: the hairline round a lemon-soft card, the rim of a lemon button,
+     its hover and pressed fills, and the seam between the halves of a split button. */
+  --color-lemon-line: #f0d95c;
+  --color-lemon-edge: #e9c900;
+  --color-lemon-hover: #ffe84f;
+  --color-lemon-press: #f5d400;
+  --color-lemon-seam: #d8b900;
   --color-lime: #a3e635;
   --color-lime-soft: #e7f8c6;
   --color-lime-2: #7cc81e;
+  --color-lime-edge: #6fa31c;
   --color-leaf: #3f7a16;
   --color-leaf-deep: #2f5c10;
   --color-rind: #11190a;
@@ -27,6 +35,13 @@
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
   --color-amber: #b45309;
+  /* Warning text on light fills (5.7:1 on cream). */
+  --color-amber-ink: #8a5a00;
+  /* Status marks: stopped or paused, and failed. */
+  --color-status-idle: #c9c2a0;
+  --color-status-failed: #e5484d;
+  /* Error text on the dark rind surfaces (terminal, sidebar). */
+  --color-danger-on-rind: #f2877e;
   --color-diff-add: #e9f7d4;
   --color-diff-add-strong: #2f5c10;
   --color-diff-del: #fde8e6;
@@ -85,6 +100,9 @@
   --color-line-strong: #3a4a2e;
   --color-control: #6f7a62;
   --color-lemon-soft: #3b3511;
+  --color-lemon-line: #6b5d1a;
+  --color-amber-ink: #f5c96a;
+  --color-status-idle: #5d6650;
   --color-lime-soft: #22351a;
   --color-leaf: #a3e635;
   --color-leaf-deep: #c8f17f;

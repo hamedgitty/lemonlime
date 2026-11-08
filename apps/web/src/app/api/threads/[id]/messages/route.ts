@@ -21,7 +21,8 @@ export const POST = route<{ params: Promise<{ id: string }> }>(async (request, {
   const row = await getThreadRowForUser(ctx, user.userId, (await params).id);
   if (row.mode !== "cloud") throw new HttpError(409, "Local threads take messages through the desktop app.");
   if (row.status === "stopped" || !row.sandboxId) throw new HttpError(409, "This thread's sandbox no longer exists.");
-  await addPendingMessage(ctx, row.id, msg);
+  // People's messages never carry a check script; only automations set one.
+  await addPendingMessage(ctx, row.id, { clientMsgId: msg.clientMsgId, text: msg.text });
   if (row.runningSince) return json({ queued: true, ...(await threadResponse(ctx, row, user.userId)) });
   await enforce(ctx.db, `sandbox-starts:${user.userId}`, LIMITS.sandboxStartsPerUser, "sandbox starts");
   return json({ queued: true, ...(await resumeThread(ctx, user.userId, row.id)) });

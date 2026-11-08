@@ -6,6 +6,7 @@ export * from "./token.ts";
 export * from "./terminal.ts";
 export * from "./capabilities.ts";
 export * from "./schedule.ts";
+export * from "./automation.ts";
 export * from "./history.ts";
 export * from "./workspace-settings.ts";
 export * from "./composer.ts";

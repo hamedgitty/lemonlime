@@ -13,6 +13,9 @@ type Listener = (event: ThreadEvent) => void;
 export class EventStore {
   private readonly events: ThreadEvent[] = [];
   private readonly listeners = new Set<Listener>();
+  /** Lines not yet on disk because a write failed (a full disk); retried on the next append. */
+  private unsaved: string[] = [];
+  private warned = false;
 
   constructor(
     readonly threadId: string,
@@ -21,7 +24,8 @@ export class EventStore {
     private readonly transform: (event: NewEvent) => NewEvent = e => e,
   ) {
     if (file) {
-      mkdirSync(dirname(file), { recursive: true });
+      // Only this user may read a thread's history.
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
       if (existsSync(file)) this.load(file);
     }
   }
@@ -51,7 +55,7 @@ export class EventStore {
       seq: this.events.length + 1,
       at,
     });
-    if (this.file) appendFileSync(this.file, JSON.stringify(full) + "\n");
+    if (this.file) this.persist(JSON.stringify(full) + "\n");
     this.events.push(full);
     for (const l of this.listeners) {
       try {
@@ -61,6 +65,25 @@ export class EventStore {
       }
     }
     return full;
+  }
+
+  /**
+   * Write a line, along with any earlier ones that couldn't be written. A failed write (the
+   * disk is full) must not stop the thread: the event stays in memory and in order, and is
+   * written once there's room again.
+   */
+  private persist(line: string): void {
+    this.unsaved.push(line);
+    try {
+      appendFileSync(this.file!, this.unsaved.join(""), { mode: 0o600 });
+      this.unsaved = [];
+      this.warned = false;
+    } catch (err) {
+      if (!this.warned) {
+        this.warned = true;
+        process.stderr.write(`lemonlime-runner: couldn't save thread history (${(err as Error).message}); keeping it in memory and retrying\n`);
+      }
+    }
   }
 
   /** Events with seq > after, in order. */

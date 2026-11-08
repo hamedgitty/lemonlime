@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { installCoauthorHooks } from "./coauthors.ts";
@@ -1156,7 +1156,20 @@ export class ThreadRunner {
       ...(this.recap ? { recap: this.recap } : {}),
       ...(this.retry ? { retry: this.retry } : {}),
     };
-    writeFileSync(f, JSON.stringify(state, null, 2));
+    // Write a new file and move it into place, so a crash or a full disk mid-write leaves the
+    // previous state whole rather than a torn file. A failed save is retried at the next one.
+    const tmp = `${f}.${process.pid}.tmp`;
+    try {
+      writeFileSync(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+      renameSync(tmp, f);
+    } catch (err) {
+      try {
+        rmSync(tmp, { force: true });
+      } catch {
+        // Nothing to clean up.
+      }
+      process.stderr.write(`lemonlime-runner: couldn't save thread state (${(err as Error).message})\n`);
+    }
   }
 }
 

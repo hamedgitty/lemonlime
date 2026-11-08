@@ -9,13 +9,16 @@ const MIN_SECRET_LENGTH = 6;
  * sent, so values never reach history, apps or the control plane.
  */
 export function createRedactor(secrets: Record<string, string>): (event: NewEvent) => NewEvent {
-  // Read on every event: secrets can be added later (e.g. after signing an agent in).
+  // Read on every event: secrets can be added later (after signing an agent in), or change
+  // under the same name (signing in again), so compare names and values, not just how many.
   let pairs: [string, string][] = [];
-  let seen = -1;
+  let seen: string | null = null;
   const refresh = () => {
-    const keys = Object.keys(secrets).length;
-    if (keys === seen) return;
-    seen = keys;
+    const now = Object.entries(secrets)
+      .map(([k, v]) => `${k}\u0000${v}`)
+      .join("\u0001");
+    if (now === seen) return;
+    seen = now;
     // Longest first, so a secret that contains another is replaced whole.
     pairs = Object.entries(secrets)
       .filter(([, v]) => v.length >= MIN_SECRET_LENGTH)

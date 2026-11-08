@@ -9,6 +9,15 @@ describe("secret redaction", () => {
     expect(out).toEqual({ type: "tool_result", callId: "c", output: { log: ["using [secret NPM_TOKEN]", "[secret API] again", "pin 1234"] }, isError: false });
   });
 
+  it("hides a secret's new value after it changes under the same name (signing in again)", () => {
+    const secrets: Record<string, string> = { CLAUDE_TOKEN: "sk-old-token-0001" };
+    const redact = createRedactor(secrets);
+    const msg = (text: string) => redact({ type: "agent_message", text }) as { text: string };
+    expect(msg("sk-old-token-0001").text).toBe("[secret CLAUDE_TOKEN]");
+    secrets.CLAUDE_TOKEN = "sk-new-token-0002";
+    expect(msg("sk-new-token-0002").text).toBe("[secret CLAUDE_TOKEN]");
+  });
+
   it("reads the secret names from LEMONLIME_REDACT_ENV", () => {
     expect(secretsFromEnv({ LEMONLIME_REDACT_ENV: "A, B,C", A: "value-a", B: "value-b" })).toEqual({ A: "value-a", B: "value-b" });
     expect(secretsFromEnv({})).toEqual({});

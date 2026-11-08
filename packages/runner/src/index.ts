@@ -6,7 +6,7 @@ export { capEvent, capValue, MAX_MESSAGE_CHARS, MAX_TOOL_CHARS } from "./limits.
 export { startServer, type ServerOptions, type RunningServer } from "./server.ts";
 export { startHeartbeat, type Heartbeat, type HeartbeatOptions } from "./heartbeat.ts";
 export { ActivityMonitor, type ActivityMonitorOptions, type BackgroundActivity } from "./activity.ts";
-export { cleanup, lemonlimeHome, main, splitCommand, worktreePathFor, writeAgentFiles } from "./cli.ts";
+export { cleanup, historyCommand, lemonlimeHome, main, splitCommand, worktreePathFor, writeAgentFiles } from "./cli.ts";
 export { RUNNER_VERSION } from "./version.ts";
 export { createRedactor, secretsFromEnv } from "./redact.ts";
 export { LOGIN_PLANS, LoginSession, type AgentCredential, type LoginUpdate } from "./login.ts";
@@ -23,3 +23,4 @@ export { allowedRequest, startTunnel, type RunningTunnel } from "./tunnel.ts";
 export { MAX_SUBAGENT_CHILDREN, MAX_SUBAGENT_DEPTH, Subagents, type SubagentInfo } from "./subagents.ts";
 export { runSubagentTool } from "./subagents-mcp.ts";
 export * from "./relay.ts";
+export { defaultRoots, importHistory, parseHistoryId, scanHistory, type HistoryRoots, type ImportOptions, type ScanOptions } from "./history/index.ts";

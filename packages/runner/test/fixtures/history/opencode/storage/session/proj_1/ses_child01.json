@@ -1,0 +1,9 @@
+{
+  "id": "ses_child01",
+  "projectID": "proj_1",
+  "parentID": "ses_fixture01",
+  "directory": "__REPO__",
+  "title": "Subagent work",
+  "version": "0.9.0",
+  "time": { "created": 1792911610000, "updated": 1792911620000 }
+}

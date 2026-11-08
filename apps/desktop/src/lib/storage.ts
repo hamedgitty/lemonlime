@@ -200,7 +200,7 @@ export const UiPrefs = z.object({
   /** In a split, the panes you aren't typing in sit back a little. */
   dimInactivePanes: z.boolean().catch(true).default(true),
   /** Keep the one-click prompts on Home after the first few threads. */
-  alwaysShowStarters: z.boolean().catch(false).default(false),
+  keepStarterPrompts: z.boolean().catch(false).default(false),
   /** Show which keys do what next to buttons while ⌘ (Ctrl) is held. */
   shortcutHints: z.boolean().catch(true).default(true),
   /** Links in the agent's replies open in the side panel's browser instead of the system browser. */

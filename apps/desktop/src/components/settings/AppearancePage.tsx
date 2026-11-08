@@ -95,8 +95,8 @@ export function AppearancePage({ ctx }: { ctx: SettingsCtx }) {
         <ToggleRow
           label="Always show one-click prompts"
           description="Ready-made first messages under the message box. Off, they go away once you've started a few threads."
-          checked={prefs.alwaysShowStarters}
-          onChange={alwaysShowStarters => onPrefs({ alwaysShowStarters })}
+          checked={prefs.keepStarterPrompts}
+          onChange={keepStarterPrompts => onPrefs({ keepStarterPrompts })}
         />
       </Section>
     </>

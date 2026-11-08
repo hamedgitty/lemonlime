@@ -13,7 +13,7 @@ import {
   Settings as SettingsIcon,
   UserRound,
 } from "lucide-react";
-import { anchorOf, groupByPage, searchSettings, type SettingEntry } from "../lib/settingsIndex.ts";
+import { settingAnchor, groupByPage, findSettings, type SettingEntry } from "../lib/settingsIndex.ts";
 import { requestSettingsTab, requestSettingTarget, SETTING_TARGET_EVENT, takeSettingTarget } from "../lib/settingsNav.ts";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
@@ -70,7 +70,7 @@ function searchResults(query: string): Result[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const groups = groupByPage(
-    searchSettings(q),
+    findSettings(q),
     SETTINGS_PAGES.map(p => p.id),
   );
   const out: Result[] = [];
@@ -107,7 +107,7 @@ export function SettingsSidebar({ page, onPage, onBack }: { page: SettingsPage; 
   const pick = (r: Result) => {
     if (r.kind === "entry") {
       if (r.entry.tab) requestSettingsTab(r.entry.page, r.entry.tab);
-      requestSettingTarget(r.entry.page, anchorOf(r.entry));
+      requestSettingTarget(r.entry.page, settingAnchor(r.entry));
     }
     onPage(r.page.id);
   };
@@ -242,7 +242,7 @@ export function SettingsSidebar({ page, onPage, onBack }: { page: SettingsPage; 
 }
 
 /** Brings the row Settings search asked for into view and tints it, once the page shows it. */
-function useRevealSetting(page: string, root: React.RefObject<HTMLElement | null>) {
+function useJumpToSetting(page: string, root: React.RefObject<HTMLElement | null>) {
   const pageRef = useRef(page);
   pageRef.current = page;
   useEffect(() => {
@@ -283,7 +283,7 @@ function useRevealSetting(page: string, root: React.RefObject<HTMLElement | null
 export function SettingsView({ page, ctx, importTab }: { page: SettingsPage; ctx: SettingsCtx; importTab?: ReactNode }) {
   const current = SETTINGS_PAGES.find(p => p.id === page) ?? SETTINGS_PAGES[0]!;
   const root = useRef<HTMLElement>(null);
-  useRevealSetting(current.id, root);
+  useJumpToSetting(current.id, root);
   return (
     <main ref={root} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
       {/* One heading: the page's name in the title bar; its tabs sit right under it. */}

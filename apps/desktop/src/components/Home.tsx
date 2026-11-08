@@ -596,7 +596,7 @@ export function Home({
 
         {checklist && showGetStarted(checklist) && <GetStarted facts={checklist} onStep={onStep} onDismiss={() => onPrefs({ getStartedDismissed: true })} />}
 
-        {(threadCount < 10 || prefs.alwaysShowStarters) && (
+        {(threadCount < 10 || prefs.keepStarterPrompts) && (
           <>
             <div className="mt-10 flex items-center gap-3 text-[13px] text-ink-faint" aria-hidden="true">
               <span className="h-px flex-1 bg-line" />

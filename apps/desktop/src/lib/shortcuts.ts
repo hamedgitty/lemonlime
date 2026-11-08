@@ -110,7 +110,7 @@ export function validCombo(combo: string): boolean {
 }
 
 /** Turn a shortcut off: it stays off (an empty combo) until it's reset or given new keys. */
-export function clearShortcut(overrides: Record<string, string>, id: ShortcutId): Record<string, string> {
+export function turnOffShortcut(overrides: Record<string, string>, id: ShortcutId): Record<string, string> {
   return { ...overrides, [id]: "" };
 }
 

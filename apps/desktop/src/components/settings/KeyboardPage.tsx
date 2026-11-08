@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { RotateCcw, Search, X } from "lucide-react";
 import {
-  clearShortcut,
+  turnOffShortcut,
   comboOf,
   FIXED_SHORTCUTS,
   IS_MAC,
@@ -98,7 +98,7 @@ export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
                     >
                       {isRecording ? "Press keys…" : keys ? keyCaps(keys).map(k => <Kbd key={k}>{k}</Kbd>) : <span className="text-ink-faint">Off</span>}
                     </button>
-                    <IconButton label={`Turn off ${s.label}`} disabled={!keys} onClick={() => onPrefs({ shortcuts: clearShortcut(overrides, s.id) })}>
+                    <IconButton label={`Turn off ${s.label}`} disabled={!keys} onClick={() => onPrefs({ shortcuts: turnOffShortcut(overrides, s.id) })}>
                       <X aria-hidden="true" className="size-4" />
                     </IconButton>
                     <IconButton

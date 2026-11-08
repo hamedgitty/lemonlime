@@ -122,12 +122,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   on("updates", "Version", "version about"),
 ];
 
-export const anchorOf = (e: SettingEntry) => e.anchor ?? e.title;
+export const settingAnchor = (e: SettingEntry) => e.anchor ?? e.title;
 
 const words = (s: string) => s.toLowerCase().split(/\s+/).filter(Boolean);
 
 /** The options matching a search, best first: every word must appear in the title, description or keywords. */
-export function searchSettings(query: string, index: readonly SettingEntry[] = SETTINGS_INDEX): SettingEntry[] {
+export function findSettings(query: string, index: readonly SettingEntry[] = SETTINGS_INDEX): SettingEntry[] {
   const q = words(query);
   if (!q.length) return [];
   const scored: { e: SettingEntry; score: number; i: number }[] = [];

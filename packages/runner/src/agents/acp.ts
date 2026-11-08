@@ -3,7 +3,7 @@ import type { AgentKind, NewEvent } from "@lemonlime/protocol";
 import { summarizeToolInput, type ApprovalDecision } from "../approvals.ts";
 import { dangerousCommand } from "../command-guard.ts";
 import { lineSplitter } from "./lines.ts";
-import { killGently, tryJson } from "./process.ts";
+import { GROUPS, killGently, track, tryJson } from "./process.ts";
 import {
   AgentError,
   classifyAgentFailure,
@@ -70,7 +70,10 @@ class AcpSession implements AgentSession {
         env: { ...process.env, ...this.opts.env },
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        // Its own process group, so stopping it also stops what it started.
+        detached: GROUPS,
       });
+      track(child);
       this.child = child;
       child.stderr?.on("data", (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-4000)));
       const lines = lineSplitter(

@@ -17,6 +17,7 @@ import {
   type Thread,
 } from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
+import { killAllAgentGroups } from "./agents/process.ts";
 import { runApprovalMcp } from "./approval-mcp.ts";
 import { runSubagentsMcp } from "./subagents-mcp.ts";
 import { GitWorkspace } from "./git.ts";
@@ -505,6 +506,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     heartbeat?.stop();
     await runner.close();
     await server.close();
+    // Shells, builds and dev servers the agent started go too, not just the agent.
+    killAllAgentGroups();
     process.exit(code);
   };
   const heartbeat = values["control-plane"]
@@ -521,6 +524,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 
   process.on("SIGTERM", () => void shutdown(0));
   process.on("SIGINT", () => void shutdown(0));
+  // Agents run in their own process groups, which would outlive a runner that dies another way.
+  process.on("exit", () => killAllAgentGroups());
 }
 
 /**

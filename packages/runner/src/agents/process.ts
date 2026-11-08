@@ -29,7 +29,10 @@ export function runLineProcess(o: LineProcessOptions): Promise<void> {
         env: { ...process.env, ...o.env },
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
+        // Its own process group, so stopping it also stops what it started (see killGently).
+        detached: GROUPS,
       });
+      track(child);
     } catch (err) {
       reject(new AgentError(`Could not start ${o.command}: ${String(err)}`, "agent_not_found"));
       return;
@@ -66,13 +69,73 @@ export function runLineProcess(o: LineProcessOptions): Promise<void> {
   });
 }
 
+/** Agents run in their own process group, except on Windows, which has none. */
+export const GROUPS = process.platform !== "win32";
+
+/** Process groups of agents started by this runner that may still have members. */
+const groups = new Set<number>();
+
+/**
+ * Remember a spawned agent's process group, so a stop or shutdown reaches the shells, builds
+ * and servers it started too, even after the agent itself has exited.
+ */
+export function track(child: ChildProcess): void {
+  if (!GROUPS || !child.pid) return;
+  groups.add(child.pid);
+  // Its own exit doesn't end the group: background jobs it started live on until a stop.
+  // Forget it only once nothing is left in the group.
+  child.once("close", () => {
+    if (!groupAlive(child.pid!)) groups.delete(child.pid!);
+  });
+}
+
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function signalGroup(child: ChildProcess, sig: NodeJS.Signals): void {
+  if (GROUPS && child.pid) {
+    try {
+      process.kill(-child.pid, sig);
+      return;
+    } catch {
+      // The group is gone, or it never was one: fall back to the process itself.
+    }
+  }
+  try {
+    child.kill(sig);
+  } catch {
+    // Already gone.
+  }
+}
+
+/** Stop an agent and everything it started: SIGINT to its group, SIGKILL after the grace period. */
 export function killGently(child: ChildProcess, graceMs = 3000): void {
-  if (child.exitCode !== null || child.killed) return;
-  child.kill("SIGINT");
+  const leaderRunning = child.exitCode === null && child.signalCode === null;
+  if (!leaderRunning && !(GROUPS && child.pid && groupAlive(child.pid))) return;
+  signalGroup(child, "SIGINT");
   const t = setTimeout(() => {
-    if (child.exitCode === null) child.kill("SIGKILL");
+    signalGroup(child, "SIGKILL");
+    if (child.pid) groups.delete(child.pid);
   }, graceMs);
   t.unref();
+}
+
+/** On the runner's way out: end every agent process group it started. */
+export function killAllAgentGroups(): void {
+  for (const pgid of groups) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+  groups.clear();
 }
 
 export function tryJson(line: string): unknown {

@@ -80,7 +80,7 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch | null {
   }
 
   // Walk back to find where each letter matched.
-  const positions = new Array<number>(n);
+  const positions: number[] = Array.from({ length: n }, () => 0);
   let matchRequired = false;
   for (let i = n - 1, j = m - 1; i >= 0; i--) {
     for (; j >= 0; j--) {

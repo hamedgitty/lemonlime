@@ -91,19 +91,36 @@ export class CloudApi {
     return Array.isArray(body?.automations) ? body.automations : [];
   }
 
-  async createAutomation(input: Omit<AutomationInfo, "id" | "enabled" | "nextRunAt" | "recentRuns"> & { enabled?: boolean }): Promise<AutomationInfo> {
+  async createAutomation(
+    input: Omit<AutomationInfo, "id" | "enabled" | "nextRunAt" | "recentRuns" | "hasWebhook" | "pausedReason"> & { enabled?: boolean },
+  ): Promise<AutomationInfo> {
     return ((await this.request("POST", "/api/automations", input)) as { automation: AutomationInfo }).automation;
   }
 
   async updateAutomation(
     id: string,
-    patch: Partial<Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name" | "agent" | "repo" | "sandboxSize">>,
+    patch: Partial<Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name" | "agent" | "repo" | "sandboxSize" | "checkScript">>,
   ): Promise<AutomationInfo> {
     return ((await this.request("PATCH", `/api/automations/${encodeURIComponent(id)}`, patch)) as { automation: AutomationInfo }).automation;
   }
 
   async deleteAutomation(id: string): Promise<void> {
     await this.request("DELETE", `/api/automations/${encodeURIComponent(id)}`);
+  }
+
+  /** An automation's runs, newest first (more than the few the list carries). */
+  async automationRuns(id: string): Promise<AutomationRun[]> {
+    const body = (await this.request("GET", `/api/automations/${encodeURIComponent(id)}/runs`)) as { runs?: AutomationRun[] } | null;
+    return Array.isArray(body?.runs) ? body.runs : [];
+  }
+
+  /** Give an automation a webhook, or a new secret for it. The URL comes back this once. */
+  async rotateAutomationWebhook(id: string): Promise<string> {
+    return ((await this.request("POST", `/api/automations/${encodeURIComponent(id)}/webhook`)) as { url: string }).url;
+  }
+
+  async removeAutomationWebhook(id: string): Promise<void> {
+    await this.request("DELETE", `/api/automations/${encodeURIComponent(id)}/webhook`);
   }
 
   /** Rename a cloud thread. */
@@ -314,28 +331,40 @@ function parseWithEndpoint(body: unknown): ThreadWithEndpoint {
   throw new CloudError("The control plane sent a thread this app does not understand.", 200);
 }
 
+/** One time an automation was due or called. */
+export interface AutomationRun {
+  id: string;
+  status: "started" | "skipped" | "failed";
+  /** What it came to, from its thread; older servers don't say. */
+  outcome?: "started" | "finished" | "skipped" | "failed";
+  trigger?: "schedule" | "webhook";
+  ranAt: string;
+  threadId: string | null;
+  detail: string | null;
+  /** When someone marked it as looked at. */
+  reviewedAt?: string | null;
+  /** A short summary of how the run went, when the server has one. */
+  summary?: string | null;
+}
+
 export interface AutomationInfo {
   id: string;
   name: string;
+  /** Cron; empty when it only runs from its webhook. */
   schedule: string;
   timezone: string;
   agent: { kind: "claude-code" | "codex" | "opencode" | "acp"; model?: string; reasoning?: string };
   repo: { url: string; baseBranch: string };
   sandboxSize?: "small" | "large";
   prompt: string;
+  /** Shell command run first; the run goes ahead only if it prints something. */
+  checkScript?: string;
   enabled: boolean;
+  /** Why it turned itself off; null when on or paused by hand. */
+  pausedReason?: string | null;
+  hasWebhook?: boolean;
   nextRunAt: string | null;
-  recentRuns?: {
-    id: string;
-    status: "started" | "skipped" | "failed";
-    ranAt: string;
-    threadId: string | null;
-    detail: string | null;
-    /** When someone marked it as looked at. */
-    reviewedAt?: string | null;
-    /** A short summary of how the run went, when the server has one. */
-    summary?: string | null;
-  }[];
+  recentRuns?: AutomationRun[];
 }
 
 export interface WorkspaceCloudSettings {

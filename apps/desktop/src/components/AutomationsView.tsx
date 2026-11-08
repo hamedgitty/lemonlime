@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { AlarmClock, CheckCheck, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
-import { nextRun, parseSchedule, type AgentKind } from "@lemonlime/protocol";
-import type { AutomationInfo, CloudApi } from "../lib/cloud.ts";
+import { AlarmClock, Check, CheckCheck, CircleDashed, Pause, Pencil, Play, Plus, RotateCw, SkipForward, Trash2, Webhook, X } from "lucide-react";
+import { nextRun, parseSchedule, WEBHOOK_BODY_MAX_BYTES, type AgentKind } from "@lemonlime/protocol";
+import type { AutomationInfo, AutomationRun, CloudApi } from "../lib/cloud.ts";
 import { AGENT_LABELS, relativeTime, repoName } from "../lib/format.ts";
+import { CopyButton } from "../lib/markdown.tsx";
 import { confirmAction } from "../lib/native.ts";
 import { Tabs } from "./settings/parts.tsx";
 import { Button, SegmentedControl, Spinner, TextInput, cx } from "./ui.tsx";
@@ -12,6 +13,7 @@ const PRESETS = [
   { label: "Nightly 3:00", cron: "0 3 * * *" },
   { label: "Mondays 8:00", cron: "0 8 * * 1" },
   { label: "Hourly", cron: "0 * * * *" },
+  { label: "Webhook only", cron: "" },
 ];
 
 /** Ready-made automations. Picking one fills the form; nothing runs until it's saved. */
@@ -120,12 +122,22 @@ const when = (iso: string | null, tz: string) =>
     : "Not scheduled";
 
 type Tab = "overview" | "review" | "templates" | "scans";
-type Form = { name: string; schedule: string; agent: AgentKind; repoUrl: string; baseBranch: string; prompt: string; size: "small" | "large" };
-const EMPTY: Form = { name: "", schedule: PRESETS[0]!.cron, agent: "claude-code", repoUrl: "", baseBranch: "main", prompt: "", size: "small" };
+type Form = {
+  name: string;
+  schedule: string;
+  agent: AgentKind;
+  repoUrl: string;
+  baseBranch: string;
+  prompt: string;
+  checkScript: string;
+  size: "small" | "large";
+};
+const EMPTY: Form = { name: "", schedule: PRESETS[0]!.cron, agent: "claude-code", repoUrl: "", baseBranch: "main", prompt: "", checkScript: "", size: "small" };
 
 /**
- * Automations: a prompt that starts a new cloud thread on a schedule. They run in the
- * cloud whether or not this app is open; a run the plan can't cover is skipped.
+ * Automations: a prompt that starts a new cloud thread on a schedule or when its webhook
+ * is called. They run in the cloud whether or not this app is open; a run the plan can't
+ * cover, or whose check script finds nothing to do, is skipped.
  */
 export function AutomationsView({
   cloudApi,
@@ -207,6 +219,7 @@ export function AutomationsView({
                   repo: { url: f.repoUrl.trim(), baseBranch: f.baseBranch.trim() || "main" },
                   sandboxSize: f.size,
                   prompt: f.prompt.trim(),
+                  checkScript: f.checkScript.trim(),
                 };
                 if (editing.id) {
                   const u = await cloudApi.updateAutomation(editing.id, body);
@@ -233,6 +246,7 @@ export function AutomationsView({
                     repoUrl: a.repo.url,
                     baseBranch: a.repo.baseBranch,
                     prompt: a.prompt,
+                    checkScript: a.checkScript ?? "",
                     size: a.sandboxSize ?? "small",
                   },
                 })
@@ -252,6 +266,8 @@ export function AutomationsView({
               }
               onOpenThread={onOpenThread}
               onTemplates={() => setTab("templates")}
+              cloudApi={cloudApi}
+              onChanged={(id, patch) => setList(l => l?.map(x => (x.id === id ? { ...x, ...patch } : x)) ?? null)}
             />
           )}
           {tab === "review" && cloudApi && (
@@ -339,6 +355,8 @@ function Overview({
   onRemove,
   onOpenThread,
   onTemplates,
+  cloudApi,
+  onChanged,
 }: {
   list: AutomationInfo[] | null;
   onEdit: (a: AutomationInfo) => void;
@@ -346,6 +364,8 @@ function Overview({
   onRemove: (a: AutomationInfo) => void;
   onOpenThread: (id: string) => void;
   onTemplates: () => void;
+  cloudApi: CloudApi;
+  onChanged: (id: string, patch: Partial<AutomationInfo>) => void;
 }) {
   if (list === null)
     return (
@@ -358,65 +378,238 @@ function Overview({
       <div className="rounded-2xl border border-dashed border-line-strong px-6 py-10 text-center">
         <p className="text-[15px] font-medium">No automations yet</p>
         <p className="mt-1 text-[14px] text-ink-soft">
-          A prompt that starts a cloud thread on a schedule, like a nightly dependency bump. Start from a template, or write your own.
+          A prompt that starts a cloud thread on a schedule, like a nightly dependency bump, or when a webhook is called. Start from a template, or write your
+          own.
         </p>
         <Button className="mt-4" onClick={onTemplates}>
           Browse templates
         </Button>
       </div>
     );
+  const active = list.filter(a => a.enabled);
+  const paused = list.filter(a => !a.enabled);
+  const card = (a: AutomationInfo) => (
+    <AutomationCard
+      key={a.id}
+      a={a}
+      onEdit={onEdit}
+      onToggle={onToggle}
+      onRemove={onRemove}
+      onOpenThread={onOpenThread}
+      cloudApi={cloudApi}
+      onChanged={patch => onChanged(a.id, patch)}
+    />
+  );
   return (
-    <ul className="flex flex-col gap-3">
-      {list.map(a => (
-        <li key={a.id} className="rounded-xl border border-line bg-paper p-4">
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-[15px] font-medium">{a.name}</p>
-              <p className="mt-0.5 text-[13px] text-ink-soft">
-                <span className="font-mono">{a.schedule}</span> ({a.timezone}), {AGENT_LABELS[a.agent.kind]} on {repoName(a.repo.url)}
-              </p>
-              <p className={cx("mt-1 text-[13px]", a.enabled ? "text-ink" : "text-ink-faint")}>
-                {a.enabled ? `Next run ${when(a.nextRunAt, a.timezone)}` : "Paused"}
-              </p>
-            </div>
-            <Button size="sm" variant="ghost" onClick={() => onEdit(a)} aria-label={`Edit ${a.name}`}>
-              <Pencil aria-hidden="true" className="size-3.5" />
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onToggle(a)} aria-label={a.enabled ? `Pause ${a.name}` : `Resume ${a.name}`}>
-              {a.enabled ? <Pause aria-hidden="true" className="size-3.5" /> : <Play aria-hidden="true" className="size-3.5" />}
-              {a.enabled ? "Pause" : "Resume"}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => onRemove(a)} aria-label={`Delete ${a.name}`}>
-              <Trash2 aria-hidden="true" className="size-3.5" />
-            </Button>
-          </div>
-          {a.recentRuns && a.recentRuns.length > 0 && (
-            <ul aria-label="Recent runs" className="mt-3 flex flex-col gap-1 border-t border-line pt-2 text-[13px]">
-              {a.recentRuns.slice(0, 5).map(r => (
-                <RunLine key={r.id} run={r} onOpenThread={onOpenThread} />
-              ))}
-            </ul>
-          )}
-        </li>
-      ))}
-    </ul>
+    <>
+      {active.length > 0 && <ul className="flex flex-col gap-3">{active.map(card)}</ul>}
+      {paused.length > 0 && (
+        <section className={cx(active.length > 0 && "mt-8")} aria-labelledby="paused-automations">
+          <h2 id="paused-automations" className="mb-2.5 flex items-center gap-2 font-sans text-[14px] font-semibold tracking-normal">
+            Paused
+            <span className="rounded-full bg-cream-deep px-1.5 text-[12px] font-normal text-ink-soft tabular-nums">{paused.length}</span>
+          </h2>
+          <ul className="flex flex-col gap-3">{paused.map(card)}</ul>
+        </section>
+      )}
+    </>
   );
 }
 
-type Run = NonNullable<AutomationInfo["recentRuns"]>[number];
+function scheduleText(a: AutomationInfo): string {
+  return a.schedule ? `${a.schedule} (${a.timezone})` : "Webhook only";
+}
 
-function RunLine({ run: r, onOpenThread }: { run: Run; onOpenThread: (id: string) => void }) {
+function AutomationCard({
+  a,
+  onEdit,
+  onToggle,
+  onRemove,
+  onOpenThread,
+  cloudApi,
+  onChanged,
+}: {
+  a: AutomationInfo;
+  onEdit: (a: AutomationInfo) => void;
+  onToggle: (a: AutomationInfo) => void;
+  onRemove: (a: AutomationInfo) => void;
+  onOpenThread: (id: string) => void;
+  cloudApi: CloudApi;
+  onChanged: (patch: Partial<AutomationInfo>) => void;
+}) {
+  const [hookOpen, setHookOpen] = useState(false);
+  const [allRuns, setAllRuns] = useState<AutomationRun[] | "loading" | null>(null);
+  const runs = Array.isArray(allRuns) ? allRuns : (a.recentRuns ?? []).slice(0, 5);
+  return (
+    <li className={cx("rounded-xl border bg-paper p-4", a.enabled ? "border-line" : "border-line-strong")}>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-[15px] font-medium">{a.name}</p>
+          <p className="mt-0.5 text-[13px] text-ink-soft">
+            <span className={cx(a.schedule && "font-mono")}>{scheduleText(a)}</span>, {AGENT_LABELS[a.agent.kind]} on {repoName(a.repo.url)}
+            {a.hasWebhook && a.schedule ? ", and by webhook" : ""}
+            {a.checkScript ? ", checks first" : ""}
+          </p>
+          {a.enabled ? (
+            a.schedule && <p className="mt-1 text-[13px] text-ink">Next run {when(a.nextRunAt, a.timezone)}</p>
+          ) : (
+            <p className="mt-1 text-[13px] text-ink">{a.pausedReason ? `Paused itself: ${a.pausedReason}` : "Paused by you."}</p>
+          )}
+        </div>
+        <Button size="sm" variant="ghost" onClick={() => onEdit(a)} aria-label={`Edit ${a.name}`}>
+          <Pencil aria-hidden="true" className="size-3.5" />
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setHookOpen(o => !o)}
+          aria-expanded={hookOpen}
+          aria-label={`Webhook for ${a.name}`}
+          className={cx(a.hasWebhook && "text-leaf")}
+        >
+          <Webhook aria-hidden="true" className="size-3.5" />
+        </Button>
+        <Button size="sm" variant={a.enabled ? "ghost" : "primary"} onClick={() => onToggle(a)} aria-label={a.enabled ? `Pause ${a.name}` : `Resume ${a.name}`}>
+          {a.enabled ? <Pause aria-hidden="true" className="size-3.5" /> : <Play aria-hidden="true" className="size-3.5" />}
+          {a.enabled ? "Pause" : "Resume"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => onRemove(a)} aria-label={`Delete ${a.name}`}>
+          <Trash2 aria-hidden="true" className="size-3.5" />
+        </Button>
+      </div>
+      {hookOpen && <WebhookPanel a={a} cloudApi={cloudApi} onChanged={onChanged} />}
+      {runs.length > 0 && (
+        <div className="mt-3 border-t border-line pt-2">
+          <ul aria-label={`Runs of ${a.name}`} className="flex flex-col gap-1 text-[13px]">
+            {runs.map(r => (
+              <RunLine key={r.id} run={r} onOpenThread={onOpenThread} />
+            ))}
+          </ul>
+          {!Array.isArray(allRuns) && (a.recentRuns?.length ?? 0) >= 5 && (
+            <button
+              type="button"
+              disabled={allRuns === "loading"}
+              className="mt-1.5 text-[13px] text-leaf hover:underline disabled:opacity-60"
+              onClick={() => {
+                setAllRuns("loading");
+                cloudApi.automationRuns(a.id).then(setAllRuns, () => setAllRuns(null));
+              }}
+            >
+              {allRuns === "loading" ? "Loading…" : "Show all runs"}
+            </button>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+/** The webhook: a secret URL that starts a run when called. Its secret is only shown once, right after it's made. */
+function WebhookPanel({ a, cloudApi, onChanged }: { a: AutomationInfo; cloudApi: CloudApi; onChanged: (patch: Partial<AutomationInfo>) => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const make = () =>
+    run(async () => {
+      setUrl(await cloudApi.rotateAutomationWebhook(a.id));
+      onChanged({ hasWebhook: true });
+    });
+  return (
+    <div className="mt-3 rounded-lg border border-line bg-cream px-3.5 py-3">
+      <p className="text-[13.5px] text-ink-soft">
+        A POST to this URL starts a run. Any JSON body (up to {WEBHOOK_BODY_MAX_BYTES / 1024} KB) is passed to the agent as context, marked as untrusted input.
+      </p>
+      {url ? (
+        <>
+          <div className="mt-2.5 flex items-center gap-2">
+            <TextInput readOnly value={url} aria-label="Webhook URL" className="font-mono text-[12.5px]" onFocus={e => e.currentTarget.select()} />
+            <CopyButton text={url} label="Copy webhook URL" showLabel className="h-9 shrink-0 px-2.5" />
+          </div>
+          <p className="mt-1.5 text-[12.5px] text-ink-soft">Copy it now: it won't be shown again. Anyone with it can start this automation.</p>
+        </>
+      ) : a.hasWebhook ? (
+        <p className="mt-2 text-[13.5px]">The webhook is on. Its URL was shown when it was made; make a new one if you've lost it.</p>
+      ) : null}
+      {error && (
+        <p role="alert" className="mt-2 text-[13px] text-danger">
+          {error}
+        </p>
+      )}
+      <div className="mt-2.5 flex gap-2">
+        {a.hasWebhook ? (
+          <>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() =>
+                void (async () => {
+                  if (await confirmAction("Make a new webhook URL? The old one stops working straight away.")) await make();
+                })()
+              }
+            >
+              <RotateCw aria-hidden="true" className="size-3.5" />
+              New URL
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await cloudApi.removeAutomationWebhook(a.id);
+                  setUrl(null);
+                  onChanged({ hasWebhook: false });
+                })
+              }
+            >
+              Turn off
+            </Button>
+          </>
+        ) : (
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => void make()}>
+            {busy ? "Making…" : "Make a webhook URL"}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const OUTCOME: Record<NonNullable<AutomationRun["outcome"]>, { label: string; className: string; icon: ReactNode }> = {
+  started: { label: "Started", className: "text-ink-soft", icon: <CircleDashed aria-hidden="true" className="size-3.5" /> },
+  finished: { label: "Finished", className: "text-leaf", icon: <Check aria-hidden="true" className="size-3.5" /> },
+  skipped: { label: "Skipped", className: "text-amber", icon: <SkipForward aria-hidden="true" className="size-3.5" /> },
+  failed: { label: "Failed", className: "text-danger", icon: <X aria-hidden="true" className="size-3.5" /> },
+};
+
+function RunLine({ run: r, onOpenThread }: { run: AutomationRun; onOpenThread: (id: string) => void }) {
+  const o = OUTCOME[r.outcome ?? r.status];
   return (
     <li className="flex items-center gap-2">
-      <span className={r.status === "started" ? "text-leaf" : r.status === "skipped" ? "text-amber" : "text-danger"}>
-        {r.status === "started" ? "Started" : r.status === "skipped" ? "Skipped" : "Failed"}
+      <span className={cx("inline-flex w-[5.5rem] shrink-0 items-center gap-1", o.className)}>
+        {o.icon}
+        {o.label}
       </span>
-      <span className="text-ink-faint">{new Date(r.ranAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
+      <span className="shrink-0 text-ink-faint tabular-nums">
+        {new Date(r.ranAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+        {r.trigger === "webhook" ? ", webhook" : ""}
+      </span>
       <span className="min-w-0 flex-1 truncate text-ink-soft" title={r.summary ?? r.detail ?? undefined}>
         {r.summary ?? r.detail}
       </span>
-      {r.threadId && (
-        <button type="button" className="text-leaf hover:underline" onClick={() => onOpenThread(r.threadId!)}>
+      {r.threadId && r.status !== "skipped" && (
+        <button type="button" className="shrink-0 text-leaf hover:underline" onClick={() => onOpenThread(r.threadId!)}>
           Open thread
         </button>
       )}
@@ -477,12 +670,15 @@ function Review({
           >
             <span
               aria-hidden="true"
-              className={cx("mt-1.5 size-2 shrink-0 rounded-full", r.reviewedAt ? "bg-control" : r.status === "failed" ? "bg-danger" : "bg-lime-2")}
+              className={cx(
+                "mt-1.5 size-2 shrink-0 rounded-full",
+                r.reviewedAt ? "bg-control" : (r.outcome ?? r.status) === "failed" ? "bg-danger" : "bg-lime-2",
+              )}
             />
             <div className="min-w-0 flex-1">
               <p className="text-[14.5px] font-medium">{a.name}</p>
               <p className="text-[13px] text-ink-soft">
-                {r.status === "failed" ? "Failed" : "Ran"} {relativeTime(r.ranAt)} on {repoName(a.repo.url)}
+                {(r.outcome ?? r.status) === "failed" ? "Failed" : "Ran"} {relativeTime(r.ranAt)} on {repoName(a.repo.url)}
               </p>
               {(r.summary || r.detail) && <p className="mt-1 line-clamp-3 text-[13.5px]">{r.summary ?? r.detail}</p>}
             </div>
@@ -551,6 +747,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
   const zone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
   const set = (p: Partial<Form>) => setForm(f => ({ ...f, ...p }));
   const preview = useMemo(() => {
+    if (!form.schedule.trim()) return { ok: true, text: "Runs only when its webhook is called. Make the webhook URL after saving." };
     try {
       parseSchedule(form.schedule);
       const next = nextRun(form.schedule, new Date(), zone);
@@ -583,18 +780,20 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
         <SegmentedControl
           label="Common schedules"
           value={PRESETS.find(p => p.cron === form.schedule)?.cron ?? "custom"}
-          onChange={v => v !== "custom" && set({ schedule: v })}
+          onChange={v => set({ schedule: v === "custom" ? form.schedule || "0 9 * * *" : v })}
           options={[...PRESETS.map(p => ({ value: p.cron, label: p.label })), { value: "custom", label: "Custom" }]}
         />
-        <TextInput
-          aria-label="Schedule (cron)"
-          className="mt-2 font-mono text-[13px]"
-          value={form.schedule}
-          onChange={e => set({ schedule: e.target.value })}
-          aria-invalid={preview.ok ? undefined : true}
-        />
+        {form.schedule.trim() !== "" ? (
+          <TextInput
+            aria-label="Schedule (cron)"
+            className="mt-2 font-mono text-[13px]"
+            value={form.schedule}
+            onChange={e => set({ schedule: e.target.value })}
+            aria-invalid={preview.ok ? undefined : true}
+          />
+        ) : null}
         <p className={cx("mt-1 text-[12.5px]", preview.ok ? "text-ink-faint" : "text-danger")}>
-          {preview.text} {preview.ok && `(${zone})`}
+          {preview.text} {preview.ok && form.schedule.trim() && `(${zone})`}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -647,6 +846,21 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           placeholder="Update the dependencies, run the tests, and open a pull request if anything changed."
           className="w-full rounded-lg border border-line-strong bg-paper px-3 py-2 text-[14px] text-ink outline-none placeholder:text-ink-faint focus:border-leaf"
         />
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-[13.5px] font-medium">Check first (optional)</span>
+        <textarea
+          rows={2}
+          maxLength={10_000}
+          value={form.checkScript}
+          onChange={e => set({ checkScript: e.target.value })}
+          spellCheck={false}
+          placeholder="gh issue list --label bug --search 'created:>=$(date -d yesterday +%F)'"
+          className="w-full rounded-lg border border-line-strong bg-paper px-3 py-2 font-mono text-[13px] text-ink outline-none placeholder:text-ink-faint focus:border-leaf"
+        />
+        <span className="mt-1 block text-[12.5px] text-ink-faint">
+          A shell command run in the sandbox before the agent starts. If it prints nothing or fails, the run is skipped; what it prints is given to the agent.
+        </span>
       </label>
       {error && (
         <p role="alert" className="text-[13.5px] text-danger">

@@ -1,10 +1,15 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlarmClock,
   Archive,
   ArchiveRestore,
   ArrowDownUp,
   BookOpen,
+  CircleAlert,
+  MailCheck,
+  MailOpen,
+  MessageCircleQuestion,
+  PencilLine,
   Download,
   FolderPlus,
   ChevronDown,
@@ -33,6 +38,7 @@ import type { ThreadSummary } from "../lib/threads.ts";
 import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { NAV_ITEMS, type NavItem, type UiPrefs } from "../lib/storage.ts";
 import { Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip } from "./primitives.tsx";
+import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
 import { LogoMark, Spinner, StatusDot, cx } from "./ui.tsx";
 
 export interface AppSidebarProps {
@@ -63,6 +69,12 @@ export interface AppSidebarProps {
   /** Card above the footer, e.g. cloud hours left (from the deployment). */
   usageCard?: ReactNode;
   onArchive: (t: ThreadSummary, archive: boolean) => void;
+  /** Each thread's status mark (see threadState.ts); missing means none. */
+  glyphs?: Record<string, RowGlyph>;
+  /** Unread threads show their title in bold. */
+  unread?: Set<string>;
+  onMarkUnread?: (t: ThreadSummary, unread: boolean) => void;
+  onRename?: (t: ThreadSummary, title: string) => void;
   /** Shows traffic lights' room in the capsule (macOS app window). */
   macChrome: boolean;
   searchOpen: boolean;
@@ -308,6 +320,10 @@ export function AppSidebar(p: AppSidebarProps) {
                       onPin={pin => p.onPrefs({ pinned: pin ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) })}
                       archived={false}
                       onArchive={a => p.onArchive(t, a)}
+                      glyph={p.glyphs?.[t.id] ?? null}
+                      unread={p.unread?.has(t.id) ?? false}
+                      {...(p.onMarkUnread ? { onMarkUnread: (u: boolean) => p.onMarkUnread!(t, u) } : {})}
+                      {...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {})}
                     />
                   ))}
                 </ul>
@@ -338,6 +354,9 @@ export function AppSidebar(p: AppSidebarProps) {
                     onPin={() => undefined}
                     archived
                     onArchive={a => p.onArchive(t, a)}
+                    glyph={null}
+                    unread={false}
+                    {...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {})}
                   />
                 ))}
               </ul>
@@ -446,6 +465,10 @@ function ThreadRow({
   archived,
   onArchive,
   agentIcon = false,
+  glyph,
+  unread,
+  onMarkUnread,
+  onRename,
 }: {
   t: ThreadSummary;
   selected: boolean;
@@ -455,34 +478,54 @@ function ThreadRow({
   onPin: (pin: boolean) => void;
   archived: boolean;
   onArchive: (archive: boolean) => void;
+  glyph: RowGlyph;
+  unread: boolean;
+  onMarkUnread?: (unread: boolean) => void;
+  onRename?: (title: string) => void;
 }) {
-  const working = t.status === "running" || t.status === "provisioning";
+  const [renaming, setRenaming] = useState(false);
   return (
     <li className="group/row relative">
-      <button
-        type="button"
-        onClick={() => onSelect(t)}
-        aria-current={selected ? "page" : undefined}
-        className={cx(
-          "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
-          selected ? "bg-cream-hover" : "hover:bg-cream-hover",
-        )}
-      >
-        {working || t.status === "failed" ? (
-          <StatusDot status={t.status} className="mx-[5px]" />
-        ) : agentIcon ? (
-          <AgentBadge kind={t.agent.kind} />
-        ) : t.mode === "cloud" ? (
-          <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-        ) : (
-          <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-        )}
-        <span className="min-w-0 flex-1 truncate text-[14px] text-ink">{t.title}</span>
-        <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
-        <span className="sr-only">
-          {t.mode === "cloud" ? "Cloud" : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
-        </span>
-      </button>
+      {renaming && onRename ? (
+        <RenameField
+          initial={t.title}
+          onDone={title => {
+            setRenaming(false);
+            if (title !== null && title !== t.title) onRename(title);
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => onSelect(t)}
+          onDoubleClick={e => {
+            if (!onRename) return;
+            e.preventDefault();
+            setRenaming(true);
+          }}
+          aria-current={selected ? "page" : undefined}
+          className={cx(
+            "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
+            selected ? "bg-cream-hover" : "hover:bg-cream-hover",
+          )}
+        >
+          {glyph ? (
+            <RowMark glyph={glyph} status={t.status} />
+          ) : agentIcon ? (
+            <AgentBadge kind={t.agent.kind} />
+          ) : t.mode === "cloud" ? (
+            <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+          ) : (
+            <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+          )}
+          <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
+          <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
+          <span className="sr-only">
+            {t.mode === "cloud" ? "Cloud" : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
+            {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
+          </span>
+        </button>
+      )}
       <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100">
         <Menu
           align="end"
@@ -501,6 +544,16 @@ function ThreadRow({
               {pinned ? "Unpin" : "Pin to top"}
             </MenuItem>
           )}
+          {onRename && (
+            <MenuItem icon={<PencilLine />} onSelect={() => setRenaming(true)}>
+              Rename
+            </MenuItem>
+          )}
+          {!archived && onMarkUnread && (
+            <MenuItem icon={unread ? <MailCheck /> : <MailOpen />} onSelect={() => onMarkUnread(!unread)}>
+              {unread ? "Mark as read" : "Mark as unread"}
+            </MenuItem>
+          )}
           <MenuItem icon={archived ? <ArchiveRestore /> : <Archive />} onSelect={() => onArchive(!archived)}>
             {archived ? "Unarchive" : "Archive"}
           </MenuItem>
@@ -510,6 +563,59 @@ function ThreadRow({
         </Menu>
       </div>
     </li>
+  );
+}
+
+/** The row's one status mark. Each has its own shape, so none relies on colour alone. */
+function RowMark({ glyph, status }: { glyph: Exclude<RowGlyph, null>; status: ThreadSummary["status"] }) {
+  const label = GLYPH_LABELS[glyph];
+  if (glyph === "working") return <StatusDot status={status} className="mx-[5px]" />;
+  if (glyph === "failed") return <StatusDot status="failed" className="mx-[5px]" />;
+  const icon =
+    glyph === "error" ? (
+      <CircleAlert className="size-4 text-danger" />
+    ) : glyph === "waiting" ? (
+      <MessageCircleQuestion className="size-4 text-[#8A5A00]" />
+    ) : glyph === "draft" ? (
+      <PencilLine className="size-4 text-ink-faint" />
+    ) : (
+      <span className="mx-[4px] block size-2 rounded-full bg-leaf ring-2 ring-lime-soft" />
+    );
+  return (
+    <span role="img" aria-label={label} title={label} className="inline-flex size-4 shrink-0 items-center justify-center [&_svg]:shrink-0">
+      {icon}
+    </span>
+  );
+}
+
+/** Inline rename: Enter or leaving the field saves, Escape cancels. */
+function RenameField({ initial, onDone }: { initial: string; onDone: (title: string | null) => void }) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+  const done = useRef(false);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  const finish = (title: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(title === null ? null : title.trim() || null);
+  };
+  return (
+    <input
+      ref={ref}
+      value={value}
+      maxLength={200}
+      aria-label="Thread name"
+      onChange={e => setValue(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === "Enter") finish(value);
+        else if (e.key === "Escape") finish(null);
+      }}
+      onBlur={() => finish(value)}
+      className="h-8 w-full rounded-lg border border-line-strong bg-paper px-2 text-[14px] text-ink outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-leaf"
+    />
   );
 }
 

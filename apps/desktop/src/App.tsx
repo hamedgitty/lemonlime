@@ -14,6 +14,8 @@ import { needsUpdate } from "./components/settings/AgentsPage.tsx";
 import { TipProvider } from "./components/primitives.tsx";
 import { SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
+import { Toaster, toast } from "./components/Toaster.tsx";
+import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
@@ -37,6 +39,7 @@ import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import {
+  draftThreadIds,
   forgetEvents,
   loadLocalThreads,
   loadSettings,
@@ -162,6 +165,9 @@ export function App() {
     return () => stop();
   }, []);
 
+  // The latest prefs, for callbacks that run later (an Undo in a toast).
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
   const onPrefs = useCallback((patch: Partial<UiPrefs>) => {
     setPrefs(p => {
       const next = { ...p, ...patch };
@@ -246,6 +252,7 @@ export function App() {
   // What each local runner is doing, including threads that aren't open (for notifications and keep awake).
   const [localStatus, setLocalStatus] = useState<Record<string, ThreadStatus>>({});
   const [localWaiting, setLocalWaiting] = useState<Record<string, number>>({});
+  const [localSeq, setLocalSeq] = useState<Record<string, number>>({});
   const refreshRunners = useCallback(() => {
     void listLocalRunners()
       .then(ids => setRunning(prev => (sameSet(prev, ids) ? prev : new Set(ids))))
@@ -254,10 +261,13 @@ export function App() {
       .then(list => {
         const next: Record<string, ThreadStatus> = {};
         const waiting: Record<string, number> = {};
+        const seqs: Record<string, number> = {};
         for (const r of list) {
           if (r.health.status) next[r.threadId] = r.health.status;
           if (r.health.waitingApprovals) waiting[r.threadId] = r.health.waitingApprovals;
+          if (typeof r.health.latestSeq === "number") seqs[r.threadId] = r.health.latestSeq;
         }
+        setLocalSeq(prev => (JSON.stringify(prev) === JSON.stringify(seqs) ? prev : seqs));
         setLocalStatus(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
         setLocalWaiting(prev => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
       })
@@ -405,17 +415,30 @@ export function App() {
   const onArchive = useCallback(
     async (t: ThreadSummary, archive: boolean) => {
       const archived = { ...prefs.archived };
+      const wasPinned = prefs.pinned.includes(t.id);
       if (archive) {
-        if (t.mode === "local" && !prefs.archivedHint) {
-          const ok = await confirmAction(
-            "Archive this thread? Its agent stops and it moves to Archived. Archived threads on this computer are removed after 21 days; their branch stays in your repository.",
-          );
-          if (!ok) return;
-          onPrefs({ archivedHint: true });
-        }
         archived[t.id] = new Date().toISOString();
         // Free what it was using: nothing runs for an archived thread.
         if (t.mode === "local") void stopLocalRunner(t.id).finally(refreshRunners);
+        // The first time, say what archiving does; Undo puts it back either way.
+        const explain = t.mode === "local" && !prefs.archivedHint;
+        toast({
+          title: `Archived “${t.title}”`,
+          ...(explain
+            ? { description: "Its agent stopped. Archived threads on this computer are removed after 21 days; their branch stays in your repository." }
+            : {}),
+          action: {
+            label: "Undo",
+            onClick: () => {
+              const p = prefsRef.current;
+              const back = { ...p.archived };
+              delete back[t.id];
+              onPrefs({ archived: back, ...(wasPinned ? { pinned: [t.id, ...p.pinned.filter(id => id !== t.id)] } : {}) });
+            },
+          },
+          ...(explain ? { timeout: 10_000 } : {}),
+        });
+        if (explain) onPrefs({ archivedHint: true });
       } else delete archived[t.id];
       onPrefs({ archived, pinned: prefs.pinned.filter(id => id !== t.id) });
     },
@@ -626,6 +649,97 @@ export function App() {
   );
 
   shortcutState.current = { place, summaries, prefs };
+
+  // ── Sidebar states: waiting, unread, drafts; the dock badge ──
+  const [openWaiting, setOpenWaiting] = useState<Record<string, number>>({});
+  const onWaiting = useCallback((id: string, count: number) => setOpenWaiting(w => (w[id] === count ? w : { ...w, [id]: count })), []);
+  const [drafts, setDrafts] = useState<Set<string>>(draftThreadIds);
+  useEffect(() => {
+    const update = () => setDrafts(draftThreadIds());
+    window.addEventListener("lemonlime:drafts-changed", update);
+    return () => window.removeEventListener("lemonlime:drafts-changed", update);
+  }, []);
+  // Start keeping track of what was seen; threads from before count as read.
+  useEffect(() => {
+    if (!prefs.unreadSince) onPrefs({ unreadSince: new Date().toISOString() });
+  }, [prefs.unreadSince, onPrefs]);
+  const latestSeq = useCallback(
+    (t: ThreadSummary) => {
+      if (t.mode === "cloud") return cloudThreads.find(c => c.id === t.id)?.latestSeq ?? 0;
+      return Math.max(localThreads.find(m => m.id === t.id)?.lastSeq ?? 0, localSeq[t.id] ?? 0);
+    },
+    [cloudThreads, localThreads, localSeq],
+  );
+  const selectedId = place.view === "thread" ? place.selection.id : null;
+  // Opening a thread clears a hand-made "unread"; while open, what's there counts as seen.
+  useEffect(() => {
+    if (selectedId && prefsRef.current.markedUnread.includes(selectedId))
+      onPrefs({ markedUnread: prefsRef.current.markedUnread.filter(id => id !== selectedId) });
+  }, [selectedId, onPrefs]);
+  const selectedSummary = selectedId ? summaries.find(t => t.id === selectedId) : undefined;
+  const selectedSeq = selectedSummary ? latestSeq(selectedSummary) : 0;
+  useEffect(() => {
+    if (!selectedId) return;
+    const p = prefsRef.current;
+    if (p.markedUnread.includes(selectedId) || (p.seenSeq[selectedId] ?? -1) >= selectedSeq) return;
+    onPrefs({ seenSeq: { ...p.seenSeq, [selectedId]: selectedSeq } });
+  }, [selectedId, selectedSeq, onPrefs]);
+  const rowStates = useMemo(() => {
+    const glyphs: Record<string, RowGlyph> = {};
+    const unread = new Set<string>();
+    const waiting: { id: string; waiting: number }[] = [];
+    for (const t of summaries) {
+      const input = {
+        status: t.status,
+        // Local runners say how many answers they wait for; the open thread knows for itself.
+        waiting: t.mode === "local" ? Math.max(localWaiting[t.id] ?? 0, t.id === selectedId ? (openWaiting[t.id] ?? 0) : 0) : (openWaiting[t.id] ?? 0),
+        latestSeq: latestSeq(t),
+        seenSeq: prefs.seenSeq[t.id],
+        createdAt: t.createdAt,
+        unreadSince: prefs.unreadSince,
+        markedUnread: prefs.markedUnread.includes(t.id),
+        draft: drafts.has(t.id),
+        selected: t.id === selectedId,
+      };
+      glyphs[t.id] = rowGlyph(input);
+      if (isUnread(input)) unread.add(t.id);
+      waiting.push({ id: t.id, waiting: input.waiting });
+    }
+    return { glyphs, unread, waiting: waitingCount(waiting, prefs.archived) };
+  }, [summaries, localWaiting, openWaiting, latestSeq, prefs.seenSeq, prefs.unreadSince, prefs.markedUnread, prefs.archived, drafts, selectedId]);
+  // The dock (macOS) shows how many threads are waiting for you.
+  useEffect(() => {
+    if (!inDesktopShell()) return;
+    void import("@tauri-apps/api/window")
+      .then(({ getCurrentWindow }) => getCurrentWindow().setBadgeCount(rowStates.waiting > 0 ? rowStates.waiting : undefined))
+      .catch(err => console.warn("Couldn't set the dock badge", err));
+  }, [rowStates.waiting]);
+  const onMarkUnread = useCallback(
+    (t: ThreadSummary, unread: boolean) => {
+      const p = prefsRef.current;
+      if (unread) onPrefs({ markedUnread: [...p.markedUnread.filter(id => id !== t.id), t.id] });
+      else onPrefs({ markedUnread: p.markedUnread.filter(id => id !== t.id), seenSeq: { ...p.seenSeq, [t.id]: latestSeq(t) } });
+    },
+    [onPrefs, latestSeq],
+  );
+  const onRename = useCallback(
+    (t: ThreadSummary, title: string) => {
+      const clean = title.replace(/\s+/g, " ").trim().slice(0, 200);
+      if (!clean) return;
+      if (t.mode === "local") {
+        patchLocal(t.id, m => (m.title === clean ? null : { ...m, title: clean }));
+        return;
+      }
+      if (!cloudApi) return;
+      const before = cloudThreads.find(c => c.id === t.id)?.title ?? "";
+      setCloudThreads(list => list.map(c => (c.id === t.id ? { ...c, title: clean } : c)));
+      cloudApi.renameThread(t.id, clean).catch(err => {
+        setCloudThreads(list => list.map(c => (c.id === t.id ? { ...c, title: before } : c)));
+        toast({ title: "Couldn't rename the thread", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      });
+    },
+    [patchLocal, cloudApi, cloudThreads],
+  );
   const onArchiveRef = useRef(onArchive);
   onArchiveRef.current = onArchive;
 
@@ -762,149 +876,156 @@ export function App() {
         searchOpen={searchOpen}
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
+        glyphs={rowStates.glyphs}
+        unread={rowStates.unread}
+        onMarkUnread={onMarkUnread}
+        onRename={onRename}
         usageCard={summary ? <UsageCard summary={summary} /> : undefined}
       />
     );
 
   return (
     <TipProvider>
-      <div className="flex h-full overflow-hidden">
-        {sidebar}
-        <div className="relative flex min-w-0 flex-1 flex-col">
-          {prefs.sidebarCollapsed && place.view !== "settings" && (
-            <button
-              type="button"
-              aria-label="Show sidebar"
-              title="Show sidebar (⌘\)"
-              onClick={() => onPrefs({ sidebarCollapsed: false })}
-              className={cx(
-                "absolute top-3 z-10 inline-flex size-8 items-center justify-center rounded-full border border-line bg-cream text-ink-soft hover:text-ink",
-                MAC_CHROME ? "left-[84px]" : "left-3",
-              )}
-            >
-              <PanelLeft aria-hidden="true" className="size-4" />
-            </button>
-          )}
-          {update && (
-            <div role="status" className="flex items-center gap-3 border-b border-line bg-lime-soft px-6 py-2 text-[14px]">
-              <p className="min-w-0 flex-1">LemonLime {update.version} is ready.</p>
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={installing}
-                onClick={() => (setInstalling(true), void update.install().catch(() => setInstalling(false)))}
+      <Toaster>
+        <div className="flex h-full overflow-hidden">
+          {sidebar}
+          <div className="relative flex min-w-0 flex-1 flex-col">
+            {prefs.sidebarCollapsed && place.view !== "settings" && (
+              <button
+                type="button"
+                aria-label="Show sidebar"
+                title="Show sidebar (⌘\)"
+                onClick={() => onPrefs({ sidebarCollapsed: false })}
+                className={cx(
+                  "absolute top-3 z-10 inline-flex size-8 items-center justify-center rounded-full border border-line bg-cream text-ink-soft hover:text-ink",
+                  MAC_CHROME ? "left-[84px]" : "left-3",
+                )}
               >
-                {installing ? "Installing…" : "Restart to update"}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setUpdate(null)}>
-                Later
-              </Button>
-            </div>
-          )}
-          {usage && (
-            <div
-              role={usage.level === "info" ? "status" : "alert"}
-              className={cx(
-                "flex items-center gap-3 border-b px-6 py-2.5 text-[14px]",
-                usage.level === "blocked"
-                  ? "border-danger/25 bg-danger-soft"
-                  : usage.level === "warning"
-                    ? "border-[#f0d95c] bg-lemon-soft"
-                    : "border-line bg-cream-deep",
-              )}
-            >
-              <p className="min-w-0 flex-1 text-ink">{usage.message}</p>
-              {usage.actionUrl && (
-                <Button size="sm" variant="primary" onClick={() => void openExternal(usage.actionUrl!)}>
-                  {usage.actionLabel ?? "Continue"}
-                </Button>
-              )}
-            </div>
-          )}
-          <div className="relative flex min-h-0 flex-1">
-            <GlobalPanel
-              tabs={panelTabs}
-              active={panelActive}
-              onTabs={setPanelTabs}
-              onActive={setPanelActive}
-              side={prefs.panelSide}
-              onSide={panelSide => onPrefs({ panelSide })}
-              onClose={() => setPanelOpen(false)}
-              hidden={!panelOpen || place.view === "thread" || place.view === "settings"}
-            />
-            {place.view === "automations" ? (
-              <AutomationsView
-                cloudApi={cloudApi}
-                onConnectCloud={() => go({ view: "settings", page: "account" })}
-                onOpenThread={id => {
-                  void refreshCloud();
-                  go({ view: "thread", selection: { mode: "cloud", id } });
-                }}
-                scans={<AgentScans runnerPath={settings.runnerPath} />}
-              />
-            ) : place.view === "skills" ? (
-              <SkillsView onPrompt={promptInComposer} />
-            ) : place.view === "plugins" ? (
-              <PluginsView onPrompt={promptInComposer} />
-            ) : place.view === "settings" ? (
-              <SettingsView
-                page={place.page}
-                ctx={settingsCtx}
-                importTab={<section className="mb-8 rounded-xl border border-line bg-paper p-5">{importChats()}</section>}
-              />
-            ) : place.view === "thread" && selectedEntry ? (
-              <ThreadView
-                key={`${selectedEntry.mode}:${selection?.id}`}
-                entry={selectedEntry}
-                runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
-                runnerPath={settings.runnerPath}
-                cloudApi={cloudApi}
-                onLocalProgress={onLocalProgress}
-                onLocalStatus={onLocalStatus}
-                onLocalPromptSent={onLocalPromptSent}
-                onStopLocal={onStopLocal}
-                onRemoveLocal={onRemoveLocal}
-                onCloudRefresh={refreshCloud}
-                onRunnersChanged={refreshRunners}
-                {...(cloudConfigured || selectedEntry.mode === "cloud" ? { onMove: moveThread } : {})}
-                followUp={prefs.followUp}
-                {...(selectedEntry.mode === "local" && inDesktopShell()
-                  ? {
-                      onOpenFolder: () => {
-                        const m = selectedEntry.meta;
-                        void threadFolder(m.repoPath, m.id)
-                          .then(dir => openFolder(dir, prefs.editor))
-                          .catch(err => console.warn("Couldn't open the thread's folder", err));
-                      },
-                    }
-                  : {})}
-                foldFinished={prefs.collapseFinished}
-                notifyWhenFocused={prefs.notifications.whenFocused}
-                {...(prefs.notifications.enabled && prefs.notifications.needsInput
-                  ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
-                  : {})}
-                computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
-                onComputerLevel={level => {
-                  if (selectedEntry.mode !== "cloud") return;
-                  onPrefs({ computerAccess: { ...prefs.computerAccess, [selectedEntry.thread.id]: level } });
-                }}
-              />
-            ) : (
-              <Home
-                cloudAvailable={cloudConfigured}
-                threadCount={summaries.length}
-                prefs={prefs}
-                onPrefs={onPrefs}
-                onCreate={createThread}
-                onConnectCloud={() => go({ view: "settings", page: "account" })}
-                draft={draft}
-                acpAgents={settings.acpAgents}
-                {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
-              />
+                <PanelLeft aria-hidden="true" className="size-4" />
+              </button>
             )}
+            {update && (
+              <div role="status" className="flex items-center gap-3 border-b border-line bg-lime-soft px-6 py-2 text-[14px]">
+                <p className="min-w-0 flex-1">LemonLime {update.version} is ready.</p>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  disabled={installing}
+                  onClick={() => (setInstalling(true), void update.install().catch(() => setInstalling(false)))}
+                >
+                  {installing ? "Installing…" : "Restart to update"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setUpdate(null)}>
+                  Later
+                </Button>
+              </div>
+            )}
+            {usage && (
+              <div
+                role={usage.level === "info" ? "status" : "alert"}
+                className={cx(
+                  "flex items-center gap-3 border-b px-6 py-2.5 text-[14px]",
+                  usage.level === "blocked"
+                    ? "border-danger/25 bg-danger-soft"
+                    : usage.level === "warning"
+                      ? "border-[#f0d95c] bg-lemon-soft"
+                      : "border-line bg-cream-deep",
+                )}
+              >
+                <p className="min-w-0 flex-1 text-ink">{usage.message}</p>
+                {usage.actionUrl && (
+                  <Button size="sm" variant="primary" onClick={() => void openExternal(usage.actionUrl!)}>
+                    {usage.actionLabel ?? "Continue"}
+                  </Button>
+                )}
+              </div>
+            )}
+            <div className="relative flex min-h-0 flex-1">
+              <GlobalPanel
+                tabs={panelTabs}
+                active={panelActive}
+                onTabs={setPanelTabs}
+                onActive={setPanelActive}
+                side={prefs.panelSide}
+                onSide={panelSide => onPrefs({ panelSide })}
+                onClose={() => setPanelOpen(false)}
+                hidden={!panelOpen || place.view === "thread" || place.view === "settings"}
+              />
+              {place.view === "automations" ? (
+                <AutomationsView
+                  cloudApi={cloudApi}
+                  onConnectCloud={() => go({ view: "settings", page: "account" })}
+                  onOpenThread={id => {
+                    void refreshCloud();
+                    go({ view: "thread", selection: { mode: "cloud", id } });
+                  }}
+                  scans={<AgentScans runnerPath={settings.runnerPath} />}
+                />
+              ) : place.view === "skills" ? (
+                <SkillsView onPrompt={promptInComposer} />
+              ) : place.view === "plugins" ? (
+                <PluginsView onPrompt={promptInComposer} />
+              ) : place.view === "settings" ? (
+                <SettingsView
+                  page={place.page}
+                  ctx={settingsCtx}
+                  importTab={<section className="mb-8 rounded-xl border border-line bg-paper p-5">{importChats()}</section>}
+                />
+              ) : place.view === "thread" && selectedEntry ? (
+                <ThreadView
+                  key={`${selectedEntry.mode}:${selection?.id}`}
+                  entry={selectedEntry}
+                  runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
+                  runnerPath={settings.runnerPath}
+                  cloudApi={cloudApi}
+                  onLocalProgress={onLocalProgress}
+                  onLocalStatus={onLocalStatus}
+                  onLocalPromptSent={onLocalPromptSent}
+                  onStopLocal={onStopLocal}
+                  onRemoveLocal={onRemoveLocal}
+                  onCloudRefresh={refreshCloud}
+                  onRunnersChanged={refreshRunners}
+                  {...(cloudConfigured || selectedEntry.mode === "cloud" ? { onMove: moveThread } : {})}
+                  followUp={prefs.followUp}
+                  {...(selectedEntry.mode === "local" && inDesktopShell()
+                    ? {
+                        onOpenFolder: () => {
+                          const m = selectedEntry.meta;
+                          void threadFolder(m.repoPath, m.id)
+                            .then(dir => openFolder(dir, prefs.editor))
+                            .catch(err => console.warn("Couldn't open the thread's folder", err));
+                        },
+                      }
+                    : {})}
+                  foldFinished={prefs.collapseFinished}
+                  notifyWhenFocused={prefs.notifications.whenFocused}
+                  {...(prefs.notifications.enabled && prefs.notifications.needsInput
+                    ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
+                    : {})}
+                  onWaiting={onWaiting}
+                  computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
+                  onComputerLevel={level => {
+                    if (selectedEntry.mode !== "cloud") return;
+                    onPrefs({ computerAccess: { ...prefs.computerAccess, [selectedEntry.thread.id]: level } });
+                  }}
+                />
+              ) : (
+                <Home
+                  cloudAvailable={cloudConfigured}
+                  threadCount={summaries.length}
+                  prefs={prefs}
+                  onPrefs={onPrefs}
+                  onCreate={createThread}
+                  onConnectCloud={() => go({ view: "settings", page: "account" })}
+                  draft={draft}
+                  acpAgents={settings.acpAgents}
+                  {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      </Toaster>
     </TipProvider>
   );
 }

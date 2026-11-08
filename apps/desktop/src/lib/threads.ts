@@ -14,6 +14,7 @@ export interface ThreadSummary {
   branch: string;
   status: DisplayStatus;
   updatedAt: string;
+  createdAt: string;
 }
 
 export function summarize(entry: ThreadEntry, runnerUp: boolean): ThreadSummary {
@@ -28,6 +29,7 @@ export function summarize(entry: ThreadEntry, runnerUp: boolean): ThreadSummary 
       branch: m.branch,
       status: runnerUp ? m.status : m.status === "failed" ? "failed" : "offline",
       updatedAt: m.updatedAt,
+      createdAt: m.createdAt,
     };
   }
   const t = entry.thread;
@@ -40,6 +42,7 @@ export function summarize(entry: ThreadEntry, runnerUp: boolean): ThreadSummary 
     branch: t.branch,
     status: t.status,
     updatedAt: t.updatedAt,
+    createdAt: t.createdAt,
   };
 }
 

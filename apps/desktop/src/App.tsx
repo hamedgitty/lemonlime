@@ -736,6 +736,7 @@ export function App() {
     ) : prefs.sidebarCollapsed ? null : (
       <AppSidebar
         threads={summaries}
+        currentNav={place.view === "home" ? "new" : place.view === "skills" || place.view === "plugins" || place.view === "automations" ? place.view : null}
         cloudConfigured={cloudConfigured}
         cloudLoading={cloudLoading}
         cloudError={cloudError}

@@ -41,6 +41,8 @@ export interface AppSidebarProps {
   cloudLoading: boolean;
   cloudError: string | null;
   selectedId: string | null;
+  /** The page on screen, so its sidebar entry shows as current. */
+  currentNav?: NavItem | null;
   prefs: UiPrefs;
   onPrefs: (patch: Partial<UiPrefs>) => void;
   onSelect: (t: ThreadSummary) => void;
@@ -142,11 +144,13 @@ export function AppSidebar(p: AppSidebarProps) {
           <ul className="flex flex-col gap-px">
             {visibleNav.map(item => {
               const { label, icon: Icon, shortcut } = NAV[item];
+              const current = item === p.currentNav;
               return (
                 <li key={item}>
                   <button
                     type="button"
-                    className={cx(ROW, item === "search" && p.searchOpen && "bg-cream-hover")}
+                    aria-current={current ? "page" : undefined}
+                    className={cx(ROW, ((item === "search" && p.searchOpen) || current) && "bg-cream-hover")}
                     onClick={() => navAction(item)}
                     aria-keyshortcuts={shortcut.replace(" ", "+").replace("⌘", "Meta")}
                   >

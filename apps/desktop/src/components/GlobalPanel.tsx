@@ -73,7 +73,7 @@ export function GlobalPanel({
       hidden={hidden}
       className={cx(
         "flex shrink-0 flex-col bg-cream",
-        full ? "absolute inset-0 z-30" : "w-[460px]",
+        full ? "absolute inset-0 z-30" : "w-[clamp(300px,42%,460px)]",
         !full && (side === "right" ? "order-last border-l border-line" : "order-first border-r border-line"),
       )}
     >

@@ -140,14 +140,17 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
   const empty = plugins !== null && plugins.length === 0;
 
   return (
-    <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="flex flex-wrap items-center gap-3 border-b border-line px-6 pt-6 pb-4">
-        <h1 className="font-display text-[26px] font-semibold tracking-[-0.02em]">Plugins</h1>
+    <main className="@container flex min-h-0 min-w-0 flex-1 flex-col">
+      <header data-tauri-drag-region className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b border-line px-6">
+        <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
+          <Puzzle aria-hidden="true" className="size-4 text-ink-soft" />
+          Plugins
+        </h1>
         <div className="flex-1" />
-        <label className="relative block w-full max-w-[260px]">
+        <label className="relative hidden w-full max-w-[240px] min-w-0 @md:block">
           <span className="sr-only">Search plugins</span>
           <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
-          <TextInput type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search plugins" className="h-9 pl-9" />
+          <TextInput type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search plugins" className="h-8 pl-9" />
         </label>
         <NewPluginButton disabled={!shell} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
       </header>

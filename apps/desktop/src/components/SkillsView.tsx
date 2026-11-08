@@ -89,7 +89,7 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-6">
+      <header data-tauri-drag-region className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b border-line px-6">
         <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
           <BookOpen aria-hidden="true" className="size-4 text-ink-soft" />
           Skills
@@ -129,7 +129,7 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <section aria-label="Skills" className="flex w-[340px] shrink-0 flex-col border-r border-line">
+        <section aria-label="Skills" className="flex w-[clamp(220px,45%,340px)] shrink-0 flex-col border-r border-line">
           <div className="flex flex-col gap-2 p-3">
             <label className="relative">
               <Search aria-hidden="true" className="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-faint" />

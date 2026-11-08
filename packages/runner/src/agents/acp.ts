@@ -6,11 +6,15 @@ import { lineSplitter } from "./lines.ts";
 import { killGently, tryJson } from "./process.ts";
 import {
   AgentError,
+  applyChange,
   classifyAgentFailure,
   oversizeNotice,
+  PLAN_INSTRUCTIONS,
+  PlanHold,
   type AgentAdapter,
   type AgentSession,
   type Autonomy,
+  type SessionChange,
   type SessionOptions,
   type TurnContext,
 } from "./types.ts";
@@ -56,9 +60,35 @@ class AcpSession implements AgentSession {
   private disposed = false;
   /** The conversation was just started (not loaded), so it hasn't seen the user's instructions yet. */
   private needsInstructions = false;
+  private readonly opts: SessionOptions & { command: string[] };
+  /** The agent's own plan mode, if it offers one, and the mode it was in before. */
+  private modes: AgentModes | null = null;
 
-  constructor(private readonly opts: SessionOptions & { command: string[] }) {
+  constructor(opts: SessionOptions & { command: string[] }) {
+    this.opts = { ...opts };
     this.sessionId = opts.saved?.sessionId;
+  }
+
+  setOptions(change: SessionChange): void {
+    applyChange(this.opts, change);
+  }
+
+  /** Put the agent in (or out of) its own plan mode, if it has one. False if it has none. */
+  private async syncPlanMode(plan: boolean): Promise<boolean> {
+    const m = this.modes;
+    if (!m?.plan) return false;
+    const want = plan ? m.plan : m.normal;
+    if (want === m.current) return true;
+    const ok = await (
+      m.configId
+        ? this.request("session/set_config_option", { sessionId: this.sessionId, configId: m.configId, value: want })
+        : this.request("session/set_mode", { sessionId: this.sessionId, modeId: want })
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (ok) m.current = want;
+    return ok || !plan;
   }
 
   private start(): Promise<void> {
@@ -104,7 +134,7 @@ class AcpSession implements AgentSession {
       if (this.sessionId) {
         // Try to continue the previous session; fall back to a new one if the agent can't.
         const loaded = await this.request("session/load", { sessionId: this.sessionId, cwd: this.opts.cwd, mcpServers: [] }).then(
-          () => true,
+          r => ((this.modes = agentModes(r)), true),
           () => false,
         );
         if (loaded) return;
@@ -112,6 +142,7 @@ class AcpSession implements AgentSession {
       const res = (await this.request("session/new", { cwd: this.opts.cwd, mcpServers: [] })) as { sessionId?: string };
       if (!res?.sessionId) throw new AgentError("ACP agent did not return a session id");
       this.sessionId = res.sessionId;
+      this.modes = agentModes(res);
       this.needsInstructions = Boolean(this.opts.instructions?.trim());
     })();
     this.ready.catch(() => (this.ready = null));
@@ -120,23 +151,34 @@ class AcpSession implements AgentSession {
 
   async runTurn(ctx: TurnContext): Promise<void> {
     await this.start();
-    this.turn = ctx;
+    const plan = this.opts.autonomy === "plan";
+    // The agent's own plan mode if it has one; otherwise LemonLime says what plan mode means
+    // (and refuses anything but looking, see answerAgentRequest).
+    const nativePlan = await this.syncPlanMode(plan);
+    // In plan mode the last message is the plan, so it isn't streamed.
+    const hold = plan ? new PlanHold(e => ctx.emit(e)) : null;
+    const emit = (e: NewEvent) => (hold ? hold.push(e) : ctx.emit(e));
+    this.turn = { ...ctx, emit };
     this.translator = new AcpTranslator();
-    const flush = setInterval(() => this.translator.flushText().forEach(e => ctx.emit(e)), CHUNK_FLUSH_MS);
+    const flush = setInterval(() => this.translator.flushText().forEach(emit), CHUNK_FLUSH_MS);
     const onAbort = () => this.notify("session/cancel", { sessionId: this.sessionId });
     ctx.signal.addEventListener("abort", onAbort, { once: true });
     // ACP has no system prompt, so a new conversation's first message carries the user's instructions.
-    const text = this.needsInstructions ? withInstructions(this.opts.instructions!, ctx.prompt) : ctx.prompt;
+    let text = this.needsInstructions ? withInstructions(this.opts.instructions!, ctx.prompt) : ctx.prompt;
+    if (plan && !nativePlan) text = `${PLAN_INSTRUCTIONS}\n\n---\n\n${text}`;
     this.needsInstructions = false;
+    let finished = false;
     try {
       const res = (await this.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text }] })) as {
         stopReason?: string;
       };
       if (res?.stopReason === "refusal") throw new AgentError("The agent refused this request", "refusal");
+      finished = res?.stopReason !== "cancelled" && !ctx.signal.aborted;
     } finally {
       clearInterval(flush);
       ctx.signal.removeEventListener("abort", onAbort);
-      this.translator.finish().forEach(e => ctx.emit(e));
+      this.translator.finish().forEach(emit);
+      hold?.end(finished);
       this.turn = null;
     }
   }
@@ -214,6 +256,38 @@ class AcpSession implements AgentSession {
   }
 }
 
+interface AgentModes {
+  /** Set through `session/set_config_option` with this id, or else `session/set_mode`. */
+  configId: string | null;
+  current: string;
+  /** The mode it started in, to go back to after planning. */
+  normal: string;
+  plan: string | null;
+}
+
+/**
+ * The agent's session modes, from a `session/new` (or load) result: newer agents list them
+ * as a config option in the "mode" category, older ones as `modes`. Null without any.
+ */
+export function agentModes(result: unknown): AgentModes | null {
+  const r = (result ?? {}) as Json;
+  const isPlan = (id: string, name?: unknown) => /^plan$/i.test(id) || (typeof name === "string" && /^plan$/i.test(name));
+  const options = Array.isArray(r.configOptions) ? (r.configOptions as Json[]) : [];
+  const mode = options.find(o => o.category === "mode" && typeof o.currentValue === "string");
+  if (mode) {
+    const values = (Array.isArray(mode.options) ? (mode.options as Json[]) : []).filter(o => typeof o.value === "string");
+    const plan = values.find(o => isPlan(String(o.value), o.name));
+    const current = String(mode.currentValue);
+    return { configId: String(mode.id), current, normal: current, plan: plan ? String(plan.value) : null };
+  }
+  const legacy = r.modes as { currentModeId?: unknown; availableModes?: Json[] } | undefined;
+  if (legacy && typeof legacy.currentModeId === "string") {
+    const plan = (legacy.availableModes ?? []).find(m => typeof m.id === "string" && isPlan(m.id, m.name));
+    return { configId: null, current: legacy.currentModeId, normal: legacy.currentModeId, plan: plan ? String(plan.id) : null };
+  }
+  return null;
+}
+
 /** The first message of a new conversation, with the user's own instructions ahead of it. */
 export function withInstructions(instructions: string, prompt: string): string {
   return `Instructions from the user for this whole conversation (follow them in every reply):\n\n${instructions.trim()}\n\n---\n\n${prompt}`;
@@ -230,14 +304,14 @@ export function blockedCommand(params: Json | undefined): string | null {
 
 /** Tool kinds that never need asking: they only read, or edit files (which "edits" allows). */
 const SAFE_KINDS = ["edit", "read", "search", "think", "fetch"];
-/** What a read-only session may do without anyone being asked. */
+/** What a read-only session (or one planning) may do without anyone being asked. */
 const READ_KINDS = ["read", "search", "think", "fetch"];
 
 /** True when a permission request has to go to the user rather than be answered by policy. */
 export function needsApproval(params: Json | undefined, autonomy: Autonomy): boolean {
-  if (autonomy === "full" || autonomy === "read") return false;
+  if (autonomy === "full" || autonomy === "read" || autonomy === "plan") return false;
   const toolKind = String((params?.toolCall as Json | undefined)?.kind ?? "");
-  return !SAFE_KINDS.includes(toolKind);
+  return !(autonomy === "ask" ? READ_KINDS : SAFE_KINDS).includes(toolKind);
 }
 
 /**
@@ -256,7 +330,8 @@ export function answerAgentRequest(
   if (method === "session/request_permission") {
     const options = (params?.options as { optionId: string; kind: string }[] | undefined) ?? [];
     const kind = String((params?.toolCall as Json | undefined)?.kind ?? "");
-    const allowed = refuse ? false : autonomy === "read" ? READ_KINDS.includes(kind) : needsApproval(params, autonomy) ? decision === "allow" : true;
+    const looking = autonomy === "read" || autonomy === "plan";
+    const allowed = refuse ? false : looking ? READ_KINDS.includes(kind) : needsApproval(params, autonomy) ? decision === "allow" : true;
     const pick = allowed
       ? (options.find(o => o.kind === "allow_once") ?? options.find(o => o.kind === "allow_always"))
       : (options.find(o => o.kind === "reject_once") ?? options.find(o => o.kind === "reject_always"));
@@ -313,7 +388,23 @@ export class AcpTranslator {
         }
         break;
       }
-      // agent_thought_chunk, plan, user_message_chunk, usage_update, available_commands_update: not shown.
+      // The agent's plan: its to-do list, whole each time.
+      case "plan": {
+        const entries = Array.isArray(u.entries) ? (u.entries as Json[]) : [];
+        const items = entries.flatMap(e =>
+          typeof e.content === "string" && e.content.trim()
+            ? [{ text: e.content, status: e.status === "completed" ? "completed" : e.status === "in_progress" ? "in_progress" : "pending" } as const]
+            : [],
+        );
+        out.push({ type: "todo_snapshot", items });
+        break;
+      }
+      case "usage_update":
+        if (typeof u.used === "number" && typeof u.size === "number" && u.size > 0 && u.used >= 0) {
+          out.push({ type: "context_usage", used: Math.min(Math.round(u.used), Math.round(u.size)), window: Math.round(u.size) });
+        }
+        break;
+      // agent_thought_chunk, user_message_chunk, available_commands_update: not shown.
     }
     return out;
   }

@@ -4,6 +4,16 @@ import type { AddressInfo } from "node:net";
 
 export type ApprovalDecision = "allow" | "deny";
 
+/**
+ * A fuller answer for the agent-side helper: allow with changed input (e.g. a question's
+ * answers filled in), or deny with a message the agent reads.
+ */
+export interface ApprovalAnswer {
+  decision: ApprovalDecision;
+  updatedInput?: unknown;
+  message?: string;
+}
+
 export interface ApprovalRequest {
   /** The agent's own name for the tool, e.g. "Bash". */
   tool: string;
@@ -26,7 +36,7 @@ export class ApprovalBridge {
     readonly token: string,
   ) {}
 
-  static start(ask: (req: ApprovalRequest) => Promise<ApprovalDecision>): Promise<ApprovalBridge> {
+  static start(ask: (req: ApprovalRequest) => Promise<ApprovalDecision | ApprovalAnswer>): Promise<ApprovalBridge> {
     const token = randomBytes(32).toString("hex");
     const expected = Buffer.from(`Bearer ${token}`);
     const server = createServer((req, res) => {
@@ -55,7 +65,7 @@ export class ApprovalBridge {
         if (typeof body.tool !== "string") return reply(400, { error: "bad_request" });
         const request: ApprovalRequest = { tool: body.tool, input: body.input ?? null, summary: typeof body.summary === "string" ? body.summary : body.tool };
         ask(request).then(
-          decision => reply(200, { decision }),
+          answer => reply(200, typeof answer === "string" ? { decision: answer } : answer),
           () => reply(200, { decision: "deny" }),
         );
       });

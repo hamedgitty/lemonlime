@@ -2,7 +2,21 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { installCoauthorHooks } from "./coauthors.ts";
-import { withoutRewound, type NewEvent, type Preview, type QueuedMessage, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
+import {
+  PERMISSION_MODES,
+  PermissionMode,
+  ReasoningLevel,
+  withoutRewound,
+  type NewEvent,
+  type Preview,
+  type Question,
+  type QueuedMessage,
+  type Thread,
+  type ThreadEvent,
+  type ThreadOptions,
+  type ThreadStatus,
+} from "@lemonlime/protocol";
+import { capabilitiesFor } from "./capabilities.ts";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
@@ -170,6 +184,15 @@ interface SavedState {
   recap?: string;
   /** A message waiting to be tried again (see --retry-max-wait). */
   retry?: PendingRetry;
+  /** Model, reasoning and permission mode, once changed from what the thread started with. */
+  options?: ThreadOptions;
+}
+
+/** A change to the thread's options (see ThreadRunner.setOptions). */
+export interface OptionsChange {
+  model?: string | null;
+  reasoning?: ReasoningLevel | null;
+  permission?: PermissionMode;
 }
 
 /** What the runner says on the user's behalf when a usage limit lifts. */
@@ -202,9 +225,21 @@ export class ThreadRunner {
   /** Approval requests waiting for the user, by request id. */
   private readonly approvals = new Map<string, (decision: ApprovalDecision, by: "user" | "timeout" | "interrupted") => void>();
 
-  /** How many approvals the agent is waiting on (for /healthz, so apps can notify). */
+  /** Questions waiting for the user's answers, by request id. */
+  private readonly questions = new Map<string, (answers: string[][] | null, by: "user" | "timeout" | "interrupted") => void>();
+
+  /** How many approvals and questions the agent is waiting on (for /healthz, so apps can notify). */
   get waitingApprovals(): number {
-    return this.approvals.size;
+    return this.approvals.size + this.questions.size;
+  }
+
+  /** The thread's model, reasoning and permission mode now. */
+  private options: ThreadOptions;
+  /** The session must be started again before its next turn to pick up changed options. */
+  private sessionStale = false;
+
+  get currentOptions(): ThreadOptions {
+    return { ...this.options };
   }
   /** Every clientMsgId this thread has accepted, so a resend never runs twice. */
   private readonly seen = new Set<string>();
@@ -218,6 +253,13 @@ export class ThreadRunner {
         ? installCoauthorHooks(opts.dataDir ? join(opts.dataDir, "git-hooks") : mkdtempSync(join(tmpdir(), "lemonlime-hooks-")))
         : null;
     this.sessionOpts = hooksEnv ? { ...opts.session, env: { ...opts.session.env, ...hooksEnv } } : { ...opts.session };
+    const startMode = PermissionMode.safeParse(opts.session.autonomy);
+    const reasoning = ReasoningLevel.safeParse(opts.session.reasoning ?? opts.thread.agent.reasoning);
+    this.options = {
+      model: opts.session.model ?? opts.thread.agent.model ?? null,
+      reasoning: reasoning.success ? reasoning.data : null,
+      permission: startMode.success ? startMode.data : "edits",
+    };
     this.redactions = { ...opts.redact };
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
@@ -324,16 +366,25 @@ export class ThreadRunner {
     await this.installPlugins(skills);
     this.agentState = saved?.agentState ?? {};
     if (typeof saved?.recap === "string" && saved.recap) this.recap = saved.recap;
+    // Options changed in an earlier run win over the ones the runner was started with.
+    if (saved?.options && PermissionMode.safeParse(saved.options.permission).success) {
+      this.options = saved.options;
+      this.applyOptionsToSession();
+    }
     this.session = this.newSession();
     this.initialised = true;
     const open = new Set<string>();
+    const asked = new Set<string>();
     for (const e of this.store.since(0)) {
       if (e.type === "user_message" && e.clientMsgId) this.seen.add(e.clientMsgId);
       if (e.type === "approval_request") open.add(e.requestId);
       if (e.type === "approval_result") open.delete(e.requestId);
+      if (e.type === "question_request") asked.add(e.requestId);
+      if (e.type === "question_result") asked.delete(e.requestId);
     }
     // Questions from a runner that has since stopped can no longer be answered.
     for (const requestId of open) this.store.append({ type: "approval_result", requestId, decision: "deny", by: "expired" });
+    for (const requestId of asked) this.store.append({ type: "question_result", requestId, answers: null, by: "expired" });
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
     for (const q of this.queue) this.seen.add(q.clientMsgId);
     this.autoContinues = saved?.autoContinues ?? [];
@@ -709,6 +760,59 @@ export class ThreadRunner {
     }
   }
 
+  /**
+   * Change the model, reasoning level or permission mode. A change made while the agent works
+   * applies from its next turn, in the same conversation. Returns why not, if the agent
+   * can't change that.
+   */
+  setOptions(change: OptionsChange): { ok: true } | { error: string } {
+    const kind = this.opts.adapter.kind;
+    const caps = capabilitiesFor(kind, { agentVersion: null });
+    const next: ThreadOptions = { ...this.options };
+    if (change.permission !== undefined && change.permission !== next.permission) {
+      if (!caps.permissions.includes(change.permission)) return { error: `This agent can't run in ${PERMISSION_MODES[change.permission].label} mode.` };
+      if (change.permission === "plan") next.exitPlanTo = next.permission;
+      else delete next.exitPlanTo;
+      next.permission = change.permission;
+    }
+    if (change.model !== undefined && change.model !== next.model) {
+      if (!caps.live.model) return { error: "This agent's model can't be changed in the middle of a thread." };
+      next.model = change.model?.trim() || null;
+    }
+    if (change.reasoning !== undefined && change.reasoning !== next.reasoning) {
+      if (!caps.live.reasoning || (change.reasoning !== null && !caps.reasoning.includes(change.reasoning))) {
+        return { error: change.reasoning ? `This agent can't be set to ${change.reasoning} reasoning.` : "This agent's reasoning can't be changed." };
+      }
+      next.reasoning = change.reasoning;
+    }
+    if (JSON.stringify(next) === JSON.stringify(this.options)) return { ok: true };
+    this.options = next;
+    this.applyOptionsToSession();
+    this.store.append({ type: "options_change", options: { ...next } });
+    this.saveState();
+    return { ok: true };
+  }
+
+  /** Hand the current options to the agent session (now, or by starting it again before the next turn). */
+  private applyOptionsToSession(): void {
+    const { model, reasoning } = this.options;
+    if (model) this.sessionOpts.model = model;
+    else delete this.sessionOpts.model;
+    if (reasoning) this.sessionOpts.reasoning = reasoning;
+    else delete this.sessionOpts.reasoning;
+    if (!this.session) return;
+    if (this.session.setOptions) this.session.setOptions({ model, reasoning, autonomy: this.options.permission });
+    else this.sessionStale = true;
+  }
+
+  /** Answer the agent's questions (null declines). Returns false if they were already settled or don't exist. */
+  answerQuestion(requestId: string, answers: string[][] | null): boolean {
+    const finish = this.questions.get(requestId);
+    if (!finish) return false;
+    finish(answers, "user");
+    return true;
+  }
+
   /** Answer an approval request. Returns false if it was already decided or doesn't exist. */
   answerApproval(requestId: string, decision: ApprovalDecision): boolean {
     const finish = this.approvals.get(requestId);
@@ -843,7 +947,8 @@ export class ThreadRunner {
   }
 
   private newSession(): AgentSession {
-    return this.opts.adapter.createSession({ ...this.sessionOpts, cwd: this.opts.workdir, saved: this.agentState });
+    this.sessionStale = false;
+    return this.opts.adapter.createSession({ ...this.sessionOpts, autonomy: this.options.permission, cwd: this.opts.workdir, saved: this.agentState });
   }
 
   private async runTurn(prompt: string, abort: AbortController, original = prompt): Promise<void> {
@@ -884,19 +989,27 @@ export class ThreadRunner {
     let retryable: { reason: PendingRetry["reason"]; resetAt: string | null } | null = null;
     const retrying = (this.opts.retryMaxWaitMs ?? 0) > 0;
     try {
+      if (this.session && this.sessionStale) {
+        // Options changed and this agent can't take them mid-session: same conversation, new process.
+        this.agentState = this.session.saveState();
+        await this.session.dispose().catch(() => undefined);
+        this.session = null;
+      }
       if (!this.session) this.session = this.newSession();
-      const requestApproval = async (req: ApprovalRequest): Promise<ApprovalDecision> => {
+      const waitFor = async <T>(ask: () => Promise<T>): Promise<T> => {
         waitingForUser += 1;
         try {
-          return await this.askUser(req, abort.signal);
+          return await ask();
         } finally {
           waitingForUser -= 1;
           lastOutput = Date.now();
         }
       };
+      const requestApproval = (req: ApprovalRequest): Promise<ApprovalDecision> => waitFor(() => this.askUser(req, abort.signal));
+      const askQuestions = (questions: Question[]): Promise<string[][] | null> => waitFor(() => this.askQuestions(questions, abort.signal));
       const recap = this.recap;
       this.recap = null;
-      await this.session.runTurn({ prompt: recap ? `${recap}\n\n${prompt}` : prompt, signal: abort.signal, emit, requestApproval });
+      await this.session.runTurn({ prompt: recap ? `${recap}\n\n${prompt}` : prompt, signal: abort.signal, emit, requestApproval, askQuestions });
       this.crashes = 0;
     } catch (err) {
       const code = (err as { code?: string }).code;
@@ -959,6 +1072,29 @@ export class ThreadRunner {
       // Listen for the answer before announcing the question, so even an instant answer counts.
       this.approvals.set(requestId, finish);
       this.store.append({ type: "approval_request", requestId, tool: req.tool, input: req.input, summary: req.summary });
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /** Record the agent's questions and wait for the user's answers, a timeout, or the turn ending. */
+  private askQuestions(questions: Question[], signal: AbortSignal): Promise<string[][] | null> {
+    const requestId = randomUUID();
+    return new Promise(resolve => {
+      const finish = (answers: string[][] | null, by: "user" | "timeout" | "interrupted") => {
+        if (!this.questions.delete(requestId)) return;
+        clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
+        // Exactly one answer list per question, so the agent never reads them out of line.
+        const fitted = answers ? questions.map((_, i) => (answers[i] ?? []).map(a => a.trim()).filter(Boolean)) : null;
+        this.store.append({ type: "question_result", requestId, answers: fitted, by });
+        resolve(fitted);
+      };
+      const onAbort = () => finish(null, "interrupted");
+      const timer = setTimeout(() => finish(null, "timeout"), this.opts.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS);
+      timer.unref?.();
+      this.questions.set(requestId, finish);
+      this.store.append({ type: "question_request", requestId, questions });
       if (signal.aborted) onAbort();
       else signal.addEventListener("abort", onAbort, { once: true });
     });
@@ -1155,6 +1291,7 @@ export class ThreadRunner {
       ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
       ...(this.recap ? { recap: this.recap } : {}),
       ...(this.retry ? { retry: this.retry } : {}),
+      options: this.options,
     };
     writeFileSync(f, JSON.stringify(state, null, 2));
   }

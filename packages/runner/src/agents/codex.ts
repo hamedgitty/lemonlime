@@ -1,8 +1,22 @@
-import type { NewEvent } from "@lemonlime/protocol";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { NewEvent, TodoItem } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
 import { selfCommand } from "../self.ts";
 import { codexMcpFlags } from "../agent-plugins.ts";
-import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
+import { entries, fileInfo, readLines } from "../history/read.ts";
+import {
+  applyChange,
+  oversizeNotice,
+  PLAN_INSTRUCTIONS,
+  PlanHold,
+  turnFailure,
+  type AgentAdapter,
+  type AgentSession,
+  type SessionChange,
+  type SessionOptions,
+  type TurnContext,
+} from "./types.ts";
 
 /**
  * Codex CLI: `codex exec --json -`, then `codex exec resume --json <thread_id> -` for every
@@ -17,19 +31,30 @@ export const codexAdapter: AgentAdapter = {
 
 class CodexSession implements AgentSession {
   private threadId: string | undefined;
+  private readonly opts: SessionOptions;
+  /** This conversation's session log, once found (see codexContextUsage). */
+  private rollout: string | null = null;
 
-  constructor(private readonly opts: SessionOptions) {
+  constructor(opts: SessionOptions) {
+    this.opts = { ...opts };
     this.threadId = opts.saved?.threadId;
   }
 
+  setOptions(change: SessionChange): void {
+    applyChange(this.opts, change);
+  }
+
   async runTurn(ctx: TurnContext): Promise<void> {
+    const plan = this.opts.autonomy === "plan";
     // `exec` and `exec resume` share only some flags; the process already runs in cwd,
     // and the sandbox mode is set via a config override that both accept.
     const flags = ["--json", "--skip-git-repo-check"];
     if (this.opts.model) flags.push("--model", this.opts.model);
     if (this.opts.reasoning && /^[a-z]+$/.test(this.opts.reasoning)) flags.push("-c", `model_reasoning_effort="${this.opts.reasoning}"`);
-    // The user's own instructions, as developer instructions on every turn.
-    if (this.opts.instructions?.trim()) flags.push("-c", `developer_instructions=${tomlString(this.opts.instructions)}`);
+    // The user's own instructions, as developer instructions on every turn; in plan mode,
+    // what plan mode means too (Codex has no plan mode of its own in exec).
+    const developer = [plan ? PLAN_INSTRUCTIONS : "", this.opts.instructions?.trim() ?? ""].filter(Boolean).join("\n\n");
+    if (developer) flags.push("-c", `developer_instructions=${tomlString(developer)}`);
     if (this.opts.subagents !== false) {
       const [cmd, ...rest] = selfCommand("subagents-mcp");
       flags.push(
@@ -50,12 +75,15 @@ class CodexSession implements AgentSession {
     // The user's plugin servers. Unlike LemonLime's own, their tools aren't pre-approved.
     flags.push(...codexMcpFlags(this.opts.mcpServers ?? {}));
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
-    else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
+    else flags.push("-c", this.opts.autonomy === "read" || plan ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
     // "-" reads the prompt from stdin, so it can't be taken for a flag or be too long for argv.
     const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, "-"] : ["exec", ...flags, "-"];
 
     let failure: string | null = null;
     let processError: unknown;
+    // In plan mode its last message is the plan.
+    const hold = plan ? new PlanHold(e => ctx.emit(e)) : null;
+    const todos = new CodexTodos();
     await runLineProcess({
       command: this.opts.command?.[0] ?? "codex",
       args: [...(this.opts.command?.slice(1) ?? []), ...args],
@@ -64,13 +92,20 @@ class CodexSession implements AgentSession {
       signal: ctx.signal,
       input: ctx.prompt,
       onLine: line => {
-        const parsed = parseCodexLine(line);
+        const parsed = parseCodexLine(line, todos);
         if (parsed.threadId) this.threadId = parsed.threadId;
         if (parsed.failure) failure = parsed.failure;
-        parsed.events.forEach(e => ctx.emit(e));
+        parsed.events.forEach(e => (hold ? hold.push(e) : ctx.emit(e)));
       },
       onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
     }).catch(err => (processError = err));
+    hold?.end(!failure && processError === undefined && !ctx.signal.aborted);
+    if (this.threadId) {
+      const home = this.opts.env?.CODEX_HOME || process.env.CODEX_HOME || join(homedir(), ".codex");
+      this.rollout ??= findRollout(home, this.threadId);
+      const usage = this.rollout ? codexContextUsage(this.rollout) : null;
+      if (usage) ctx.emit({ type: "context_usage", ...usage });
+    }
     // Codex exits non-zero after turn.failed; its own reason beats "exited with code 1".
     const err = turnFailure(failure, processError);
     if (err) throw err;
@@ -99,10 +134,34 @@ interface CodexItem {
   error?: { message?: string } | string | null;
   message?: string;
   query?: string;
+  items?: { text?: string; completed?: boolean }[];
+}
+
+/**
+ * Codex's plan (its update_plan tool) arrives as a `todo_list` item that is started, updated
+ * and completed. Items are only done or not; the first one not done is taken as in progress.
+ * Remembers the last list so an unchanged one isn't sent twice.
+ */
+export class CodexTodos {
+  private last = "";
+  snapshot(item: CodexItem): NewEvent | null {
+    const list = (item.items ?? []).filter(i => typeof i.text === "string" && i.text.trim());
+    let current = false;
+    const items: TodoItem[] = list.map(i => {
+      if (i.completed) return { text: i.text!, status: "completed" };
+      const status = current ? "pending" : "in_progress";
+      current = true;
+      return { text: i.text!, status };
+    });
+    const key = JSON.stringify(items);
+    if (key === this.last) return null;
+    this.last = key;
+    return { type: "todo_snapshot", items };
+  }
 }
 
 /** Translate one `codex exec --json` line into LemonLime events. */
-export function parseCodexLine(line: string): { events: NewEvent[]; threadId?: string; failure?: string } {
+export function parseCodexLine(line: string, todos: CodexTodos = new CodexTodos()): { events: NewEvent[]; threadId?: string; failure?: string } {
   const msg = tryJson(line) as { type?: string; thread_id?: string; item?: CodexItem; error?: { message?: string }; message?: string } | null;
   if (!msg || typeof msg !== "object") return { events: [] };
   const events: NewEvent[] = [];
@@ -115,9 +174,16 @@ export function parseCodexLine(line: string): { events: NewEvent[]; threadId?: s
     case "error":
       return { events, failure: unwrapApiError(msg.message) ?? "Codex reported an error" };
     case "item.started":
+    case "item.updated":
     case "item.completed": {
       const item = msg.item;
       if (!item?.type) break;
+      if (item.type === "todo_list") {
+        const e = todos.snapshot(item);
+        if (e) events.push(e);
+        break;
+      }
+      if (msg.type === "item.updated") break;
       const done = msg.type === "item.completed";
       const id = item.id ?? `${item.type}-${Math.random().toString(36).slice(2, 8)}`;
       switch (item.type) {
@@ -156,12 +222,55 @@ export function parseCodexLine(line: string): { events: NewEvent[]; threadId?: s
         // "error" items are Codex's non-fatal warnings (unknown model metadata, skills trimmed to
         // fit, ...). They don't end the turn, so they aren't LemonLime errors; real failures
         // arrive as top-level "error" / "turn.failed" lines.
-        // reasoning, todo_list and other internal items are not shown either.
+        // reasoning and other internal items are not shown either.
       }
       break;
     }
   }
   return { events };
+}
+
+const ROLLOUT_DAY = /^\d{1,4}$/;
+
+/**
+ * Codex's own log of a conversation: `<codex home>/sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`.
+ * Newest days are looked at first, and only a few months back.
+ */
+export function findRollout(home: string, threadId: string): string | null {
+  const desc = (dir: string) =>
+    entries(dir)
+      .filter(e => e.dir && ROLLOUT_DAY.test(e.name))
+      .sort((a, b) => Number(b.name) - Number(a.name));
+  let months = 0;
+  for (const year of desc(join(home, "sessions")))
+    for (const month of desc(year.path)) {
+      if (++months > 6) return null;
+      for (const day of desc(month.path)) {
+        const hit = entries(day.path).find(f => !f.dir && f.name.startsWith("rollout-") && f.name.endsWith(`${threadId}.jsonl`));
+        if (hit) return hit.path;
+      }
+    }
+  return null;
+}
+
+/**
+ * How full the context is, from the newest `token_count` record in a Codex session log
+ * (`codex exec --json` doesn't print it): the last request's tokens, of the model's window.
+ */
+export function codexContextUsage(rollout: string): { used: number; window: number } | null {
+  const info = fileInfo(rollout);
+  if (!info) return null;
+  let found: { used: number; window: number } | null = null;
+  for (const line of readLines(rollout, { start: Math.max(0, info.size - 512 * 1024) })) {
+    if (!line.includes('"token_count"')) continue;
+    const rec = tryJson(line) as { payload?: { type?: string; info?: Record<string, unknown> | null } } | null;
+    const t = rec?.payload?.type === "token_count" ? rec.payload.info : null;
+    const last = t?.last_token_usage as { total_tokens?: unknown; input_tokens?: unknown; output_tokens?: unknown } | undefined;
+    const window = t?.model_context_window;
+    const used = typeof last?.total_tokens === "number" ? last.total_tokens : Number(last?.input_tokens ?? 0) + Number(last?.output_tokens ?? 0) || null;
+    if (typeof window === "number" && window > 0 && typeof used === "number" && used > 0) found = { used: Math.min(used, window), window };
+  }
+  return found;
 }
 
 /** A TOML basic string (what Codex's `-c key=value` reads), with every control character escaped. */

@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, Bot, Cloud, FolderGit2, Keyboard, NotebookPen, Package, Palette, Search, Server, Settings as SettingsIcon, UserRound } from "lucide-react";
+import {
+  ArrowLeft,
+  Blocks,
+  Cloud,
+  FolderGit2,
+  Keyboard,
+  NotebookPen,
+  Package,
+  Palette,
+  Search,
+  Server,
+  Settings as SettingsIcon,
+  UserRound,
+} from "lucide-react";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 import { AccountPage } from "./settings/AccountPage.tsx";
@@ -30,9 +43,9 @@ export const SETTINGS_PAGES: { id: SettingsPage; label: string; icon: typeof Use
   {
     id: "agents",
     label: "Agents",
-    icon: Bot,
+    icon: Blocks,
     keywords:
-      "claude codex opencode acp version install update sign in default agent co-author coauthor branch prefix reasoning command guard retry limit overloaded",
+      "claude codex opencode acp harness version install update auto-update sign in sign out default agent accounts order model effort fast mode co-author coauthor branch prefix reasoning command guard retry limit overloaded",
   },
   { id: "instructions", label: "Instructions", icon: NotebookPen, keywords: "custom instructions system prompt built-in skills" },
   { id: "cloud", label: "Cloud", icon: Cloud, keywords: "setup script environment api keys secrets skills sync auto delete clean up sandbox" },

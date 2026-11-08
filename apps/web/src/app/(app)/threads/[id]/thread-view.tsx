@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Bot, Cloud, FolderGit2, GitBranch, Laptop, Mic } from "lucide-react";
+import { Cloud, FolderGit2, GitBranch, Laptop, Mic } from "lucide-react";
 import { joinDictation, useDictation } from "@/lib/dictation.ts";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
@@ -18,6 +18,7 @@ import {
   type ThreadOptions,
 } from "@lemonlime/protocol";
 import { DeniedNotice } from "@/components/denied-notice.tsx";
+import { AgentIcon } from "@/components/agent-icon.tsx";
 import { AGENT_LABELS, StatusPill, repoName, timeAgo } from "@/components/status-pill.tsx";
 import { apiFetch } from "@/lib/api-client.ts";
 import type { ThreadResponse } from "@/lib/threads.ts";
@@ -305,7 +306,7 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
         </div>
         <ul className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted" aria-label="About this thread">
           <li className="inline-flex items-center gap-1.5">
-            <Bot aria-hidden className="h-3.5 w-3.5" />
+            <AgentIcon kind={thread.agent.kind} className="h-3.5 w-3.5" />
             {AGENT_LABELS[thread.agent.kind] ?? thread.agent.kind}
             {thread.agent.model ? <span className="text-faint">({thread.agent.model})</span> : null}
           </li>

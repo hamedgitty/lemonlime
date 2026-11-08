@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { Toggle } from "../primitives.tsx";
 import { cx } from "../ui.tsx";
@@ -120,8 +120,19 @@ export function useSaved(): [boolean, () => void] {
 /** Tabs across the top of a Settings page. */
 export function Tabs<T extends string>({ value, onChange, tabs }: { value: T; onChange: (v: T) => void; tabs: { id: T; label: string; count?: number }[] }) {
   const id = useId();
+  // Arrow keys move between tabs (and show them), as tabs do everywhere.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const i = tabs.findIndex(t => t.id === value);
+    const n = tabs.length;
+    const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    if (to < 0) return;
+    e.preventDefault();
+    onChange(tabs[to]!.id);
+    document.getElementById(`${id}-${tabs[to]!.id}`)?.focus();
+  };
   return (
-    <div role="tablist" aria-label="Sections" className="mb-6 flex flex-wrap gap-1 border-b border-line">
+    // oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take the focus
+    <div role="tablist" aria-label="Sections" onKeyDown={onKeyDown} className="mb-6 flex flex-wrap gap-1 border-b border-line">
       {tabs.map(t => (
         <button
           key={t.id}
@@ -129,6 +140,7 @@ export function Tabs<T extends string>({ value, onChange, tabs }: { value: T; on
           type="button"
           role="tab"
           aria-selected={value === t.id}
+          tabIndex={value === t.id ? 0 : -1}
           onClick={() => onChange(t.id)}
           className={cx(
             "-mb-px inline-flex h-9 items-center gap-1.5 border-b-2 px-2.5 text-[14px] transition-colors duration-100",

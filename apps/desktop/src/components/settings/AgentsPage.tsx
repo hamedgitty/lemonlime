@@ -1,153 +1,140 @@
 import { useEffect, useState } from "react";
-import { ON_LIMIT_LABELS, OnLimit } from "@lemonlime/protocol";
+import { AGENT_CAPABILITIES, ON_LIMIT_LABELS, OnLimit, type AgentKind, type ReasoningLevel } from "@lemonlime/protocol";
 import { listAccounts, setOnLimit } from "../../lib/accounts.ts";
 import { AccountsTab } from "./AccountsTab.tsx";
-import { Copy, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { HarnessTab } from "./HarnessTab.tsx";
+import { Copy, Plus, Trash2 } from "lucide-react";
 import { AGENT_LABELS } from "../../lib/format.ts";
+import { effortLevels, needsUpdate } from "../../lib/models.ts";
 import { inDesktopShell } from "../../lib/native.ts";
-import { compareVersions, installAgent, TESTED_AGENTS, type AgentInstall } from "../../lib/system.ts";
+import { AGENTS_TAB_EVENT, takeAgentsTab, type AgentsTab, type AgentsTabRequest } from "../../lib/settingsNav.ts";
+import { TESTED_AGENTS } from "../../lib/system.ts";
 import type { Settings, UiPrefs } from "../../lib/storage.ts";
-import { Button, IconButton, Spinner, TextInput } from "../ui.tsx";
+import { defaultModel, EFFORT_LABELS } from "../ModelControl.tsx";
+import { Button, IconButton, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
-import { code, ErrorText, Pill, Row, Section, Select, Tabs, ToggleRow } from "./parts.tsx";
+import { code, ErrorText, Row, Section, Select, Tabs, ToggleRow } from "./parts.tsx";
 
-type Tab = "installed" | "accounts" | "defaults" | "guard" | "acp" | "retry";
+const TABS: { id: AgentsTab; label: string }[] = [
+  { id: "harness", label: "Harness" },
+  { id: "accounts", label: "Accounts" },
+  { id: "defaults", label: "Defaults" },
+  { id: "guard", label: "Command guard" },
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "acp", label: "ACP agents" },
+  { id: "retry", label: "Limits" },
+];
 
 export function AgentsPage({ ctx }: { ctx: SettingsCtx }) {
-  const [tab, setTab] = useState<Tab>("installed");
+  const [asked] = useState(takeAgentsTab);
+  const [tab, setTab] = useState<AgentsTab>(asked?.tab ?? "harness");
+  const [accountsFor, setAccountsFor] = useState<AgentKind | undefined>(asked?.agent);
+  const show = (req: AgentsTabRequest) => {
+    setTab(req.tab);
+    if (req.agent) setAccountsFor(req.agent);
+  };
+  // Asked for while the page is already open (the model picker's "+").
+  useEffect(() => {
+    const on = (e: Event) => {
+      takeAgentsTab();
+      show((e as CustomEvent<AgentsTabRequest>).detail);
+    };
+    window.addEventListener(AGENTS_TAB_EVENT, on);
+    return () => window.removeEventListener(AGENTS_TAB_EVENT, on);
+  }, []);
   return (
     <>
-      <Tabs
-        value={tab}
-        onChange={setTab}
-        tabs={[
-          { id: "installed", label: "Installed" },
-          { id: "accounts", label: "Accounts" },
-          { id: "defaults", label: "Defaults" },
-          { id: "guard", label: "Command guard" },
-          { id: "acp", label: "ACP agents", count: ctx.settings.acpAgents.length },
-          { id: "retry", label: "Limits" },
-        ]}
-      />
-      {tab === "installed" && <InstalledTab ctx={ctx} />}
-      {tab === "accounts" && <AccountsTab />}
+      <Tabs value={tab} onChange={setTab} tabs={TABS.map(t => (t.id === "acp" ? { ...t, count: ctx.settings.acpAgents.length } : t))} />
+      {tab === "harness" && <HarnessTab ctx={ctx} onTab={show} />}
+      {tab === "accounts" && <AccountsTab initialAgent={accountsFor} />}
       {tab === "defaults" && <DefaultsTab ctx={ctx} />}
       {tab === "guard" && <GuardTab ctx={ctx} />}
+      {tab === "claude-code" && <AgentTab ctx={ctx} kind="claude-code" onTab={show} />}
+      {tab === "codex" && <AgentTab ctx={ctx} kind="codex" onTab={show} />}
       {tab === "acp" && <AcpTab ctx={ctx} />}
       {tab === "retry" && <RetryTab ctx={ctx} />}
     </>
   );
 }
 
-/** "Update" when the installed CLI is older than the version LemonLime is tested with. */
-export function needsUpdate(a: AgentInstall): boolean {
-  const tested = TESTED_AGENTS.find(t => t.kind === a.kind);
-  return Boolean(a.installed && a.version && tested && compareVersions(a.version, tested.version) < 0);
-}
-
-function InstalledTab({ ctx }: { ctx: SettingsCtx }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [output, setOutput] = useState<{ kind: string; ok: boolean; text: string } | null>(null);
-  const shell = inDesktopShell();
-  const run = async (kind: AgentInstall["kind"]) => {
-    setBusy(kind);
-    setOutput(null);
-    try {
-      const text = await installAgent(kind);
-      setOutput({ kind, ok: true, text });
-    } catch (err) {
-      setOutput({ kind, ok: false, text: err instanceof Error ? err.message : String(err) });
-    } finally {
-      setBusy(null);
-      ctx.refreshAgents();
-    }
-  };
-  const found = ctx.agents ?? [];
-  const isDefault = (kind: string) => ctx.prefs.lastAgent === kind;
+/** One agent's own settings: what new threads start with, and how it's installed and signed in. */
+function AgentTab({ ctx, kind, onTab }: { ctx: SettingsCtx; kind: "claude-code" | "codex"; onTab: (req: AgentsTabRequest) => void }) {
+  const { prefs, onPrefs } = ctx;
+  const caps = AGENT_CAPABILITIES[kind];
+  const a = ctx.agents?.find(x => x.kind === kind);
+  const tested = TESTED_AGENTS.find(t => t.kind === kind)!;
+  const choice = prefs.agentChoices[kind] ?? { model: null, reasoning: null, fast: false };
+  const set = (patch: Partial<typeof choice>) => onPrefs({ agentChoices: { ...prefs.agentChoices, [kind]: { ...choice, ...patch } } });
+  const levels = effortLevels(kind, prefs.showMaxReasoning);
+  const models = caps.models;
+  const model = choice.model ?? defaultModel(kind) ?? "";
   return (
     <>
       <Section
-        title="Agents on this computer"
-        description="Agents run with your own account. Sign each one in once here; cloud sandboxes sign in on their own."
+        title={AGENT_LABELS[kind]}
+        description={
+          !inDesktopShell()
+            ? `Tested with ${tested.version}.`
+            : !a
+              ? "Looking…"
+              : !a.installed
+                ? "Not installed on this computer. Install it from Harness."
+                : `Version ${a.version ?? "unknown"}${needsUpdate(a) ? `, older than ${tested.version}, which LemonLime is tested with` : ""}.`
+        }
         aside={
-          <IconButton label="Check again" onClick={ctx.refreshAgents} disabled={!shell || ctx.agents === null}>
-            {ctx.agents === null ? <Spinner /> : <RefreshCw aria-hidden="true" className="size-4" />}
-          </IconButton>
+          <Button size="sm" variant="ghost" onClick={() => onTab({ tab: "harness" })}>
+            Open Harness
+          </Button>
         }
       >
-        {!shell && <p className="text-[14px] text-ink-soft">Agent detection works in the desktop app.</p>}
-        {TESTED_AGENTS.map(t => {
-          const a = found.find(f => f.kind === t.kind);
-          const outdated = a ? needsUpdate(a) : false;
-          return (
-            <div key={t.kind} className="flex flex-col gap-2">
-              <Row
-                label={
-                  <span className="inline-flex items-center gap-2">
-                    {AGENT_LABELS[t.kind]}
-                    {isDefault(t.kind) && <Pill tone="good">Default</Pill>}
-                  </span>
-                }
-                description={
-                  !a ? (
-                    shell ? (
-                      "Looking…"
-                    ) : (
-                      `Tested with ${t.version}.`
-                    )
-                  ) : !a.installed ? (
-                    "Not installed."
-                  ) : (
-                    <>
-                      {a.version ? `Version ${a.version}` : "Installed"}
-                      {outdated ? `; LemonLime is tested with ${t.version}.` : "."}{" "}
-                      {a.signedIn === false && (
-                        <>
-                          Sign in with <code className={code}>{t.signIn}</code> in a terminal.
-                        </>
-                      )}
-                    </>
-                  )
-                }
-              >
-                {a?.installed && a.signedIn !== null && <Pill tone={a.signedIn ? "good" : "warn"}>{a.signedIn ? "Signed in" : "Not signed in"}</Pill>}
-                {a && !a.installed && (
-                  <Button size="sm" variant="primary" disabled={busy !== null} onClick={() => void run(t.kind)}>
-                    {busy === t.kind && <Spinner />}
-                    Install
-                  </Button>
-                )}
-                {a?.installed && (
-                  <Button size="sm" variant={outdated ? "primary" : "secondary"} disabled={busy !== null} onClick={() => void run(t.kind)}>
-                    {busy === t.kind && <Spinner />}
-                    {outdated ? "Update" : "Reinstall latest"}
-                  </Button>
-                )}
-                {a?.installed && !isDefault(t.kind) && (
-                  <Button size="sm" variant="ghost" onClick={() => ctx.onPrefs({ lastAgent: t.kind })}>
-                    Make default
-                  </Button>
-                )}
-                {a?.signedIn === false && (
-                  <IconButton label={`Copy ${t.signIn}`} onClick={() => void navigator.clipboard?.writeText(t.signIn)}>
-                    <Copy aria-hidden="true" className="size-4" />
-                  </IconButton>
-                )}
-              </Row>
-              {output?.kind === t.kind && (
-                <pre
-                  role="status"
-                  className={`max-h-48 overflow-auto rounded-lg border px-3 py-2 font-mono text-[12px] whitespace-pre-wrap ${output.ok ? "border-line bg-cream" : "border-danger/30 bg-danger-soft text-danger"}`}
-                >
-                  {output.ok ? `Done.\n${output.text}` : output.text}
-                </pre>
-              )}
-            </div>
-          );
-        })}
-        <p className="border-t border-line pt-4 text-[13.5px] text-ink-soft">
-          Installing uses npm, which comes with Node.js. Any agent that speaks the Agent Client Protocol works too: add it under ACP agents.
-        </p>
+        <Row
+          label="Sign in"
+          description={
+            <>
+              Run <code className={code}>{tested.signIn}</code> in a terminal, or add accounts under Accounts.
+            </>
+          }
+        >
+          <IconButton label={`Copy ${tested.signIn}`} onClick={() => void navigator.clipboard?.writeText(tested.signIn)}>
+            <Copy aria-hidden="true" className="size-4" />
+          </IconButton>
+          <Button size="sm" variant="secondary" onClick={() => onTab({ tab: "accounts", agent: kind })}>
+            Accounts…
+          </Button>
+        </Row>
+      </Section>
+      <Section
+        title="New threads"
+        description="What a new thread starts with. The model picker changes these as you pick, and a thread can change them as it goes."
+      >
+        <Row label="Model">
+          <Select
+            label="Model"
+            value={models.some(m => m.id === model) ? model : ""}
+            onChange={v => set({ model: v || null })}
+            options={[
+              ...(models.some(m => m.id === model) ? [] : [{ value: "", label: model || "The agent's default" }]),
+              ...models.map(m => ({ value: m.id, label: m.context ? `${m.label} (${m.context})` : m.label })),
+            ]}
+          />
+        </Row>
+        <Row label="Effort" description="How hard it thinks. Higher is slower and uses more of your plan.">
+          <Select
+            label="Effort"
+            value={choice.reasoning && levels.includes(choice.reasoning) ? choice.reasoning : ""}
+            onChange={v => set({ reasoning: (v || null) as ReasoningLevel | null })}
+            options={[{ value: "", label: "The agent's default" }, ...levels.map(r => ({ value: r, label: EFFORT_LABELS[r] }))]}
+          />
+        </Row>
+        {caps.fast && (
+          <ToggleRow
+            label="Fast mode"
+            description={`${AGENT_LABELS[kind]} answers faster on the models that support it, and uses more of your plan.`}
+            checked={choice.fast}
+            onChange={fast => set({ fast })}
+          />
+        )}
       </Section>
     </>
   );
@@ -187,8 +174,8 @@ function DefaultsTab({ ctx }: { ctx: SettingsCtx }) {
         <BranchPrefix settings={settings} onSave={onSave} />
       </Row>
       <ToggleRow
-        label="Offer the highest reasoning levels"
-        description="Adds the slowest, most thorough levels to the picker. They use much more of your plan."
+        label="Offer the highest effort levels"
+        description="Adds the slowest, most thorough levels (Max) to the effort menu. They use much more of your plan."
         checked={prefs.showMaxReasoning}
         onChange={showMaxReasoning => onPrefs({ showMaxReasoning })}
       />

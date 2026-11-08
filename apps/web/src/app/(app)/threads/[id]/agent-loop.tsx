@@ -13,6 +13,8 @@ import {
   type ThreadOptions,
   type TodoItem,
 } from "@lemonlime/protocol";
+import { AgentIcon } from "@/components/agent-icon.tsx";
+import { AGENT_LABELS } from "@/components/status-pill.tsx";
 
 /**
  * The agent loop around the web composer: model, reasoning and permission controls, the
@@ -27,6 +29,10 @@ const REASONING_LABELS: Record<ReasoningLevel, string> = {
   max: "Max",
   ultra: "Ultra",
 };
+
+/** A select that sits inside the model pill, with no box of its own. */
+const pillSelect =
+  "h-8 max-w-[11rem] cursor-pointer truncate rounded-lg border-0 bg-transparent px-1.5 text-[13px] font-medium text-ink focus-visible:outline-2 focus-visible:outline-leaf disabled:opacity-50";
 
 const selectClass =
   "h-8 max-w-[11rem] truncate rounded-lg border border-line bg-paper px-2 text-[13px] text-ink hover:border-control focus:border-leaf focus:outline-none disabled:opacity-50";
@@ -46,50 +52,69 @@ export function OptionsControls({
   disabled: boolean;
   /** From a phone, full access can only be turned on at the computer itself. */
   noFullAccess?: boolean;
-  onChange: (change: { model?: string | null; reasoning?: ReasoningLevel | null; permission?: PermissionMode }) => void;
+  onChange: (change: { model?: string | null; reasoning?: ReasoningLevel | null; permission?: PermissionMode; fast?: boolean }) => void;
 }) {
   const caps = AGENT_CAPABILITIES[kind];
-  const models = [...caps.models];
+  const models = caps.models.filter(m => !m.older || m.id === options.model);
   if (options.model && !models.some(m => m.id === options.model)) models.push({ id: options.model, label: options.model });
   const hint = working ? "Applies from the agent's next turn" : undefined;
+  const effort = caps.live.reasoning && caps.reasoning.length > 0;
+  const label = options.model ? (caps.models.find(m => m.id === options.model)?.label ?? options.model) : AGENT_LABELS[kind];
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {caps.live.model ? (
-        <select
-          aria-label="Model"
-          title={hint}
-          className={selectClass}
-          disabled={disabled}
-          value={options.model ?? ""}
-          onChange={e => onChange({ model: e.target.value || null })}
-        >
-          <option value="">Default model</option>
-          {models.map(m => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      ) : options.model ? (
-        <span className="px-1 text-[13px] text-muted">{options.model}</span>
-      ) : null}
-      {caps.live.reasoning && caps.reasoning.length > 0 && (
-        <select
-          aria-label="Reasoning"
-          title={hint}
-          className={selectClass}
-          disabled={disabled}
-          value={options.reasoning ?? ""}
-          onChange={e => onChange({ reasoning: (e.target.value || null) as ReasoningLevel | null })}
-        >
-          <option value="">Default reasoning</option>
-          {caps.reasoning.map(r => (
-            <option key={r} value={r}>
-              {REASONING_LABELS[r]} reasoning
-            </option>
-          ))}
-        </select>
-      )}
+      {/* The agent's mark and the model, then the effort: one pill, like the desktop composer. */}
+      <span className="inline-flex h-8 items-center rounded-lg text-[13px] text-ink hover:bg-cream-deep/60" title={hint}>
+        <AgentIcon kind={kind} className="ml-2 text-ink" />
+        {caps.live.model ? (
+          <select
+            aria-label={`Model, ${AGENT_LABELS[kind]}`}
+            className={pillSelect}
+            disabled={disabled}
+            value={options.model ?? ""}
+            onChange={e => onChange({ model: e.target.value || null })}
+          >
+            <option value="">{AGENT_LABELS[kind]} default</option>
+            {models.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.context ? `${m.label} (${m.context})` : m.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span className="px-1.5 font-medium">{label}</span>
+        )}
+        {effort && (
+          <>
+            <span aria-hidden="true" className="h-4 w-px bg-line" />
+            <select
+              aria-label="Effort"
+              className={`${pillSelect} font-normal text-muted`}
+              disabled={disabled}
+              value={options.reasoning ?? ""}
+              onChange={e => onChange({ reasoning: (e.target.value || null) as ReasoningLevel | null })}
+            >
+              <option value="">Default effort</option>
+              {caps.reasoning.map(r => (
+                <option key={r} value={r}>
+                  {REASONING_LABELS[r]}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {caps.fast && caps.live.model && (
+          <label className="mr-2 ml-1 inline-flex items-center gap-1 text-[12.5px] text-muted" title="Faster answers that use more of your plan">
+            <input
+              type="checkbox"
+              checked={Boolean(options.fast)}
+              disabled={disabled}
+              onChange={e => onChange({ fast: e.target.checked })}
+              className="accent-leaf"
+            />
+            Fast
+          </label>
+        )}
+      </span>
       <select
         aria-label="What the agent may do without asking"
         title={hint ?? PERMISSION_MODES[options.permission].hint}

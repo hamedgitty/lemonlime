@@ -4,7 +4,7 @@ import { inDesktopShell } from "../../lib/native.ts";
 import { checkForUpdate, type AvailableUpdate } from "../../lib/updates.ts";
 import { AGENT_LABELS } from "../../lib/format.ts";
 import { Button, Spinner, openExternal } from "../ui.tsx";
-import { needsUpdate } from "./AgentsPage.tsx";
+import { needsUpdate } from "../../lib/models.ts";
 import type { SettingsCtx } from "./context.ts";
 import { Pill, Row, Section } from "./parts.tsx";
 

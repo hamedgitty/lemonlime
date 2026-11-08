@@ -207,6 +207,8 @@ export const threads = sqliteTable(
     drainedAt: text("drained_at"),
     /** Pull request opened for the thread's branch, if any. */
     pullRequestUrl: text("pull_request_url"),
+    /** When a member last asked to sign the agent in; a saved sign-in is only accepted soon after. */
+    signInRequestedAt: text("sign_in_requested_at"),
     /** CPU in use in the sandbox at the last heartbeat (cores), and the busiest program. */
     cpuCores: real("cpu_cores"),
     topProcess: text("top_process"),

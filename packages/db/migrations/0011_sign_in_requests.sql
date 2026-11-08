@@ -1,0 +1,1 @@
+ALTER TABLE `threads` ADD `sign_in_requested_at` text;

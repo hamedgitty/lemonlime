@@ -378,7 +378,10 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     update: loginUpdate,
     start: useCallback(() => {
       setLoginUpdate({ state: "starting" });
-      clientRef.current?.startLogin();
+      // The dashboard only keeps a sign-in that a member asked for; say so first.
+      const t = targetRef.current;
+      const asked = t.mode === "cloud" ? t.api.requestSignIn(t.thread.id).catch(() => undefined) : Promise.resolve();
+      void asked.then(() => clientRef.current?.startLogin());
     }, []),
     input: useCallback((text: string) => clientRef.current?.loginInput(text), []),
     cancel: useCallback(() => {

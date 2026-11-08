@@ -343,7 +343,10 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
             update={login}
             onStart={() => {
               setLogin({ state: "starting" });
-              clientRef.current?.startLogin();
+              // The dashboard only keeps a sign-in that a member asked for; say so first.
+              void fetch(`/api/threads/${encodeURIComponent(thread.id)}/sign-in`, { method: "POST" })
+                .catch(() => undefined)
+                .then(() => clientRef.current?.startLogin());
             }}
             onCode={code => clientRef.current?.loginInput(code)}
             onClose={() => {

@@ -58,3 +58,12 @@ export async function credentialsForSandbox(
   }
   return out;
 }
+
+/** How long after a member asks to sign an agent in its sandbox may save the result. */
+export const SIGN_IN_WINDOW_MS = 30 * 60 * 1000;
+
+export function signInRequestedRecently(requestedAt: string | null | undefined, now = Date.now()): boolean {
+  if (!requestedAt) return false;
+  const at = Date.parse(requestedAt);
+  return Number.isFinite(at) && at <= now + 60_000 && now - at <= SIGN_IN_WINDOW_MS;
+}

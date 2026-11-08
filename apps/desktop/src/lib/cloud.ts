@@ -112,6 +112,11 @@ export class CloudApi {
   }
 
   /** Open a pull request for the thread's branch (or get the one already open). */
+  /** Say a sign-in is about to happen, so the dashboard will keep the login it produces. */
+  async requestSignIn(id: string): Promise<void> {
+    await this.request("POST", `/api/threads/${encodeURIComponent(id)}/sign-in`);
+  }
+
   async openPullRequest(id: string, body: { title?: string; body?: string } = {}): Promise<{ url: string; created: boolean }> {
     const r = (await this.request("POST", `/api/threads/${encodeURIComponent(id)}/pull-request`, body)) as { url?: unknown; created?: unknown } | null;
     if (typeof r?.url !== "string") throw new CloudError("The control plane didn't say where the pull request is.", 200);

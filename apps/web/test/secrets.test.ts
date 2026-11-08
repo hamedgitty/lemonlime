@@ -131,3 +131,16 @@ describe("secrets", () => {
     expect(sandbox.created[0]!.runner.env.BASH_ENV).toBeUndefined();
   });
 });
+
+describe("saved agent sign-ins", () => {
+  it("are only accepted soon after a member asked to sign in", async () => {
+    const { signInRequestedRecently, SIGN_IN_WINDOW_MS } = await import("../src/lib/agent-credentials.ts");
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    expect(signInRequestedRecently(null, now)).toBe(false);
+    expect(signInRequestedRecently("not a date", now)).toBe(false);
+    expect(signInRequestedRecently(new Date(now - 60_000).toISOString(), now)).toBe(true);
+    expect(signInRequestedRecently(new Date(now - SIGN_IN_WINDOW_MS - 1).toISOString(), now)).toBe(false);
+    // A time in the future (a clock far off, or a forged value) doesn't count.
+    expect(signInRequestedRecently(new Date(now + 10 * 60_000).toISOString(), now)).toBe(false);
+  });
+});

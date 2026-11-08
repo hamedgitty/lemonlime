@@ -6,6 +6,9 @@ import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
 import { SetupWizard } from "./components/SetupWizard.tsx";
 import { SkillsView } from "./components/SkillsView.tsx";
+import { PluginsView } from "./components/PluginsView.tsx";
+import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
+import { mergeImportedThreads } from "./lib/history.ts";
 import { needsUpdate } from "./components/settings/AgentsPage.tsx";
 import { TipProvider } from "./components/primitives.tsx";
 import { SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
@@ -193,7 +196,8 @@ export function App() {
   const agentUpdates = useMemo(() => (agents ?? []).filter(needsUpdate).map(a => AGENT_LABELS[a.kind]), [agents]);
 
   // ── Setup wizard and composer drafts ─────────────────────
-  const [setupOpen, setSetupOpen] = useState(false);
+  // First run opens setup; it stays open until finished or skipped, even once chats are imported.
+  const [setupOpen, setSetupOpen] = useState(() => !prefs.setupDone && localThreads.length === 0);
   const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
 
   const cloudConfigured = isCloudConfigured(settings);
@@ -617,17 +621,28 @@ export function App() {
       saveAll({ ...settings, accessToken: "", cloudWorkspaceId: "" });
       setSignedIn(false);
     },
-    onImported: metas => setLocalThreads(list => [...metas.filter(m => !list.some(x => x.id === m.id)), ...list]),
+    onImported: metas => setLocalThreads(list => mergeImportedThreads(list, { imported: metas.map(thread => ({ id: thread.id, thread, already: false })) })),
     onPage: page => go({ view: "settings", page: page as SettingsPage }),
     onOpenSetup: () => setSetupOpen(true),
   };
+
+  const importChats = (onDone?: () => void, compact = false) => (
+    <ImportChats
+      runnerPath={settings.runnerPath}
+      projects={prefs.recentProjects}
+      onImported={settingsCtx.onImported}
+      onAddProject={path => onPrefs({ recentProjects: [path, ...prefs.recentProjects.filter(p => p !== path)] })}
+      compact={compact}
+      {...(onDone ? { onDone } : {})}
+    />
+  );
 
   const promptInComposer = (text: string) => {
     setDraft({ text, nonce: Date.now() });
     go({ view: "home" });
   };
 
-  if (setupOpen || (!prefs.setupDone && summaries.length === 0)) {
+  if (setupOpen) {
     return (
       <TipProvider>
         <SetupWizard
@@ -639,6 +654,15 @@ export function App() {
           agents={agents}
           refreshAgents={refreshAgents}
           macChrome={MAC_CHROME}
+          importStep={done => (
+            <>
+              <h1 className="font-display text-[28px] font-semibold tracking-[-0.03em]">Import your work</h1>
+              <p className="mt-2 mb-8 text-[15px] text-ink-soft">
+                Bring the chats you've had with your agents into LemonLime, and carry on where you left off.
+              </p>
+              {importChats(done, true)}
+            </>
+          )}
           onFinish={() => {
             onPrefs({ setupDone: true });
             setSetupOpen(false);
@@ -746,11 +770,18 @@ export function App() {
                   void refreshCloud();
                   go({ view: "thread", selection: { mode: "cloud", id } });
                 }}
+                scans={<AgentScans runnerPath={settings.runnerPath} />}
               />
             ) : place.view === "skills" ? (
               <SkillsView onPrompt={promptInComposer} />
+            ) : place.view === "plugins" ? (
+              <PluginsView onPrompt={promptInComposer} />
             ) : place.view === "settings" ? (
-              <SettingsView page={place.page} ctx={settingsCtx} />
+              <SettingsView
+                page={place.page}
+                ctx={settingsCtx}
+                importTab={<section className="mb-8 rounded-xl border border-line bg-paper p-5">{importChats()}</section>}
+              />
             ) : place.view === "thread" && selectedEntry ? (
               <ThreadView
                 key={`${selectedEntry.mode}:${selection?.id}`}
@@ -766,6 +797,12 @@ export function App() {
                 onCloudRefresh={refreshCloud}
                 onRunnersChanged={refreshRunners}
                 {...(cloudConfigured || selectedEntry.mode === "cloud" ? { onMove: moveThread } : {})}
+                followUp={prefs.followUp}
+                foldFinished={prefs.collapseFinished}
+                notifyWhenFocused={prefs.notifications.whenFocused}
+                {...(prefs.notifications.enabled && prefs.notifications.needsInput
+                  ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
+                  : {})}
                 computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
                 onComputerLevel={level => {
                   if (selectedEntry.mode !== "cloud") return;

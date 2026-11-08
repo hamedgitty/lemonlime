@@ -75,7 +75,12 @@ export function MenuSeparator() {
 }
 
 export function MenuLabel({ children }: { children: ReactNode }) {
-  return <BaseMenu.GroupLabel className="px-2.5 pt-1.5 pb-1 text-[12.5px] font-medium text-ink-faint">{children}</BaseMenu.GroupLabel>;
+  // A plain heading: Base UI's GroupLabel throws outside a Group.
+  return (
+    <div role="presentation" className="px-2.5 pt-1.5 pb-1 text-[12.5px] font-medium text-ink-faint">
+      {children}
+    </div>
+  );
 }
 
 /** One-of-many choices inside a menu, each with a check when chosen. */

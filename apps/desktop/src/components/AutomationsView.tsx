@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { AlarmClock, Pause, Play, Trash2 } from "lucide-react";
-import { AGENT_CAPABILITIES, nextRun, parseSchedule, type AgentKind } from "@lemonlime/protocol";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { AlarmClock, CheckCheck, Pause, Pencil, Play, Plus, Trash2 } from "lucide-react";
+import { nextRun, parseSchedule, type AgentKind } from "@lemonlime/protocol";
 import type { AutomationInfo, CloudApi } from "../lib/cloud.ts";
-import { AGENT_LABELS, repoName } from "../lib/format.ts";
+import { AGENT_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { confirmAction } from "../lib/native.ts";
+import { Tabs } from "./settings/parts.tsx";
 import { Button, SegmentedControl, Spinner, TextInput, cx } from "./ui.tsx";
 
 const PRESETS = [
@@ -13,10 +14,114 @@ const PRESETS = [
   { label: "Hourly", cron: "0 * * * *" },
 ];
 
+/** Ready-made automations. Picking one fills the form; nothing runs until it's saved. */
+export const TEMPLATES: { group: string; name: string; schedule: string; prompt: string }[] = [
+  {
+    group: "Security",
+    name: "Dependency vulnerabilities",
+    schedule: "0 6 * * 1",
+    prompt:
+      "Check this repository's dependencies for known vulnerabilities with the package manager's audit command. Upgrade what can be upgraded safely, run the tests, and open a pull request listing each advisory and what changed. If nothing needs doing, say so and stop.",
+  },
+  {
+    group: "Security",
+    name: "Secrets check",
+    schedule: "0 7 * * 1",
+    prompt:
+      "Look through the repository and its recent commits for secrets that shouldn't be there: API keys, tokens, passwords, private keys. Report each with the file and line, and how to rotate it. Don't print the secret itself.",
+  },
+  {
+    group: "Security",
+    name: "Risky code review",
+    schedule: "0 8 * * 3",
+    prompt:
+      "Review the code changed in the last week for security problems: injection, missing authorization checks, unsafe file or shell access, unvalidated input. Fix clear problems with tests in a pull request; list anything you weren't sure about.",
+  },
+  {
+    group: "Code health",
+    name: "Nightly dependency bump",
+    schedule: "0 3 * * *",
+    prompt:
+      "Update the dependencies to their latest compatible versions, run the build and tests, and open a pull request if anything changed and everything passes.",
+  },
+  {
+    group: "Code health",
+    name: "Flaky and failing tests",
+    schedule: "0 5 * * 1-5",
+    prompt:
+      "Run the test suite three times. Find tests that fail or pass only sometimes, work out why, and fix them in a pull request. Explain each cause in the description.",
+  },
+  {
+    group: "Code health",
+    name: "Dead code sweep",
+    schedule: "0 4 * * 6",
+    prompt:
+      "Find code that's no longer used: unexported functions nothing calls, unused files, stale feature flags. Remove what's clearly dead in a pull request, with tests passing, and list anything you left because you weren't sure.",
+  },
+  {
+    group: "Code health",
+    name: "Type and lint clean-up",
+    schedule: "0 4 * * 0",
+    prompt: "Run the type checker and linter. Fix the warnings and errors that have a clear fix, without changing behaviour, and open a pull request.",
+  },
+  {
+    group: "Reviews",
+    name: "Weekly change summary",
+    schedule: "0 9 * * 5",
+    prompt:
+      "Summarise what changed in this repository this week, in plain English for the team: what shipped, what's in progress, and anything risky. Group it by area. Don't change any code.",
+  },
+  {
+    group: "Reviews",
+    name: "Open pull request check",
+    schedule: "0 10 * * 1-5",
+    prompt:
+      "Look at the open pull requests. For each, say whether it's ready, what's blocking it, and whether it conflicts with the main branch. Keep it to a short list, most urgent first.",
+  },
+  {
+    group: "Reviews",
+    name: "TODO tracker",
+    schedule: "0 9 1 * *",
+    prompt:
+      "Collect every TODO, FIXME and HACK comment in the code, with file and line, oldest first by git blame. Suggest which three to tackle first and why.",
+  },
+  {
+    group: "Ops",
+    name: "Error log triage",
+    schedule: "0 8 * * 1-5",
+    prompt:
+      "Read the error logs the repository has access to (see the README for where they are). Group the errors by cause, rank them by how often they happen, and fix the top one with a test if the fix is clear.",
+  },
+  {
+    group: "Ops",
+    name: "Broken links",
+    schedule: "0 6 * * 0",
+    prompt: "Check every link in the docs and README. Fix broken internal links, and list external links that no longer work with a suggested replacement.",
+  },
+  {
+    group: "Docs",
+    name: "Docs that drifted",
+    schedule: "0 7 * * 4",
+    prompt:
+      "Compare the docs with the code: commands, options, environment variables and examples. Fix anything out of date in a pull request, and keep the writing plain and short.",
+  },
+  {
+    group: "Docs",
+    name: "Changelog draft",
+    schedule: "0 16 * * 5",
+    prompt:
+      "Draft this week's changelog entry from the merged pull requests, grouped into new, improved and fixed, written for users. Open it as a pull request.",
+  },
+];
+
 const when = (iso: string | null, tz: string) =>
   iso
     ? new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: tz })
     : "Not scheduled";
+
+type Tab = "overview" | "review" | "templates" | "scans";
+type Form = { name: string; schedule: string; agent: AgentKind; repoUrl: string; baseBranch: string; prompt: string; size: "small" | "large" };
+const EMPTY: Form = { name: "", schedule: PRESETS[0]!.cron, agent: "claude-code", repoUrl: "", baseBranch: "main", prompt: "", size: "small" };
 
 /**
  * Automations: a prompt that starts a new cloud thread on a schedule. They run in the
@@ -26,17 +131,18 @@ export function AutomationsView({
   cloudApi,
   onConnectCloud,
   onOpenThread,
+  scans,
 }: {
   cloudApi: CloudApi | null;
   onConnectCloud: () => void;
   onOpenThread: (id: string) => void;
+  /** How you work with agents on this computer, when this build can read their history. */
+  scans?: ReactNode;
 }) {
+  const [tab, setTab] = useState<Tab>("overview");
   const [list, setList] = useState<AutomationInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const zone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
-  const [form, setForm] = useState({ name: "", schedule: PRESETS[0]!.cron, agent: "claude-code" as AgentKind, repoUrl: "", baseBranch: "main", prompt: "" });
-  const [busy, setBusy] = useState(false);
-  const set = (p: Partial<typeof form>) => setForm(f => ({ ...f, ...p }));
+  const [editing, setEditing] = useState<{ id: string | null; form: Form } | null>(null);
 
   const load = useCallback(() => {
     if (!cloudApi) return;
@@ -44,6 +150,406 @@ export function AutomationsView({
   }, [cloudApi]);
   useEffect(load, [load]);
 
+  const toReview = useMemo(() => (list ?? []).flatMap(a => (a.recentRuns ?? []).filter(r => r.status !== "skipped" && !r.reviewedAt)).length, [list]);
+
+  if (!cloudApi && tab !== "scans") {
+    return (
+      <main className="flex flex-1 flex-col">
+        <Header tab={tab} onTab={setTab} toReview={0} hasScans={Boolean(scans)} onNew={null} />
+        <div className="flex flex-1 items-center justify-center p-10">
+          <div className="max-w-md text-center">
+            <AlarmClock aria-hidden="true" className="mx-auto mb-3 size-6 text-leaf" />
+            <h1 className="font-sans text-[18px] font-semibold tracking-normal">Automations run in the cloud</h1>
+            <p className="mt-2 text-[14px] text-ink-soft">
+              Run a prompt on a schedule, like a nightly dependency bump, even with your laptop closed. Connect LemonLime Cloud to set them up.
+            </p>
+            <Button className="mt-4" variant="primary" onClick={onConnectCloud}>
+              Connect LemonLime Cloud
+            </Button>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  const act = async (fn: () => Promise<unknown>) => {
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <main className="flex min-w-0 flex-1 flex-col">
+      <Header tab={tab} onTab={setTab} toReview={toReview} hasScans={Boolean(scans)} onNew={cloudApi ? () => setEditing({ id: null, form: EMPTY }) : null} />
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[800px] px-6 pt-6 pb-16">
+          {error && (
+            <p role="alert" className="mb-4 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px]">
+              {error}
+            </p>
+          )}
+          {editing && cloudApi && (
+            <Editor
+              key={editing.id ?? "new"}
+              initial={editing.form}
+              isNew={!editing.id}
+              onCancel={() => setEditing(null)}
+              onSave={async f => {
+                const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+                const body = {
+                  name: f.name.trim(),
+                  schedule: f.schedule.trim(),
+                  timezone: zone,
+                  agent: { kind: f.agent },
+                  repo: { url: f.repoUrl.trim(), baseBranch: f.baseBranch.trim() || "main" },
+                  sandboxSize: f.size,
+                  prompt: f.prompt.trim(),
+                };
+                if (editing.id) {
+                  const u = await cloudApi.updateAutomation(editing.id, body);
+                  setList(l => l?.map(x => (x.id === editing.id ? { ...x, ...u } : x)) ?? null);
+                } else {
+                  const a = await cloudApi.createAutomation(body);
+                  setList(l => [...(l ?? []), { ...a, recentRuns: [] }]);
+                }
+                setEditing(null);
+                setTab("overview");
+              }}
+            />
+          )}
+          {tab === "overview" && cloudApi && (
+            <Overview
+              list={list}
+              onEdit={a =>
+                setEditing({
+                  id: a.id,
+                  form: {
+                    name: a.name,
+                    schedule: a.schedule,
+                    agent: a.agent.kind,
+                    repoUrl: a.repo.url,
+                    baseBranch: a.repo.baseBranch,
+                    prompt: a.prompt,
+                    size: a.sandboxSize ?? "small",
+                  },
+                })
+              }
+              onToggle={a =>
+                act(async () => {
+                  const u = await cloudApi.updateAutomation(a.id, { enabled: !a.enabled });
+                  setList(l => l?.map(x => (x.id === a.id ? { ...x, ...u } : x)) ?? null);
+                })
+              }
+              onRemove={a =>
+                act(async () => {
+                  if (!(await confirmAction(`Delete "${a.name}"? Threads it already started stay.`))) return;
+                  await cloudApi.deleteAutomation(a.id);
+                  setList(l => l?.filter(x => x.id !== a.id) ?? null);
+                })
+              }
+              onOpenThread={onOpenThread}
+              onTemplates={() => setTab("templates")}
+            />
+          )}
+          {tab === "review" && cloudApi && (
+            <Review
+              list={list}
+              onOpenThread={onOpenThread}
+              onReview={(a, runId, reviewed) =>
+                act(async () => {
+                  await cloudApi.reviewRun(a.id, runId, reviewed);
+                  load();
+                })
+              }
+              onReviewAll={() =>
+                act(async () => {
+                  await cloudApi.reviewAllRuns();
+                  load();
+                })
+              }
+            />
+          )}
+          {tab === "templates" && (
+            <Templates
+              onUse={t => {
+                setEditing({ id: null, form: { ...EMPTY, name: t.name, schedule: t.schedule, prompt: t.prompt } });
+                setTab("overview");
+              }}
+              disabled={!cloudApi}
+            />
+          )}
+          {tab === "scans" && scans}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function Header({
+  tab,
+  onTab,
+  toReview,
+  hasScans,
+  onNew,
+}: {
+  tab: Tab;
+  onTab: (t: Tab) => void;
+  toReview: number;
+  hasScans: boolean;
+  onNew: (() => void) | null;
+}) {
+  return (
+    <header className="shrink-0 border-b border-line px-6">
+      <div data-tauri-drag-region className="flex h-[52px] items-center gap-3">
+        <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
+          <AlarmClock aria-hidden="true" className="size-4 text-ink-soft" />
+          Automations
+        </h1>
+        <span className="flex-1" />
+        {onNew && (
+          <Button size="sm" variant="primary" onClick={onNew}>
+            <Plus aria-hidden="true" className="size-4" />
+            New
+          </Button>
+        )}
+      </div>
+      <div className="-mb-px [&>div]:mb-0 [&>div]:border-b-0">
+        <Tabs
+          value={tab}
+          onChange={onTab}
+          tabs={[
+            { id: "overview", label: "Overview" },
+            { id: "review", label: "Review", ...(toReview ? { count: toReview } : {}) },
+            { id: "templates", label: "Templates", count: TEMPLATES.length },
+            ...(hasScans ? [{ id: "scans" as const, label: "Scans" }] : []),
+          ]}
+        />
+      </div>
+    </header>
+  );
+}
+
+function Overview({
+  list,
+  onEdit,
+  onToggle,
+  onRemove,
+  onOpenThread,
+  onTemplates,
+}: {
+  list: AutomationInfo[] | null;
+  onEdit: (a: AutomationInfo) => void;
+  onToggle: (a: AutomationInfo) => void;
+  onRemove: (a: AutomationInfo) => void;
+  onOpenThread: (id: string) => void;
+  onTemplates: () => void;
+}) {
+  if (list === null)
+    return (
+      <p className="flex items-center gap-2 text-[14px] text-ink-soft">
+        <Spinner /> Loading…
+      </p>
+    );
+  if (list.length === 0)
+    return (
+      <div className="rounded-2xl border border-dashed border-line-strong px-6 py-10 text-center">
+        <p className="text-[15px] font-medium">No automations yet</p>
+        <p className="mt-1 text-[14px] text-ink-soft">
+          A prompt that starts a cloud thread on a schedule, like a nightly dependency bump. Start from a template, or write your own.
+        </p>
+        <Button className="mt-4" onClick={onTemplates}>
+          Browse templates
+        </Button>
+      </div>
+    );
+  return (
+    <ul className="flex flex-col gap-3">
+      {list.map(a => (
+        <li key={a.id} className="rounded-xl border border-line bg-paper p-4">
+          <div className="flex items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-[15px] font-medium">{a.name}</p>
+              <p className="mt-0.5 text-[13px] text-ink-soft">
+                <span className="font-mono">{a.schedule}</span> ({a.timezone}), {AGENT_LABELS[a.agent.kind]} on {repoName(a.repo.url)}
+              </p>
+              <p className={cx("mt-1 text-[13px]", a.enabled ? "text-ink" : "text-ink-faint")}>
+                {a.enabled ? `Next run ${when(a.nextRunAt, a.timezone)}` : "Paused"}
+              </p>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => onEdit(a)} aria-label={`Edit ${a.name}`}>
+              <Pencil aria-hidden="true" className="size-3.5" />
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onToggle(a)} aria-label={a.enabled ? `Pause ${a.name}` : `Resume ${a.name}`}>
+              {a.enabled ? <Pause aria-hidden="true" className="size-3.5" /> : <Play aria-hidden="true" className="size-3.5" />}
+              {a.enabled ? "Pause" : "Resume"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onRemove(a)} aria-label={`Delete ${a.name}`}>
+              <Trash2 aria-hidden="true" className="size-3.5" />
+            </Button>
+          </div>
+          {a.recentRuns && a.recentRuns.length > 0 && (
+            <ul aria-label="Recent runs" className="mt-3 flex flex-col gap-1 border-t border-line pt-2 text-[13px]">
+              {a.recentRuns.slice(0, 5).map(r => (
+                <RunLine key={r.id} run={r} onOpenThread={onOpenThread} />
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+type Run = NonNullable<AutomationInfo["recentRuns"]>[number];
+
+function RunLine({ run: r, onOpenThread }: { run: Run; onOpenThread: (id: string) => void }) {
+  return (
+    <li className="flex items-center gap-2">
+      <span className={r.status === "started" ? "text-leaf" : r.status === "skipped" ? "text-amber" : "text-danger"}>
+        {r.status === "started" ? "Started" : r.status === "skipped" ? "Skipped" : "Failed"}
+      </span>
+      <span className="text-ink-faint">{new Date(r.ranAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
+      <span className="min-w-0 flex-1 truncate text-ink-soft" title={r.summary ?? r.detail ?? undefined}>
+        {r.summary ?? r.detail}
+      </span>
+      {r.threadId && (
+        <button type="button" className="text-leaf hover:underline" onClick={() => onOpenThread(r.threadId!)}>
+          Open thread
+        </button>
+      )}
+    </li>
+  );
+}
+
+function Review({
+  list,
+  onOpenThread,
+  onReview,
+  onReviewAll,
+}: {
+  list: AutomationInfo[] | null;
+  onOpenThread: (id: string) => void;
+  onReview: (a: AutomationInfo, runId: string, reviewed: boolean) => void;
+  onReviewAll: () => void;
+}) {
+  const [show, setShow] = useState<"todo" | "all">("todo");
+  const runs = (list ?? [])
+    .flatMap(a => (a.recentRuns ?? []).map(r => ({ a, r })))
+    .filter(({ r }) => r.status !== "skipped" && (show === "all" || !r.reviewedAt))
+    .sort((x, y) => y.r.ranAt.localeCompare(x.r.ranAt));
+  return (
+    <>
+      <div className="mb-4 flex items-center gap-3">
+        <SegmentedControl
+          label="Show"
+          value={show}
+          onChange={setShow}
+          options={[
+            { value: "todo", label: "To review" },
+            { value: "all", label: "All" },
+          ]}
+        />
+        <span className="flex-1" />
+        <Button size="sm" variant="ghost" disabled={!runs.some(x => !x.r.reviewedAt)} onClick={onReviewAll}>
+          <CheckCheck aria-hidden="true" className="size-4" />
+          Mark all reviewed
+        </Button>
+      </div>
+      {list === null && (
+        <p className="flex items-center gap-2 text-[14px] text-ink-soft">
+          <Spinner /> Loading…
+        </p>
+      )}
+      {list !== null && runs.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-line-strong px-6 py-10 text-center">
+          <p className="text-[15px] font-medium">{show === "todo" ? "All caught up" : "Nothing yet"}</p>
+          <p className="mt-1 text-[14px] text-ink-soft">Each time an automation runs, its result lands here for you to look over.</p>
+        </div>
+      )}
+      <ul className="flex flex-col gap-2">
+        {runs.map(({ a, r }) => (
+          <li
+            key={r.id}
+            className={cx("flex items-start gap-3 rounded-xl border bg-paper p-3.5", r.reviewedAt ? "border-line opacity-75" : "border-line-strong")}
+          >
+            <span
+              aria-hidden="true"
+              className={cx("mt-1.5 size-2 shrink-0 rounded-full", r.reviewedAt ? "bg-control" : r.status === "failed" ? "bg-danger" : "bg-lime-2")}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-[14.5px] font-medium">{a.name}</p>
+              <p className="text-[13px] text-ink-soft">
+                {r.status === "failed" ? "Failed" : "Ran"} {relativeTime(r.ranAt)} on {repoName(a.repo.url)}
+              </p>
+              {(r.summary || r.detail) && <p className="mt-1 line-clamp-3 text-[13.5px]">{r.summary ?? r.detail}</p>}
+            </div>
+            {r.threadId && (
+              <Button size="sm" variant="ghost" onClick={() => onOpenThread(r.threadId!)}>
+                Open
+              </Button>
+            )}
+            <Button size="sm" onClick={() => onReview(a, r.id, !r.reviewedAt)}>
+              {r.reviewedAt ? "Mark unread" : "Reviewed"}
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function Templates({ onUse, disabled }: { onUse: (t: (typeof TEMPLATES)[number]) => void; disabled: boolean }) {
+  const groups = [...new Set(TEMPLATES.map(t => t.group))];
+  return (
+    <>
+      {groups.map(g => (
+        <section key={g} className="mb-7">
+          <h2 className="mb-2.5 flex items-center gap-2 font-sans text-[14px] font-semibold tracking-normal">
+            {g}
+            <span className="rounded-full bg-cream-deep px-1.5 text-[12px] font-normal text-ink-soft">{TEMPLATES.filter(t => t.group === g).length}</span>
+          </h2>
+          <ul className="grid gap-2.5 sm:grid-cols-2">
+            {TEMPLATES.filter(t => t.group === g).map(t => (
+              <li key={t.name} className="flex flex-col rounded-xl border border-line bg-paper p-4">
+                <p className="text-[14.5px] font-medium">{t.name}</p>
+                <p className="mt-1 line-clamp-3 flex-1 text-[13px] text-ink-soft">{t.prompt}</p>
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="flex-1 text-[12.5px] text-ink-faint">{describeCron(t.schedule)}</span>
+                  <Button size="sm" disabled={disabled} onClick={() => onUse(t)}>
+                    Use
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </>
+  );
+}
+
+const DAYS = ["Sundays", "Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays"];
+
+/** A plain reading of the simple schedules the templates use. */
+export function describeCron(cron: string): string {
+  const [min, hour, dom, , dow] = cron.split(" ");
+  const time = `${hour!.padStart(2, "0")}:${min!.padStart(2, "0")}`;
+  if (dom !== "*" && dow === "*") return `Monthly on day ${dom}, ${time}`;
+  if (dow === "*") return `Daily at ${time}`;
+  if (dow === "1-5") return `Weekdays at ${time}`;
+  if (/^\d$/.test(dow!)) return `${DAYS[Number(dow)]} at ${time}`;
+  return cron;
+}
+
+function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: boolean; onCancel: () => void; onSave: (f: Form) => Promise<void> }) {
+  const [form, setForm] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const zone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+  const set = (p: Partial<Form>) => setForm(f => ({ ...f, ...p }));
   const preview = useMemo(() => {
     try {
       parseSchedule(form.schedule);
@@ -53,197 +559,108 @@ export function AutomationsView({
       return { ok: false, text: e instanceof Error ? e.message : String(e) };
     }
   }, [form.schedule, zone]);
-
-  if (!cloudApi) {
-    return (
-      <main className="flex flex-1 items-center justify-center p-10">
-        <div className="max-w-md text-center">
-          <AlarmClock aria-hidden="true" className="mx-auto mb-3 size-6 text-leaf" />
-          <h1 className="font-sans text-[18px] font-semibold tracking-normal">Automations run in the cloud</h1>
-          <p className="mt-2 text-[14px] text-ink-soft">
-            Run a prompt on a schedule, like a nightly dependency bump, even with your laptop closed. Connect LemonLime Cloud to set them up.
-          </p>
-          <Button className="mt-4" variant="primary" onClick={onConnectCloud}>
-            Connect LemonLime Cloud
-          </Button>
-        </div>
-      </main>
-    );
-  }
-
-  const create = async (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const a = await cloudApi.createAutomation({
-        name: form.name.trim(),
-        schedule: form.schedule.trim(),
-        timezone: zone,
-        agent: { kind: form.agent },
-        repo: { url: form.repoUrl.trim(), baseBranch: form.baseBranch.trim() || "main" },
-        prompt: form.prompt.trim(),
-      });
-      setList(l => [...(l ?? []), { ...a, recentRuns: [] }]);
-      set({ name: "", prompt: "" });
+      await onSave(form);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
   };
-  const toggle = async (a: AutomationInfo) => {
-    try {
-      const u = await cloudApi.updateAutomation(a.id, { enabled: !a.enabled });
-      setList(l => l?.map(x => (x.id === a.id ? { ...x, ...u } : x)) ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-  const remove = async (a: AutomationInfo) => {
-    if (!(await confirmAction(`Delete "${a.name}"? Threads it already started stay.`))) return;
-    try {
-      await cloudApi.deleteAutomation(a.id);
-      setList(l => l?.filter(x => x.id !== a.id) ?? null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
   return (
-    <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-[760px] px-6 py-10">
-        <h1 className="font-display text-[26px] font-semibold tracking-[-0.02em]">Automations</h1>
-        <p className="mt-1 text-[14px] text-ink-soft">
-          A prompt that starts a new cloud thread on a schedule. They run in the cloud whether or not this app is open.
+    <form onSubmit={e => void submit(e)} className="mb-8 flex flex-col gap-4 rounded-2xl border border-line-strong bg-paper p-5 shadow-panel">
+      <h2 className="font-sans text-[16px] font-semibold tracking-normal">{isNew ? "New automation" : `Edit ${initial.name}`}</h2>
+      <label className="block">
+        <span className="mb-1 block text-[13.5px] font-medium">Name</span>
+        <TextInput required maxLength={120} value={form.name} onChange={e => set({ name: e.target.value })} placeholder="Nightly dependency bump" />
+      </label>
+      <div>
+        <span className="mb-1 block text-[13.5px] font-medium">When</span>
+        <SegmentedControl
+          label="Common schedules"
+          value={PRESETS.find(p => p.cron === form.schedule)?.cron ?? "custom"}
+          onChange={v => v !== "custom" && set({ schedule: v })}
+          options={[...PRESETS.map(p => ({ value: p.cron, label: p.label })), { value: "custom", label: "Custom" }]}
+        />
+        <TextInput
+          aria-label="Schedule (cron)"
+          className="mt-2 font-mono text-[13px]"
+          value={form.schedule}
+          onChange={e => set({ schedule: e.target.value })}
+          aria-invalid={preview.ok ? undefined : true}
+        />
+        <p className={cx("mt-1 text-[12.5px]", preview.ok ? "text-ink-faint" : "text-danger")}>
+          {preview.text} {preview.ok && `(${zone})`}
         </p>
-        {error && (
-          <p role="alert" className="mt-4 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px]">
-            {error}
-          </p>
-        )}
-        {list === null ? (
-          <p className="mt-6 flex items-center gap-2 text-[14px] text-ink-soft">
-            <Spinner /> Loading…
-          </p>
-        ) : (
-          list.length > 0 && (
-            <ul className="mt-6 flex flex-col gap-3">
-              {list.map(a => (
-                <li key={a.id} className="rounded-xl border border-line bg-paper p-4">
-                  <div className="flex items-start gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[15px] font-medium">{a.name}</p>
-                      <p className="mt-0.5 text-[13px] text-ink-soft">
-                        <span className="font-mono">{a.schedule}</span> ({a.timezone}), {AGENT_LABELS[a.agent.kind]} on {repoName(a.repo.url)}
-                      </p>
-                      <p className={cx("mt-1 text-[13px]", a.enabled ? "text-ink" : "text-ink-faint")}>
-                        {a.enabled ? `Next run ${when(a.nextRunAt, a.timezone)}` : "Paused"}
-                      </p>
-                    </div>
-                    <Button size="sm" variant="ghost" onClick={() => void toggle(a)} aria-label={a.enabled ? `Pause ${a.name}` : `Resume ${a.name}`}>
-                      {a.enabled ? <Pause aria-hidden="true" className="size-3.5" /> : <Play aria-hidden="true" className="size-3.5" />}
-                      {a.enabled ? "Pause" : "Resume"}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => void remove(a)} aria-label={`Delete ${a.name}`}>
-                      <Trash2 aria-hidden="true" className="size-3.5" />
-                    </Button>
-                  </div>
-                  {a.recentRuns && a.recentRuns.length > 0 && (
-                    <ul aria-label="Recent runs" className="mt-3 flex flex-col gap-1 border-t border-line pt-2 text-[13px]">
-                      {a.recentRuns.map(r => (
-                        <li key={r.id} className="flex items-center gap-2">
-                          <span className={r.status === "started" ? "text-leaf" : r.status === "skipped" ? "text-amber" : "text-danger"}>
-                            {r.status === "started" ? "Started" : r.status === "skipped" ? "Skipped" : "Failed"}
-                          </span>
-                          <span className="text-ink-faint">{new Date(r.ranAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
-                          <span className="min-w-0 flex-1 truncate text-ink-soft" title={r.detail ?? undefined}>
-                            {r.detail}
-                          </span>
-                          {r.threadId && (
-                            <button type="button" className="text-leaf hover:underline" onClick={() => onOpenThread(r.threadId!)}>
-                              Open thread
-                            </button>
-                          )}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )
-        )}
-
-        <form onSubmit={e => void create(e)} className="mt-8 flex flex-col gap-4 rounded-2xl border border-line bg-paper p-5">
-          <h2 className="font-sans text-[16px] font-semibold tracking-normal">New automation</h2>
-          <label className="block">
-            <span className="mb-1 block text-[13.5px] font-medium">Name</span>
-            <TextInput required maxLength={120} value={form.name} onChange={e => set({ name: e.target.value })} placeholder="Nightly dependency bump" />
-          </label>
-          <div>
-            <span className="mb-1 block text-[13.5px] font-medium">When</span>
-            <SegmentedControl
-              label="Common schedules"
-              value={PRESETS.find(p => p.cron === form.schedule)?.cron ?? "custom"}
-              onChange={v => v !== "custom" && set({ schedule: v })}
-              options={[...PRESETS.map(p => ({ value: p.cron, label: p.label })), { value: "custom", label: "Custom" }]}
-            />
-            <TextInput
-              aria-label="Schedule (cron)"
-              className="mt-2 font-mono text-[13px]"
-              value={form.schedule}
-              onChange={e => set({ schedule: e.target.value })}
-              aria-invalid={preview.ok ? undefined : true}
-            />
-            <p className={cx("mt-1 text-[12.5px]", preview.ok ? "text-ink-faint" : "text-danger")}>
-              {preview.text} {preview.ok && `(${zone})`}
-            </p>
-          </div>
-          <div>
-            <span className="mb-1 block text-[13.5px] font-medium">Agent</span>
-            <SegmentedControl
-              label="Agent"
-              value={form.agent}
-              onChange={v => set({ agent: v })}
-              options={(["claude-code", "codex", "opencode"] as const).filter(k => AGENT_CAPABILITIES[k]).map(k => ({ value: k, label: AGENT_LABELS[k] }))}
-            />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
-            <label className="block">
-              <span className="mb-1 block text-[13.5px] font-medium">Repository</span>
-              <TextInput
-                required
-                className="font-mono text-[13px]"
-                placeholder="https://github.com/acme/app"
-                value={form.repoUrl}
-                onChange={e => set({ repoUrl: e.target.value })}
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[13.5px] font-medium">Branch</span>
-              <TextInput required className="font-mono text-[13px]" value={form.baseBranch} onChange={e => set({ baseBranch: e.target.value })} />
-            </label>
-          </div>
-          <label className="block">
-            <span className="mb-1 block text-[13.5px] font-medium">What the agent should do</span>
-            <textarea
-              required
-              rows={4}
-              maxLength={50_000}
-              value={form.prompt}
-              onChange={e => set({ prompt: e.target.value })}
-              placeholder="Update the dependencies, run the tests, and open a pull request if anything changed."
-              className="w-full rounded-lg border border-control bg-paper px-3 py-2 text-[14px] text-ink outline-none placeholder:text-ink-faint focus:border-leaf"
-            />
-          </label>
-          <div>
-            <Button type="submit" variant="primary" disabled={busy || !preview.ok}>
-              {busy ? "Saving…" : "Create automation"}
-            </Button>
-          </div>
-        </form>
       </div>
-    </main>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <span className="mb-1 block text-[13.5px] font-medium">Agent</span>
+          <SegmentedControl
+            label="Agent"
+            value={form.agent}
+            onChange={v => set({ agent: v })}
+            options={(["claude-code", "codex", "opencode"] as const).map(k => ({ value: k, label: AGENT_LABELS[k] }))}
+          />
+        </div>
+        <div>
+          <span className="mb-1 block text-[13.5px] font-medium">Sandbox</span>
+          <SegmentedControl
+            label="Sandbox size"
+            value={form.size}
+            onChange={v => set({ size: v })}
+            options={[
+              { value: "small", label: "Small" },
+              { value: "large", label: "Large" },
+            ]}
+          />
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
+        <label className="block">
+          <span className="mb-1 block text-[13.5px] font-medium">Repository</span>
+          <TextInput
+            required
+            className="font-mono text-[13px]"
+            placeholder="https://github.com/acme/app"
+            value={form.repoUrl}
+            onChange={e => set({ repoUrl: e.target.value })}
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[13.5px] font-medium">Branch</span>
+          <TextInput required className="font-mono text-[13px]" value={form.baseBranch} onChange={e => set({ baseBranch: e.target.value })} />
+        </label>
+      </div>
+      <label className="block">
+        <span className="mb-1 block text-[13.5px] font-medium">What the agent should do</span>
+        <textarea
+          required
+          rows={5}
+          maxLength={50_000}
+          value={form.prompt}
+          onChange={e => set({ prompt: e.target.value })}
+          placeholder="Update the dependencies, run the tests, and open a pull request if anything changed."
+          className="w-full rounded-lg border border-line-strong bg-paper px-3 py-2 text-[14px] text-ink outline-none placeholder:text-ink-faint focus:border-leaf"
+        />
+      </label>
+      {error && (
+        <p role="alert" className="text-[13.5px] text-danger">
+          {error}
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button type="submit" variant="primary" disabled={busy || !preview.ok}>
+          {busy ? "Saving…" : isNew ? "Create automation" : "Save changes"}
+        </Button>
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

@@ -45,6 +45,13 @@ import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitive
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface ThreadViewProps {
+  /** What Enter does while the agent works: queue (default) or steer. */
+  followUp?: "queue" | "steer";
+  /** Fold finished turns into one line each. */
+  foldFinished?: boolean;
+  /** Called when the agent starts waiting for an approval. */
+  onNeedsInput?: (title: string) => void;
+  notifyWhenFocused?: boolean;
   entry: ThreadEntry;
   runnerUp: boolean;
   runnerPath: string;
@@ -93,6 +100,10 @@ function ThreadSessionView({
   computerLevel,
   onComputerLevel,
   onMove,
+  followUp = "queue",
+  foldFinished = false,
+  onNeedsInput,
+  notifyWhenFocused = false,
 }: ThreadViewProps & { target: SessionTarget }) {
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
@@ -104,6 +115,18 @@ function ThreadSessionView({
   });
   const summary = summarize(entry, runnerUp);
   const items = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
+  // The agent is waiting on an approval: tell the person if they aren't looking.
+  const waiting = items.filter(i => i.kind === "approval" && i.state === "waiting").map(i => i.key);
+  const told = useRef(new Set<string>());
+  const waitingKey = waiting.join(",");
+  useEffect(() => {
+    for (const key of waiting) {
+      if (told.current.has(key)) continue;
+      told.current.add(key);
+      if (onNeedsInput && (!document.hasFocus() || notifyWhenFocused)) onNeedsInput(summarize(entry, runnerUp).title);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waitingKey]);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [denial, setDenial] = useState<PolicyDenied | null>(null);
@@ -240,7 +263,7 @@ function ThreadSessionView({
       return;
     }
     setActionError(null);
-    session.send(text, files.ready);
+    session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" });
     files.clear();
   };
   const rewindTo = async (seq: number, text: string, restoreFiles: boolean) => {
@@ -425,6 +448,7 @@ function ThreadSessionView({
             </div>
           )}
         <Timeline
+          foldFinished={foldFinished}
           items={items}
           working={working && items[items.length - 1]?.kind !== "agent"}
           empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}

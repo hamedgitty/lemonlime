@@ -304,3 +304,38 @@ export function contiguousSeq(events: readonly ThreadEvent[]): number {
   }
   return expect - 1;
 }
+
+/** Steps of a finished turn folded into one line. */
+export interface FoldedSteps {
+  kind: "fold";
+  key: string;
+  items: TimelineItem[];
+}
+
+/**
+ * "Fold finished turns": in every turn but the last, the agent's working steps (tools,
+ * diffs, status changes, notes in between) fold into one line. The prompt, the agent's
+ * final message, errors and approvals stay in view.
+ */
+export function foldFinishedTurns(items: readonly TimelineItem[]): Array<TimelineItem | FoldedSteps> {
+  const starts = items.flatMap((it, i) => (it.kind === "user" ? [i] : []));
+  if (starts.length < 2) return [...items];
+  const out: Array<TimelineItem | FoldedSteps> = [...items.slice(0, starts[0])];
+  for (let t = 0; t < starts.length; t++) {
+    const from = starts[t]!;
+    const to = t + 1 < starts.length ? starts[t + 1]! : items.length;
+    const turn = items.slice(from, to);
+    if (t === starts.length - 1) {
+      out.push(...turn);
+      break;
+    }
+    const lastAgent = turn.map(it => it.kind).lastIndexOf("agent");
+    const keep = (it: TimelineItem, i: number) => i === 0 || i === lastAgent || it.kind === "error" || it.kind === "approval";
+    const folded = turn.filter((it, i) => !keep(it, i));
+    out.push(turn[0]!);
+    if (folded.length > 1) out.push({ kind: "fold", key: `fold:${turn[0]!.key}`, items: folded });
+    else out.push(...folded);
+    out.push(...turn.filter((it, i) => i !== 0 && keep(it, i)));
+  }
+  return out;
+}

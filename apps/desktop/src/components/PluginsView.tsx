@@ -233,7 +233,7 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
                 <button
                   type="button"
                   onClick={createWithAgent}
-                  className="flex w-full items-start gap-3 rounded-xl border border-line bg-white p-3 text-left transition-colors hover:bg-cream-deep"
+                  className="flex w-full items-start gap-3 rounded-xl border border-line bg-paper p-3 text-left transition-colors hover:bg-cream-deep"
                 >
                   <Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
                   <span>
@@ -636,7 +636,7 @@ function PluginDetailPane({
         <h3 id="plugin-overview" className="font-sans text-[16px] font-semibold tracking-normal">
           Overview
         </h3>
-        <div className="mt-3 rounded-2xl border border-line bg-white px-5 py-4 text-[14px]">
+        <div className="mt-3 rounded-2xl border border-line bg-paper px-5 py-4 text-[14px]">
           {p.readme ? <Markdown text={p.readme} onLink={url => void openExternal(url)} /> : <p className="text-ink-faint">This plugin has no README.</p>}
         </div>
       </section>
@@ -655,7 +655,7 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
 
 function Gives({ title, items, mono }: { title: string; items: string[]; mono?: boolean }) {
   return (
-    <div className="rounded-xl border border-line bg-white px-4 py-3">
+    <div className="rounded-xl border border-line bg-paper px-4 py-3">
       <p className="flex items-baseline justify-between text-[14px] font-medium text-ink">
         {title}
         <span className="text-[13px] font-normal tabular-nums text-ink-faint">{items.length}</span>

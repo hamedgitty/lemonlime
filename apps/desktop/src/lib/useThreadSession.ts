@@ -57,7 +57,8 @@ export interface ThreadSession {
   /** Status from the runner (welcome + status changes). */
   status: ThreadStatus | null;
   /** Send a message, with ids of finished uploads (live connections only). */
-  send: (text: string, attachments?: string[]) => void;
+  /** `steer` sends it now (stopping the current turn) instead of queueing it. */
+  send: (text: string, attachments?: string[], opts?: { steer?: boolean }) => void;
   interrupt: () => void;
   /** Answer the agent's request for permission. */
   approve: (requestId: string, decision: "allow" | "deny") => void;
@@ -310,7 +311,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     };
   }, [threadId, generation]);
 
-  const send = useCallback((text: string, attachments: string[] = []) => {
+  const send = useCallback((text: string, attachments: string[] = [], opts: { steer?: boolean } = {}) => {
     const client = clientRef.current;
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -320,6 +321,8 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setPending(p => [...p, { clientMsgId, text: trimmed, at: new Date().toISOString() }]);
     if (client) {
       client.send(trimmed, clientMsgId, attachments);
+      // Steer: if it's waiting behind a running turn, run it now. A message that already started is left alone.
+      if (opts.steer) client.editQueued(clientMsgId, { action: "send_now" });
       return;
     }
     // Paused cloud thread: the control plane keeps the message and wakes the sandbox,

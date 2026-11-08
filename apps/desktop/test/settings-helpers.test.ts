@@ -60,3 +60,21 @@ describe("markdown", () => {
     expect(blocks[4]).toEqual({ kind: "table", head: ["a", "b"], rows: [["1", "2"]] });
   });
 });
+
+describe("folding finished turns", async () => {
+  const { foldFinishedTurns } = await import("../src/lib/timeline.ts");
+  const at = "2026-11-07T00:00:00.000Z";
+  const user = (n: number) => ({ kind: "user", key: `u${n}`, seq: n, at, text: "do it" }) as never;
+  const agent = (n: number) => ({ kind: "agent", key: `a${n}`, seq: n, at, text: "done", streaming: false }) as never;
+  const tool = (n: number) => ({ kind: "tool", key: `t${n}`, seq: n, at }) as never;
+
+  it("folds the steps of every turn but the last, keeping the final answer", () => {
+    const out = foldFinishedTurns([user(1), tool(2), agent(3), tool(4), agent(5), user(6), tool(7), agent(8)]);
+    expect(out.map(i => (i as { kind: string }).kind)).toEqual(["user", "fold", "agent", "user", "tool", "agent"]);
+    expect((out[1] as { items: unknown[] }).items).toHaveLength(3);
+  });
+
+  it("leaves a single turn alone", () => {
+    expect(foldFinishedTurns([user(1), tool(2), agent(3)])).toHaveLength(3);
+  });
+});

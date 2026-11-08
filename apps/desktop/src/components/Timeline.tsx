@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowDown,
@@ -16,7 +16,7 @@ import {
   Wrench,
 } from "lucide-react";
 import type { ThreadStatus } from "@lemonlime/protocol";
-import type { TimelineItem } from "../lib/timeline.ts";
+import { foldFinishedTurns, type TimelineItem } from "../lib/timeline.ts";
 import type { EditQueuedFn } from "../lib/useThreadSession.ts";
 import { Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
 import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
@@ -34,8 +34,11 @@ export function Timeline({
   onApprove,
   onEditQueued,
   onRewind,
+  foldFinished = false,
 }: {
   items: TimelineItem[];
+  /** Fold each finished turn's steps into one line (Settings → Appearance). */
+  foldFinished?: boolean;
   working: boolean;
   empty: ReactNode;
   onApprove?: ApproveFn;
@@ -45,6 +48,8 @@ export function Timeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
+  const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
+  const shown = useMemo(() => (foldFinished ? foldFinishedTurns(items) : items), [items, foldFinished]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -86,10 +91,33 @@ export function Timeline({
         <div className="mx-auto flex max-w-[860px] flex-col gap-4 px-6 pt-6 pb-10">
           {items.length === 0
             ? empty
-            : items.map((item, i) => (
+            : shown.map((item, i) => (
                 // Off-screen messages skip layout and paint, so long chats stay fast.
-                <div key={item.key} className={i < items.length - 30 ? "[contain-intrinsic-size:auto_96px] [content-visibility:auto]" : undefined}>
-                  <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} />
+                <div key={item.key} className={i < shown.length - 30 ? "[contain-intrinsic-size:auto_96px] [content-visibility:auto]" : undefined}>
+                  {item.kind === "fold" ? (
+                    <div className="flex flex-col gap-4">
+                      <button
+                        type="button"
+                        aria-expanded={unfolded.has(item.key)}
+                        onClick={() =>
+                          setUnfolded(u => {
+                            const next = new Set(u);
+                            if (next.has(item.key)) next.delete(item.key);
+                            else next.add(item.key);
+                            return next;
+                          })
+                        }
+                        className="flex items-center gap-2 self-start rounded-full border border-line px-3 py-1 text-[13px] text-ink-soft hover:border-line-strong hover:text-ink"
+                      >
+                        <ChevronRight aria-hidden="true" className={cx("size-3.5 transition-transform duration-150", unfolded.has(item.key) && "rotate-90")} />
+                        Worked through {item.items.length} steps
+                      </button>
+                      {unfolded.has(item.key) &&
+                        item.items.map(it => <Item key={it.key} item={it} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} />)}
+                    </div>
+                  ) : (
+                    <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} />
+                  )}
                 </div>
               ))}
           {working && (

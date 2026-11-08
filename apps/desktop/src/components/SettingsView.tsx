@@ -17,7 +17,7 @@ export type { SettingsCtx } from "./settings/context.ts";
 
 export type SettingsPage = "account" | "general" | "agents" | "instructions" | "cloud" | "projects" | "appearance" | "keyboard" | "updates";
 
-const PAGES: { id: SettingsPage; label: string; icon: typeof UserRound; keywords: string }[] = [
+export const SETTINGS_PAGES: { id: SettingsPage; label: string; icon: typeof UserRound; keywords: string }[] = [
   { id: "account", label: "Account", icon: UserRound, keywords: "cloud control plane url token sign in sign out connect github workspace activity usage" },
   {
     id: "general",
@@ -46,7 +46,7 @@ export function SettingsSidebar({ page, onPage, onBack }: { page: SettingsPage; 
   const search = useRef<HTMLInputElement>(null);
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return q ? PAGES.filter(p => `${p.label} ${p.keywords}`.toLowerCase().includes(q)) : PAGES;
+    return q ? SETTINGS_PAGES.filter(p => `${p.label} ${p.keywords}`.toLowerCase().includes(q)) : SETTINGS_PAGES;
   }, [query]);
 
   useEffect(() => {
@@ -124,7 +124,7 @@ export function SettingsSidebar({ page, onPage, onBack }: { page: SettingsPage; 
 }
 
 export function SettingsView({ page, ctx, importTab }: { page: SettingsPage; ctx: SettingsCtx; importTab?: ReactNode }) {
-  const current = PAGES.find(p => p.id === page) ?? PAGES[0]!;
+  const current = SETTINGS_PAGES.find(p => p.id === page) ?? SETTINGS_PAGES[0]!;
   return (
     <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
       <header data-tauri-drag-region className="flex h-[52px] items-center border-b border-line px-6">

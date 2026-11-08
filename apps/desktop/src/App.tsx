@@ -12,12 +12,14 @@ import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { needsUpdate } from "./components/settings/AgentsPage.tsx";
 import { TipProvider } from "./components/primitives.tsx";
-import { SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
+import { SETTINGS_PAGES, SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
+import { CommandPalette } from "./components/CommandPalette.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
-import { matchShortcut } from "./lib/shortcuts.ts";
+import { keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
+import { appCommands, loadRecents, rememberPick, type PaletteItem } from "./lib/palette.ts";
 import { detectAgents, localRunnerStatuses, notify, openFolder, setKeepAwake, threadFolder, type AgentInstall } from "./lib/system.ts";
 import {
   confirmAction,
@@ -78,6 +80,8 @@ export function App() {
   const [running, setRunning] = useState<Set<string>>(new Set());
   const [history, setHistory] = useState<{ stack: Place[]; at: number }>({ stack: [{ view: "home" }], at: 0 });
   const [searchOpen, setSearchOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteRecents, setPaletteRecents] = useState<string[]>(loadRecents);
   const place = history.stack[history.at]!;
 
   const go = useCallback((next: Place) => {
@@ -563,11 +567,9 @@ export function App() {
 
   // ── Keyboard shortcuts (Settings → Keyboard can change them) ──
   const shortcutState = useRef({ place, summaries: [] as ThreadSummary[], prefs });
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const id = matchShortcut(e, shortcutState.current.prefs.shortcuts);
-      if (!id) return;
-      e.preventDefault();
+  // One place that runs each shortcut, for the keys and for the command palette.
+  const runShortcut = useCallback(
+    (id: ShortcutId) => {
       const { place: here, summaries: list, prefs: pr } = shortcutState.current;
       const open = list.filter(t => !pr.archived[t.id]);
       const currentId = here.view === "thread" ? here.selection.id : null;
@@ -579,8 +581,10 @@ export function App() {
         case "settings":
           return go({ view: "settings", page: "account" });
         case "search":
-          onPrefs({ sidebarCollapsed: false });
-          return setSearchOpen(true);
+          return setPaletteOpen(o => !o);
+        case "find":
+          if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:find"));
+          return;
         case "toggle-sidebar":
           return onPrefs({ sidebarCollapsed: !pr.sidebarCollapsed });
         case "back":
@@ -610,10 +614,19 @@ export function App() {
           if (here.view === "thread") return void window.dispatchEvent(new Event("lemonlime:toggle-panel"));
           return togglePanel();
       }
+    },
+    [go, onPrefs, togglePanel],
+  );
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const id = matchShortcut(e, shortcutState.current.prefs.shortcuts);
+      if (!id) return;
+      e.preventDefault();
+      runShortcut(id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [go, onPrefs, togglePanel]);
+  }, [runShortcut]);
 
   // ── Derived lists ────────────────────────────────────────
   const summaries = useMemo(
@@ -657,6 +670,69 @@ export function App() {
       console.warn("Not a repository", err);
     }
   };
+
+  // ── Command palette (⌘K) ─────────────────────────────────
+  const inThread = place.view === "thread";
+  const paletteItems = useMemo<PaletteItem[]>(() => {
+    if (!paletteOpen) return [];
+    const threads = summaries.map<PaletteItem>(t => ({
+      id: `thread:${t.id}`,
+      section: "threads",
+      label: t.title || "Untitled thread",
+      detail: `${repoName(t.repo)}${prefs.archived[t.id] ? ", archived" : ""}`,
+      keywords: `${t.branch} ${AGENT_LABELS[t.agent.kind]} ${t.mode === "cloud" ? "cloud" : "local"}`,
+    }));
+    const projects = prefs.recentProjects.map<PaletteItem>(path => ({
+      id: `project:${path}`,
+      section: "projects",
+      label: repoName(path),
+      detail: path,
+      keywords: "new thread in project",
+    }));
+    const extras = [
+      { id: "plugins", label: "Plugins", keywords: "extensions marketplace install" },
+      { id: "add-project", label: "Add a project…", keywords: "folder repository open" },
+      ...SETTINGS_PAGES.map(pg => ({ id: `settings:${pg.id}`, label: `Settings: ${pg.label}`, keywords: pg.keywords })),
+      { id: "theme:light", label: "Use the light theme", keywords: "appearance colour" },
+      { id: "theme:dark", label: "Use the dark theme", keywords: "appearance colour night" },
+      { id: "theme:system", label: "Match the system theme", keywords: "appearance colour auto" },
+    ];
+    // "settings" is the same as Settings: Account; thread commands only make sense in one.
+    const skip: ShortcutId[] = ["settings", ...(inThread ? [] : (["pin-thread", "archive-thread", "find"] as const))];
+    // Unarchived threads first, as in the sidebar.
+    const sortedThreads = [...threads.filter(t => !t.detail?.endsWith(", archived")), ...threads.filter(t => t.detail?.endsWith(", archived"))];
+    return [...sortedThreads, ...projects, ...appCommands(extras, skip)];
+  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, inThread]);
+
+  const runPaletteItem = (item: PaletteItem) => {
+    setPaletteRecents(r => rememberPick(r, item.id));
+    const [kind, ...rest] = item.id.split(":");
+    const value = rest.join(":");
+    if (kind === "thread") {
+      const t = summaries.find(x => x.id === value);
+      if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
+      return;
+    }
+    if (kind === "project") {
+      onPrefs({ recentProjects: [value, ...prefs.recentProjects.filter(x => x !== value)] });
+      return go({ view: "home" });
+    }
+    if (value === "plugins") return go({ view: "plugins" });
+    if (value === "add-project") return void addProject();
+    if (value.startsWith("settings:")) return go({ view: "settings", page: value.slice("settings:".length) as SettingsPage });
+    if (value.startsWith("theme:")) return onPrefs({ theme: value.slice("theme:".length) as UiPrefs["theme"] });
+    runShortcut(value as ShortcutId);
+  };
+  const palette = (
+    <CommandPalette
+      open={paletteOpen}
+      onOpenChange={setPaletteOpen}
+      items={paletteItems}
+      recents={paletteRecents}
+      onRun={runPaletteItem}
+      keysOf={id => keysFor(id, prefs.shortcuts)}
+    />
+  );
 
   const settingsCtx: SettingsCtx = {
     settings,
@@ -768,6 +844,7 @@ export function App() {
 
   return (
     <TipProvider>
+      {palette}
       <div className="flex h-full overflow-hidden">
         {sidebar}
         <div className="relative flex min-w-0 flex-1 flex-col">

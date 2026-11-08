@@ -6,7 +6,7 @@
 
 export const SHORTCUTS = [
   { id: "new-thread", label: "New thread", group: "App", keys: "mod+n" },
-  { id: "search", label: "Search threads", group: "App", keys: "mod+k" },
+  { id: "search", label: "Search threads and commands", group: "App", keys: "mod+k" },
   { id: "settings", label: "Settings", group: "App", keys: "mod+," },
   { id: "toggle-sidebar", label: "Show or hide the sidebar", group: "App", keys: "mod+\\" },
   { id: "back", label: "Back", group: "App", keys: "mod+[" },
@@ -19,6 +19,7 @@ export const SHORTCUTS = [
   { id: "archive-thread", label: "Archive this thread", group: "Threads", keys: "mod+shift+backspace" },
   { id: "last-pinned", label: "Go to the last pinned thread", group: "Threads", keys: "mod+e" },
   { id: "right-panel", label: "Show or hide the side panel", group: "Threads", keys: "mod+shift+\\" },
+  { id: "find", label: "Find in this thread", group: "Threads", keys: "mod+f" },
 ] as const;
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
@@ -28,6 +29,9 @@ export const FIXED_SHORTCUTS: [string, string][] = [
   ["Enter", "Send"],
   ["Shift Enter", "New line"],
   ["Esc", "Stop the agent, or leave Settings"],
+  ["↑ ↓", "Earlier prompts, in an empty message box"],
+  ["/", "Agent commands, at the start of a message"],
+  ["@", "Mention a file in the thread's project"],
   ["/", "Search settings"],
 ];
 

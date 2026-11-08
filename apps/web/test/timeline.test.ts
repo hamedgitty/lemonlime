@@ -131,8 +131,9 @@ describe("buildTimeline: reasoning and turn times", () => {
       timed(0, { type: "status_change", from: "idle", to: "running" }),
       timed(95, { type: "status_change", from: "running", to: "idle" }),
     ]);
-    expect(items[1]).not.toHaveProperty("workedMs");
-    expect(items[2]).toMatchObject({ kind: "status", workedMs: 95_000 });
+    // The turn starting has no row of its own; the one that ended it says how long it took.
+    expect(items.map(i => i.kind)).toEqual(["user", "status"]);
+    expect(items[1]).toMatchObject({ kind: "status", workedMs: 95_000 });
   });
 
   it("stops showing a message as streaming once something else arrives", () => {

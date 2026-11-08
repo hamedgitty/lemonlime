@@ -441,7 +441,7 @@ function ThreadSessionView({
             }
           : null,
     };
-  }, [session.state, entry, threadOptions.model, accountList, agents, limitAction, lastLimit, others, onSwitchOthers]);
+  }, [session.state, entry, onThisComputer, threadOptions.model, accountList, agents, limitAction, lastLimit, others, onSwitchOthers]);
   // A local thread that moved to another agent remembers it, for the sidebar and its next start.
   const lastSwitch = useMemo(() => session.events.findLast(e => e.type === "agent_switch"), [session.events]);
   useEffect(() => {

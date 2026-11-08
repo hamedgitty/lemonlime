@@ -126,6 +126,9 @@ const REPEATING_NOTICES = new Set(["disk_low"]);
 
 /** Keep only the latest of each standing warning (it says the same each time the runner starts). */
 export function latestStandingNotices(items: TimelineItem[]): TimelineItem[] {
+  // Also quiet: "Agent started working" (your message just said so) and approvals you
+  // allowed (the step's own row shows it ran). Waiting and declined ones stay.
+  items = items.filter(it => !(it.kind === "status" && it.to === "running") && !(it.kind === "approval" && it.state === "allowed"));
   const last = new Map<string, number>();
   items.forEach((it, i) => {
     if (it.kind === "notice" && REPEATING_NOTICES.has(it.code)) last.set(it.code, i);

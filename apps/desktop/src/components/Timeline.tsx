@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import {
   AlertTriangle,
   ArrowDown,
-  Bot,
+  Workflow,
   Brain,
   Check,
   ChevronRight,
@@ -483,7 +483,7 @@ const STEP_ICON: Record<StepKind, ReactNode> = {
   web: <Globe />,
   todo: <ListTodo />,
   background: <SquareTerminal />,
-  subagent: <Bot />,
+  subagent: <Workflow />,
   question: <MessageCircleQuestionMark />,
   tool: <Wrench />,
 };
@@ -621,7 +621,7 @@ function SubagentRow({ item, live, subagents }: { item: ToolItem; live: boolean;
   const nested = runnerId ? [...subagents.values()].filter(s => s.parentId === runnerId) : [];
   return (
     <Disclosure
-      icon={<Bot />}
+      icon={<Workflow />}
       label={<StepText verb="Subagent:" target={subagentTask(item.input)} code={false} />}
       status={
         state === "running" ? (
@@ -656,7 +656,7 @@ function SubagentRow({ item, live, subagents }: { item: ToolItem; live: boolean;
                 const st = subagentState({ result: null }, s, live);
                 return (
                   <li key={s.id}>
-                    <Disclosure icon={<Bot />} label={<span className="text-ink">{s.task.split("\n")[0]}</span>} status={<StatusMark state={st} />} />
+                    <Disclosure icon={<Workflow />} label={<span className="text-ink">{s.task.split("\n")[0]}</span>} status={<StatusMark state={st} />} />
                   </li>
                 );
               })}

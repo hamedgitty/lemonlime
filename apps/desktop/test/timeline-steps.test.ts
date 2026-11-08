@@ -205,8 +205,8 @@ describe("what waits above the composer", () => {
     ]);
     const shown = withoutQueued(items);
     expect(shown.filter(i => i.kind === "user").map(i => (i.kind === "user" ? i.text : ""))).toEqual(["go"]);
-    // The approvals stay in the timeline as one-line records.
-    expect(shown.filter(i => i.kind === "approval")).toHaveLength(2);
+    // The one still waiting stays as a one-line record; the allowed one goes (its step shows it ran).
+    expect(shown.filter(i => i.kind === "approval").map(i => (i.kind === "approval" ? i.requestId : ""))).toEqual(["r2"]);
   });
 
   it("returns the same list when nothing is queued", () => {

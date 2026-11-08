@@ -32,7 +32,8 @@ describe("reasoning in the timeline", () => {
     );
     const r = items.find(i => i.kind === "reasoning");
     expect(r).toMatchObject({ text: "Look at the router.", streaming: false, startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:12.000Z" });
-    expect(items.map(i => i.kind)).toEqual(["user", "status", "reasoning", "agent"]);
+    // No "Agent started working" row: the message above says so.
+    expect(items.map(i => i.kind)).toEqual(["user", "reasoning", "agent"]);
   });
 
   it("ends a streaming message when reasoning starts, and reasoning when anything else arrives", () => {
@@ -73,7 +74,7 @@ describe("turn durations", () => {
   it("puts how long the turn took on the status change that ended it", () => {
     const items = buildTimeline(events);
     expect(items.find(i => i.kind === "status" && i.to === "idle")).toMatchObject({ workedMs: 72_000 });
-    expect(items.find(i => i.kind === "status" && i.to === "running")).not.toHaveProperty("workedMs");
+    expect(items.some(i => i.kind === "status" && i.to === "running")).toBe(false);
   });
 
   it("and on the fold of a finished turn", () => {

@@ -9,6 +9,56 @@ const run = promisify(execFile);
 const AGENT_IDENTITY = ["-c", "user.name=LemonLime Agent", "-c", "user.email=agent@lemonlime.invalid"];
 const MAX_DIFF_BYTES = 200_000;
 
+/**
+ * Put in front of every git call the runner makes. The agent can edit the repository's
+ * config, so none of the runner's own git calls may run a program the config names: no
+ * fsmonitor daemon, no hooks, no bare repositories found by walking up from a folder.
+ */
+export const SAFE_GIT_CONFIG = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "safe.bareRepository=explicit"];
+/** Diffs never run an external diff tool or a textconv filter. */
+export const SAFE_DIFF = ["--no-ext-diff", "--no-textconv"];
+/** A git call that takes longer than this is killed. Network calls get longer. */
+export const GIT_TIMEOUT_MS = 60_000;
+const NETWORK_TIMEOUT_MS = 15 * 60_000;
+
+export interface GitRunOptions {
+  cwd: string;
+  timeout?: number;
+  maxBuffer?: number;
+  env?: Record<string, string>;
+}
+
+/** Run git with the safe config, a time limit and no terminal prompts. Arguments are never shell-parsed. */
+export function runGit(args: string[], o: GitRunOptions) {
+  return run("git", [...SAFE_GIT_CONFIG, ...args], {
+    cwd: o.cwd,
+    maxBuffer: o.maxBuffer ?? 32 * 1024 * 1024,
+    timeout: o.timeout ?? GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...o.env },
+  });
+}
+
+/**
+ * A branch name, ref or commit from outside the runner, or a refusal. Anything starting
+ * with "-" could be read as an option, so it is never passed to git.
+ */
+export function assertSafeRef(ref: string, what = "ref"): string {
+  // Letters, digits and the punctuation git allows in ref names; no spaces or control characters.
+  if (!ref || ref.startsWith("-") || !/^[\w./@{}^~+=,:-]+$/.test(ref) || ref.includes("..") || ref.length > 250) {
+    throw new Error(`Not a usable ${what}: ${JSON.stringify(ref.slice(0, 80))}`);
+  }
+  return ref;
+}
+
+/** A repository path from outside the runner: relative, inside the repo, not an option. */
+export function assertSafePath(path: string): string {
+  if (!path || path.startsWith("-") || path.startsWith("/") || path.split(/[\\/]/).includes("..") || path.includes("\0") || path.length > 4096) {
+    throw new Error(`Not a usable path: ${JSON.stringify(path.slice(0, 80))}`);
+  }
+  return path;
+}
+
 export interface FileChange {
   path: string;
   change: "added" | "modified" | "deleted" | "renamed";
@@ -24,9 +74,14 @@ export class GitWorkspace {
     private readonly credentialHelper?: string,
   ) {}
 
-  async git(args: string[], opts: { allowFail?: boolean } = {}): Promise<string> {
+  async git(args: string[], opts: { allowFail?: boolean; timeout?: number; env?: Record<string, string>; maxBuffer?: number } = {}): Promise<string> {
     try {
-      const { stdout } = await run("git", args, { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
+      const { stdout } = await runGit(args, {
+        cwd: this.dir,
+        ...(opts.timeout ? { timeout: opts.timeout } : {}),
+        ...(opts.env ? { env: opts.env } : {}),
+        ...(opts.maxBuffer ? { maxBuffer: opts.maxBuffer } : {}),
+      });
       return stdout;
     } catch (err) {
       if (opts.allowFail) return "";
@@ -40,14 +95,14 @@ export class GitWorkspace {
     const empty = readdirSync(this.dir).length === 0;
     const helper = this.credentialHelper ? ["-c", `credential.helper=${this.credentialHelper}`] : [];
     if (empty && repoUrl) {
-      await run("git", [...helper, "clone", "--no-single-branch", repoUrl, "."], { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
+      await runGit([...helper, "clone", "--no-single-branch", "--", repoUrl, "."], { cwd: this.dir, timeout: NETWORK_TIMEOUT_MS });
     } else if (!existsSync(join(this.dir, ".git"))) {
       await this.git(["init", "-q"]);
       // Not empty (the runner's own data folder can be in here already), so clone by hand:
       // `git clone` refuses a folder with anything in it.
       if (repoUrl) {
-        await this.git(["remote", "add", "origin", repoUrl]);
-        await run("git", [...helper, "fetch", "-q", "origin"], { cwd: this.dir, maxBuffer: 32 * 1024 * 1024 });
+        await this.git(["remote", "add", "--", "origin", repoUrl]);
+        await runGit([...helper, "fetch", "-q", "origin"], { cwd: this.dir, timeout: NETWORK_TIMEOUT_MS });
         await this.git(["remote", "set-head", "origin", "--auto"], { allowFail: true });
       }
     }
@@ -67,12 +122,12 @@ export class GitWorkspace {
     const remotes = (await this.git(["remote"], { allowFail: true })).split("\n").map(r => r.trim());
     if (!remotes.includes("origin")) return "no remote named origin";
     try {
+      assertSafeRef(branch, "branch name");
       // After a rewind the branch moved back, so it's replaced; only ever the thread's own branch.
-      await run("git", ["push", "-q", "-u", ...(opts.force ? ["--force-with-lease"] : []), "origin", `HEAD:refs/heads/${branch}`], {
+      await runGit(["push", "-q", "-u", ...(opts.force ? ["--force-with-lease"] : []), "origin", `HEAD:refs/heads/${branch}`], {
         cwd: this.dir,
         maxBuffer: 4 * 1024 * 1024,
         timeout: 120_000,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       });
       return null;
     } catch (err) {
@@ -101,6 +156,8 @@ export class GitWorkspace {
    * switched, and their uncommitted work there is never touched.
    */
   async ensureWorktree(source: string, branch: string, base: string): Promise<void> {
+    assertSafeRef(branch, "branch name");
+    assertSafeRef(base, "base branch");
     const src = new GitWorkspace(source);
     const srcCommon = await src.commonDir();
     if (!srcCommon) throw new Error(`${source} is not a git repository`);
@@ -151,9 +208,10 @@ export class GitWorkspace {
 
   /** `base` as a local branch, else its remote-tracking branch, else HEAD. */
   async resolveBase(base: string): Promise<string> {
+    assertSafeRef(base, "base branch");
     return (
-      (await this.git(["rev-parse", "--verify", "-q", base], { allowFail: true })).trim() ||
-      (await this.git(["rev-parse", "--verify", "-q", `origin/${base}`], { allowFail: true })).trim() ||
+      (await this.git(["rev-parse", "--verify", "-q", "--end-of-options", base], { allowFail: true })).trim() ||
+      (await this.git(["rev-parse", "--verify", "-q", "--end-of-options", `origin/${base}`], { allowFail: true })).trim() ||
       "HEAD"
     );
   }
@@ -171,10 +229,11 @@ export class GitWorkspace {
    * Never discards work: if the branch already exists it is simply checked out.
    */
   async ensureBranch(branch: string, base: string): Promise<void> {
+    assertSafeRef(branch, "branch name");
     if ((await this.currentBranch()) === branch) return;
     const exists = (await this.git(["rev-parse", "--verify", "-q", `refs/heads/${branch}`], { allowFail: true })).trim();
     if (exists) {
-      await this.git(["checkout", "-q", branch]);
+      await this.git(["checkout", "-q", "--end-of-options", branch, "--"]);
       return;
     }
     const from = await this.resolveBase(base);
@@ -191,7 +250,7 @@ export class GitWorkspace {
     await this.git(["add", "-A"]);
     // Diff against HEAD, or against git's empty tree before the first commit.
     const base = (await this.hasCommits()) ? "HEAD" : await this.emptyTree();
-    const nameStatus = await this.git(["diff", "--cached", "--name-status", "-M", base]);
+    const nameStatus = await this.git(["diff", ...SAFE_DIFF, "--cached", "--name-status", "-M", "--end-of-options", base, "--"]);
 
     const changes: FileChange[] = [];
     for (const line of nameStatus.split("\n")) {
@@ -199,7 +258,7 @@ export class GitWorkspace {
       const [status = "", ...paths] = line.split("\t");
       const path = paths[paths.length - 1] ?? "";
       const change = statusToChange(status);
-      let diff = await this.git(["diff", "--cached", "-M", base, "--", ...paths], { allowFail: true });
+      let diff = await this.git(["diff", ...SAFE_DIFF, "--cached", "-M", "--end-of-options", base, "--", ...paths], { allowFail: true });
       let truncated = false;
       if (diff.length > MAX_DIFF_BYTES) {
         diff = diff.slice(0, MAX_DIFF_BYTES);
@@ -220,8 +279,10 @@ export class GitWorkspace {
    * can be recovered. Untracked files the agent left are kept (each turn commits its work).
    */
   async rewindTo(commit: string, backupRef: string): Promise<void> {
-    await this.git(["update-ref", backupRef, "HEAD"]);
-    await this.git(["reset", "-q", "--hard", commit]);
+    assertSafeRef(commit, "commit");
+    assertSafeRef(backupRef, "ref");
+    await this.git(["update-ref", "--end-of-options", backupRef, "HEAD"]);
+    await this.git(["reset", "-q", "--hard", "--end-of-options", commit, "--"]);
   }
 
   /** Commit staged changes on the current branch. Returns the new commit sha, or null if nothing changed. */
@@ -235,7 +296,7 @@ export class GitWorkspace {
   /** Object id of the empty tree for this repo's hash format (sha1 or sha256). */
   private async emptyTree(): Promise<string> {
     // Hash empty input as a tree. Works on every OS (no /dev/null) and both hash formats.
-    const pending = run("git", ["hash-object", "-t", "tree", "--stdin"], { cwd: this.dir });
+    const pending = runGit(["hash-object", "-t", "tree", "--stdin"], { cwd: this.dir });
     pending.child.stdin?.end();
     const { stdout } = await pending;
     return stdout.trim();

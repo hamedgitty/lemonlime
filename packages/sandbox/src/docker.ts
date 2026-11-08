@@ -28,6 +28,12 @@ export interface DockerProviderOptions {
   /** Docker network to attach sandboxes to, e.g. the one a reverse proxy shares. */
   network?: string;
   /**
+   * Run the agent as this user, apart from the thread secret: the container starts as root,
+   * a keeper (`lemonlime-runner keeper`) keeps the secret and starts everything else as
+   * this user. The image's `agent` user is the usual choice.
+   */
+  agentUser?: string;
+  /**
    * Reach runners through a reverse proxy instead of published ports: each runner's URL
    * becomes `<publicUrl>/<container name>`, and no port is opened on the host. The proxy
    * must route `/<container name>/…` to `<container name>:<runner port>` on `network`
@@ -84,6 +90,9 @@ export class DockerProvider implements SandboxProvider {
       "ALL",
       "--pids-limit",
       "1024",
+      // With a separate agent user, root keeps only what the keeper needs: switching to that
+      // user and stopping its processes.
+      ...(this.opts.agentUser ? ["--user", "root", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL"] : []),
       // A small init as process 1 reaps what the agent's processes leave behind, so finished
       // ones don't pile up toward the process limit.
       "--init",
@@ -96,6 +105,7 @@ export class DockerProvider implements SandboxProvider {
       // appear in the host's process list.
       ...Object.keys(o.runner.env).flatMap(k => ["-e", k]),
       this.opts.image,
+      ...(this.opts.agentUser ? ["lemonlime-runner", "keeper", "--thread", o.threadId, "--agent-user", this.opts.agentUser, "--"] : []),
       "sh",
       "-c",
       launchCommand(o.runner),

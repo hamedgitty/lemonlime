@@ -10,7 +10,6 @@ import {
   DEFAULT_BRANCH_PREFIX,
   isSafeBranchPrefix,
   ReasoningLevel,
-  deriveAgentKey,
   signToken,
   ThreadId,
   UserSkillList,
@@ -19,6 +18,8 @@ import {
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { killAllAgentGroups } from "./agents/process.ts";
 import { takeRunnerLock } from "./lock.ts";
+import { keeper } from "./keeper.ts";
+import { keysFromKeeper, keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { runApprovalMcp } from "./approval-mcp.ts";
 import { runSubagentsMcp } from "./subagents-mcp.ts";
 import { GitWorkspace } from "./git.ts";
@@ -237,6 +238,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   // `pnpm runner -- --help` passes the `--` along; it isn't an argument.
   const argv = args[0] === "--" ? args.slice(1) : args;
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
+  if (argv[0] === "keeper") return keeper(argv.slice(1));
   if (argv[0] === "history") return historyCommand(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
   if (argv[0] === "subagents-mcp") return runSubagentsMcp();
@@ -310,13 +312,21 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (!threadId.success) fail("--thread is required and must be a valid thread id");
   const agent = AgentKind.safeParse(values.agent);
   if (!agent.success) fail("--agent must be one of claude-code, codex, opencode, acp");
+  // The secret comes in the environment, or stays with a keeper (keeper.ts) this runner asks.
+  const keeperSocket = process.env.LEMONLIME_KEEPER;
   const secret = process.env.LEMONLIME_THREAD_SECRET ?? "";
-  if (secret.length < 16) fail("LEMONLIME_THREAD_SECRET must be set (at least 16 characters)");
+  if (!keeperSocket && secret.length < 16) fail("LEMONLIME_THREAD_SECRET must be set (at least 16 characters)");
+  let keys: ThreadKeys;
+  try {
+    keys = keeperSocket && !secret ? await keysFromKeeper(keeperSocket) : await keysFromSecret(threadId.data!, secret);
+  } catch (err) {
+    fail(`couldn't reach the keeper: ${(err as Error).message}`);
+  }
   // The agent and everything it starts inherit this process's environment. It gets a key
   // derived from the secret instead of the secret itself: enough for its own tools
   // (previews, subagents, computer access, git credentials), not enough to act as the
   // user or as this runner.
-  const agentKey = await deriveAgentKey(secret);
+  const agentKey = keys!.agentKey;
   const redactions = { ...secretsFromEnv(), LEMONLIME_AGENT_KEY: agentKey };
   delete process.env.LEMONLIME_THREAD_SECRET;
   process.env.LEMONLIME_AGENT_KEY = agentKey;
@@ -421,8 +431,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     bundledSkills: !values["no-bundled-skills"],
     redact: redactions,
     ...(cloudGit ? { pushBranch: true, credentialHelper: credentialHelperCommand() } : {}),
-    ...(values["control-plane"] && secret
-      ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, secret, c, relay) }
+    ...(values["control-plane"]
+      ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, keys!, c, relay) }
       : {}),
     // The user's own skills (added in the desktop app's settings), then any given here.
     extraSkillDirs: [join(home, "skills"), ...(values.skills ?? []).map(d => resolve(d))],
@@ -437,7 +447,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const server = await startServer(runner, {
     host: values.host!,
     port,
-    threadSecret: secret,
+    keys: keys!,
     version: RUNNER_VERSION,
     terminal: { cwd: workdir, spawn: await loadPty() },
     ownPorts: [port],
@@ -523,7 +533,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const heartbeat = values["control-plane"]
     ? startHeartbeat(runner, {
         controlPlaneUrl: values["control-plane"],
-        threadSecret: secret,
+        signRunner: seconds => keys!.signRunner(seconds),
         version: RUNNER_VERSION,
         onShutdown: () => void shutdown(0),
         log,
@@ -575,9 +585,16 @@ export function writeAgentFiles(env: NodeJS.ProcessEnv = process.env, home = hom
   return out;
 }
 
-async function uploadCredential(controlPlane: string, threadId: string, agent: string, secret: string, c: AgentCredential, relay: Relay | null): Promise<void> {
+async function uploadCredential(
+  controlPlane: string,
+  threadId: string,
+  agent: string,
+  keys: ThreadKeys,
+  c: AgentCredential,
+  relay: Relay | null,
+): Promise<void> {
   // Relayed calls can wait a few minutes for the control plane, so the token lives longer.
-  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + (relay ? 300 : 120) }, secret);
+  const token = await keys.signRunner(relay ? 300 : 120);
   const body = { threadId, agent, kind: c.kind, name: c.name, value: c.value };
   const res = relay
     ? relayResponse(await relay.request({ method: "POST", path: "/api/runner/agent-credentials", authorization: `Bearer ${token}`, body }))

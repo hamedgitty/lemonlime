@@ -75,6 +75,17 @@ describe("DockerProvider", () => {
     expect(run).not.toContain("-p");
   });
 
+  it("with a separate agent user: starts as root with only the keeper's powers, and the keeper first", async () => {
+    const d = fakeDocker();
+    const p = new DockerProvider({ image: "img", docker: d.bin, agentUser: "agent" });
+    await p.create({ threadId: "thread-abc123", size: "small", runner, labels: {} });
+    const run = d.calls()[0]!;
+    expect(run).toEqual(expect.arrayContaining(["--user", "root", "--cap-drop", "ALL", "no-new-privileges"]));
+    expect(run.filter(a => a.startsWith("SET") || a === "KILL").sort()).toEqual(["KILL", "SETGID", "SETUID"]);
+    const image = run.indexOf("img");
+    expect(run.slice(image + 1, image + 8)).toEqual(["lemonlime-runner", "keeper", "--thread", "thread-abc123", "--agent-user", "agent", "--"]);
+  });
+
   it("is configured from the environment", () => {
     const p = createSandboxProvider({ LEMONLIME_DOCKER_NETWORK: "n", LEMONLIME_DOCKER_PUBLIC_URL: "https://x/sandbox" }) as DockerProvider;
     expect(p).toBeInstanceOf(DockerProvider);

@@ -10,13 +10,13 @@ import {
   parseClientMessage,
   parseTerminalClientMessage,
   verifyToken,
-  deriveAgentKey,
   MAX_TOKEN_LIFETIME_SECONDS,
   type VerifyResult,
   type ServerMessage,
   type TerminalServerMessage,
 } from "@lemonlime/protocol";
 import { TerminalSession, type SpawnPty } from "./terminal.ts";
+import { keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
 import { listWorkdirFiles, searchFiles } from "./composer.ts";
@@ -28,7 +28,9 @@ export interface ServerOptions {
   host: string;
   port: number;
   /** The thread's secret; client tokens must be signed with it. */
-  threadSecret: string;
+  threadSecret?: string;
+  /** Or, when a keeper holds the secret (see keeper.ts), what to check tokens with. */
+  keys?: ThreadKeys;
   version: string;
   /** The thread's terminal: a shell in `cwd`. Without `spawn` (no PTY support), it says so. */
   terminal?: { cwd: string; spawn: SpawnPty | null };
@@ -45,15 +47,25 @@ export interface RunningServer {
 
 const HELLO_TIMEOUT_MS = 10_000;
 
-const agentKeys = new Map<string, Promise<string>>();
-/** The key the agent's own tools sign with (see deriveAgentKey), worked out once per secret. */
-function agentKeyFor(threadSecret: string): Promise<string> {
-  let key = agentKeys.get(threadSecret);
-  if (!key) {
-    key = deriveAgentKey(threadSecret);
-    agentKeys.set(threadSecret, key);
+const keysByOptions = new WeakMap<ServerOptions, Promise<ThreadKeys>>();
+/** What this server checks tokens with: the keeper's, or ones made from the secret it was given. */
+function keysFor(opts: ServerOptions, threadId: string): Promise<ThreadKeys> {
+  let keys = keysByOptions.get(opts);
+  if (!keys) {
+    keys = opts.keys ? Promise.resolve(opts.keys) : keysFromSecret(threadId, opts.threadSecret ?? "");
+    keysByOptions.set(opts, keys);
   }
-  return key;
+  return keys;
+}
+
+/** A token signed with the thread secret (the user's apps, the relay), capped in lifetime. */
+async function verifyUser(token: string, opts: ServerOptions, threadId: string): Promise<VerifyResult> {
+  return capped(await (await keysFor(opts, threadId)).verify(token));
+}
+
+/** A token from the agent's own tools, signed with the agent key, capped in lifetime. */
+async function verifyAgent(token: string, opts: ServerOptions, threadId: string): Promise<VerifyResult> {
+  return capped(await verifyToken(token, (await keysFor(opts, threadId)).agentKey));
 }
 
 /**
@@ -69,9 +81,8 @@ function closeAtExpiry(ws: WebSocket, exp: number): () => void {
   return () => clearTimeout(timer);
 }
 
-/** verifyToken, also refusing tokens that claim to live longer than any LemonLime app makes them. */
-async function verifyCapped(token: string, key: string): Promise<VerifyResult> {
-  const result = await verifyToken(token, key);
+/** Refuse tokens that claim to live longer than any LemonLime app makes them. */
+function capped(result: VerifyResult): VerifyResult {
   if (result.ok && result.claims.exp > Math.floor(Date.now() / 1000) + MAX_TOKEN_LIFETIME_SECONDS + 60) return { ok: false, reason: "malformed" };
   return result;
 }
@@ -209,7 +220,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         ws.close(4401, "unauthorized");
         return;
       }
-      const result = await verifyCapped(msg.token, opts.threadSecret);
+      const result = await verifyUser(msg.token, opts, runner.thread.id);
       const thread = runner.thread;
       if (!result.ok || result.claims.scope !== "client" || result.claims.threadId !== thread.id) {
         send({ type: "error", code: "unauthorized", message: result.ok ? "Token is not valid for this thread" : `Token ${result.reason.replace("_", " ")}` });
@@ -383,7 +394,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
         send({ type: "error", code: "unauthorized", message: "Send hello first" });
         return ws.close(4401, "unauthorized");
       }
-      const result = await verifyCapped(msg.token, opts.threadSecret);
+      const result = await verifyUser(msg.token, opts, runner.thread.id);
       if (!result.ok || result.claims.scope !== "client" || result.claims.threadId !== runner.thread.id) {
         send({ type: "error", code: "unauthorized", message: "Token is not valid for this thread" });
         return ws.close(4401, "unauthorized");
@@ -477,7 +488,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     // /relay/local: this sandbox's own git credential helper (a runner token).
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
     const scope = path === "/relay" ? "relay" : "runner";
-    const auth = token ? await verifyCapped(token, scope === "relay" ? opts.threadSecret : await agentKeyFor(opts.threadSecret)) : null;
+    const auth = token ? await (scope === "relay" ? verifyUser(token, opts, runner.thread.id) : verifyAgent(token, opts, runner.thread.id)) : null;
     if (!auth?.ok || auth.claims.scope !== scope || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     if (path === "/relay" && req.method === "GET") return reply(res, 200, { requests: opts.relay.take() });
     if (req.method !== "POST") return reply(res, 405, { error: "method_not_allowed" });
@@ -504,7 +515,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
   if (path === "/computer" && req.method === "POST") {
     // From the cloud agent's own tools: a runner token signed with the agent key.
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
+    const auth = token ? await verifyAgent(token, opts, runner.thread.id) : null;
     if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     const body = await readBody(req, 64 * 1024);
     const parsed = ComputerRequest.safeParse(
@@ -522,7 +533,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
   if (path.startsWith("/subagents")) {
     // From the agents' own subagents MCP server: a runner token signed with the agent key.
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
+    const auth = token ? await verifyAgent(token, opts, runner.thread.id) : null;
     if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     const parent = new URL(req.url ?? "/", "http://runner").searchParams.get("parent") || null;
     if (path === "/subagents" && req.method === "GET") return reply(res, 200, { subagents: runner.subagents.list(parent) });
@@ -550,9 +561,9 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     // From the agent's own `lemonlime-runner preview`: a runner token signed with the agent key.
     // The user's apps may list previews with their client token.
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
+    const auth = token ? await verifyAgent(token, opts, runner.thread.id) : null;
     if (req.method === "GET") {
-      const asClient = token && !auth?.ok ? await verifyCapped(token, opts.threadSecret) : null;
+      const asClient = token && !auth?.ok ? await verifyUser(token, opts, runner.thread.id) : null;
       const ok =
         (auth?.ok && auth.claims.threadId === runner.thread.id) ||
         (asClient?.ok && asClient.claims.scope === "client" && asClient.claims.threadId === runner.thread.id);
@@ -587,7 +598,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     );
   }
   const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-  const auth = token ? await verifyCapped(token, opts.threadSecret) : null;
+  const auth = token ? await verifyUser(token, opts, runner.thread.id) : null;
   if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
 
   // The composer's `@` and `/` menus (see packages/protocol/src/composer.ts).
@@ -723,7 +734,7 @@ function handleTunnel(ws: WebSocket, req: IncomingMessage, runner: ThreadRunner,
       /* not a hello */
     }
     void (async () => {
-      const auth = token ? await verifyCapped(token, opts.threadSecret) : null;
+      const auth = token ? await verifyUser(token, opts, runner.thread.id) : null;
       if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return ws.close(4401, "unauthorized");
       if (!runner.previews.some(p => p.port === port)) return ws.close(4404, "not a preview port");
       open();

@@ -12,7 +12,9 @@ const HISTORY_RETRY_MS = 10 * 60_000;
 
 export interface HeartbeatOptions {
   controlPlaneUrl: string;
-  threadSecret: string;
+  /** The thread's secret, or (from a keeper) a way to sign runner tokens without it. */
+  threadSecret?: string;
+  signRunner?: (seconds: number) => Promise<string>;
   version: string;
   /** Called when the control plane asks the runner to shut down. */
   onShutdown(): void;
@@ -49,7 +51,8 @@ export function startHeartbeat(runner: ThreadRunner, opts: HeartbeatOptions): He
   let historyOffUntil = 0;
   let drained = false;
 
-  const token = () => signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 300 }, opts.threadSecret);
+  const token = () =>
+    opts.signRunner ? opts.signRunner(300) : signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 300 }, opts.threadSecret ?? "");
   const call = async (path: string, init: { method: string; body?: unknown }) => {
     if (opts.relay)
       return relayResponse(

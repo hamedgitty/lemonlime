@@ -26,6 +26,15 @@ Docker daemon on the same machine. It loads `node:child_process` only when it is
 first used, so importing the package is safe anywhere; on Workers its methods
 throw an error saying to use `daytona` or `e2b` instead.
 
+With `LEMONLIME_DOCKER_AGENT_USER=agent`, the agent runs as its own user, apart from the
+thread secret. The container starts as root with only `SETUID`, `SETGID` and `KILL` added
+back (still `no-new-privileges`), and runs `lemonlime-runner keeper --thread <id>
+--agent-user agent -- sh -c <runner>`: the keeper keeps the secret, then starts the setup
+script and the runner as `agent` without it. The runner asks the keeper over a local socket
+to check tokens and to sign its own short runner tokens; the keeper never signs a token for
+the user's apps. As root, the keeper's memory and environment are out of the agent's reach,
+and so is the secret. Daytona and E2B don't use this yet.
+
 ## Lifecycle
 
 | | docker | daytona | e2b |

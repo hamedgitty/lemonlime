@@ -11,6 +11,8 @@ import { SecretsManager } from "./secrets-manager.tsx";
 import { TokensManager } from "./tokens-manager.tsx";
 import { MembersManager } from "./members-manager.tsx";
 import { listMembers, listWorkspaces } from "@/lib/members.ts";
+import { getWorkspaceSettings } from "@/lib/workspace-settings.ts";
+import { CloudEnvironment } from "./cloud-environment.tsx";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -28,6 +30,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const { members, invites } = await listMembers(ctx.db, workspaceId);
   const workspace = (await listWorkspaces(ctx.db, user.userId)).find(w => w.id === workspaceId);
   const isOwner = workspace?.role === "owner";
+  const cloudSettings = await getWorkspaceSettings(ctx, user.userId, workspaceId);
 
   return (
     <main className="mx-auto max-w-3xl space-y-10 px-5 py-10">
@@ -75,6 +78,16 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           each with a token that only works on that repository and expires within the hour.
         </p>
         <GitHubSection enabled={githubEnabled} initial={installations} result={githubResult} />
+      </section>
+
+      <section aria-labelledby="cloud-heading" className="card p-6">
+        <h2 id="cloud-heading" className="text-xl font-semibold">
+          Cloud environment
+        </h2>
+        <p className="mt-1 text-sm text-muted">
+          How every new cloud sandbox in this workspace starts: instructions for the agent, a setup script, and what happens to busy turns and old threads.
+        </p>
+        <CloudEnvironment initial={cloudSettings.settings} canEdit={cloudSettings.canEdit} />
       </section>
 
       <section aria-labelledby="secrets-heading" className="card p-6">

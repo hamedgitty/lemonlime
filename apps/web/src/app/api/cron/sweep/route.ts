@@ -1,7 +1,7 @@
 import { bearerToken, safeEqual } from "@/lib/access-tokens.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError, json, route } from "@/lib/http.ts";
-import { sweepRunningSandboxes } from "@/lib/threads.ts";
+import { closeInactiveThreads, sweepRunningSandboxes } from "@/lib/threads.ts";
 import { runDueAutomations } from "@/lib/automations.ts";
 import { relayEnabled, relayRunnerCalls } from "@/lib/relay.ts";
 import { dispatchRunnerCall } from "@/lib/relay-routes.ts";
@@ -22,5 +22,8 @@ export const POST = route(async request => {
   // Relayed heartbeats first, so the sweep decides on fresh news.
   const relay = relayEnabled(ctx.vars) ? await relayRunnerCalls(ctx, dispatchRunnerCall) : null;
   const sweep = await sweepRunningSandboxes(ctx);
-  return json({ ...sweep, automations: await runDueAutomations(ctx), ...(relay ? { relay } : {}) });
+  const automations = await runDueAutomations(ctx);
+  // Threads idle longer than their workspace keeps them: closed, sandboxes deleted.
+  const autoDelete = await closeInactiveThreads(ctx);
+  return json({ ...sweep, automations, autoDelete, ...(relay ? { relay } : {}) });
 });

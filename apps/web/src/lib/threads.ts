@@ -1,4 +1,4 @@
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, ne } from "drizzle-orm";
 import {
   Thread,
   branchForThread,
@@ -11,7 +11,7 @@ import {
 } from "@lemonlime/protocol";
 import type { RunningSandbox } from "@lemonlime/plugins";
 import { runnerWsUrl } from "@lemonlime/sandbox";
-import { sandboxRuns, systemStatus, threads, type ThreadRow } from "@lemonlime/db";
+import { sandboxRuns, systemStatus, threads, workspaceSettings, type ThreadRow } from "@lemonlime/db";
 import { getThreadForUser, listThreadsForUser } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
@@ -23,6 +23,7 @@ import { decideSweep, runtimeSeconds, type EndReason, type SweepThread } from ".
 import { issueClientToken, threadSecret } from "./tokens.ts";
 import { githubAppConfig, tokenForThread } from "./github.ts";
 import { relayEnabled } from "./relay.ts";
+import { sandboxSettings } from "./workspace-settings.ts";
 
 export type { ThreadRow };
 
@@ -152,6 +153,11 @@ async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | 
   if (opts.withSecrets) {
     const { files } = await credentialsForSandbox(ctx, row.createdBy, row.agent.kind);
     if (Object.keys(files).length) launch.env.LEMONLIME_AGENT_FILES = btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(files))));
+    // The workspace's cloud settings, like secrets, are fixed when the sandbox is made.
+    const settings = await sandboxSettings(ctx, row.workspaceId);
+    Object.assign(launch.env, settings.env);
+    if (settings.retryMaxWaitMinutes > 0) launch.env.LEMONLIME_RETRY_MAX_WAIT = String(settings.retryMaxWaitMinutes);
+    if (settings.setupScript) launch.setupScript = settings.setupScript;
   }
   return launch;
 }
@@ -420,6 +426,46 @@ export async function recordHeartbeat(ctx: AppContext, hb: RunnerHeartbeat): Pro
   });
   const pending = await countPendingMessages(ctx, row.id);
   return { action: drainRequestedAt && !drainedAt ? "drain" : "none", pendingMessages: pending };
+}
+
+// ─── Auto-delete ────────────────────────────────────────────────────────────
+
+/** Most threads closed by one sweep; the rest wait for the next minute. */
+const AUTO_DELETE_BATCH = 25;
+
+/**
+ * Close cloud threads that have had no activity for the number of days their workspace
+ * chose (workspace_settings.auto_delete_days) and delete their sandboxes. Their history
+ * stays readable. Workspaces without the setting are left alone.
+ */
+export async function closeInactiveThreads(
+  ctx: AppContext,
+  nowMs: number = Date.now(),
+): Promise<{ closed: string[]; errors: Array<{ threadId: string; error: string }> }> {
+  const out = { closed: [] as string[], errors: [] as Array<{ threadId: string; error: string }> };
+  const workspaces = await ctx.db
+    .select({ workspaceId: workspaceSettings.workspaceId, days: workspaceSettings.autoDeleteDays })
+    .from(workspaceSettings)
+    .where(isNotNull(workspaceSettings.autoDeleteDays));
+  for (const { workspaceId, days } of workspaces) {
+    if (!days || days < 1 || out.closed.length >= AUTO_DELETE_BATCH) continue;
+    const cutoff = new Date(nowMs - days * 86_400_000).toISOString();
+    // Every heartbeat updates a thread, so a sandbox that is still working is never this old.
+    const stale = await ctx.db
+      .select()
+      .from(threads)
+      .where(and(eq(threads.workspaceId, workspaceId), eq(threads.mode, "cloud"), ne(threads.status, "stopped"), lt(threads.updatedAt, cutoff)))
+      .limit(AUTO_DELETE_BATCH - out.closed.length);
+    for (const row of stale) {
+      try {
+        await endRun(ctx, row, "idle", { destroy: true });
+        out.closed.push(row.id);
+      } catch (err) {
+        out.errors.push({ threadId: row.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+  return out;
 }
 
 // ─── Sweep ──────────────────────────────────────────────────────────────────

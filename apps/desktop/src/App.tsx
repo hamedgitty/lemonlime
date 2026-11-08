@@ -11,7 +11,13 @@ import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
-import { OPEN_SETTINGS_EVENT } from "./lib/settingsNav.ts";
+import { OPEN_SETTINGS_EVENT, openAgentsSettings } from "./lib/settingsNav.ts";
+import { forkPrompt, removeThreadText, requestRevealChild } from "./lib/threadMenu.ts";
+import type { GroupProject, ThreadGroup } from "./lib/sidebarGroups.ts";
+import { useAgentUsage } from "./lib/agentUsage.ts";
+import { loadMachines } from "./lib/machines.ts";
+import { SidebarUsageCard } from "./components/SidebarUsage.tsx";
+import type { HomeDraft } from "./components/Home.tsx";
 import { TipProvider } from "./components/primitives.tsx";
 import { SETTINGS_PAGES, SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
@@ -47,6 +53,7 @@ import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import {
   draftThreadIds,
   forgetEvents,
+  loadEvents,
   loadLocalThreads,
   loadSettings,
   loadSplitLayout,
@@ -302,7 +309,11 @@ export function App() {
   // ── Setup wizard and composer drafts ─────────────────────
   // First run opens setup; it stays open until finished or skipped, even once chats are imported.
   const [setupOpen, setSetupOpen] = useState(() => !prefs.setupDone && localThreads.length === 0);
-  const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
+  const [draft, setDraft] = useState<HomeDraft | null>(null);
+  // Used once: leaving Home drops it, so coming back doesn't fill it in again.
+  useEffect(() => {
+    if (place.view !== "home") setDraft(null);
+  }, [place.view]);
 
   // ── The side panel on every page (terminals on this computer, a browser) ──
   const [panelTabs, setPanelTabs] = useState<PanelTab[]>([]);
@@ -613,7 +624,7 @@ export function App() {
   }, []);
 
   const onRemoveLocal = useCallback(
-    (id: string) => {
+    (id: string, o: { stay?: boolean } = {}) => {
       const meta = localThreads.find(m => m.id === id);
       // Removes the thread's worktree and history; its branch stays in the repository.
       const stop = meta ? removeThreadRunner(meta, settings.runnerPath) : stopLocalRunner(id);
@@ -621,7 +632,7 @@ export function App() {
       forgetEvents(id);
       setLocalThreads(list => list.filter(m => m.id !== id));
       // In a split, its pane closes and the others stay.
-      if (!layoutRef.current) go({ view: "home" });
+      if (!layoutRef.current && !o.stay) go({ view: "home" });
     },
     [refreshRunners, localThreads, settings.runnerPath, go],
   );
@@ -1131,6 +1142,94 @@ export function App() {
   const onArchiveRef = useRef(onArchive);
   onArchiveRef.current = onArchive;
 
+  // ── The thread menu (sidebar row, right-click, thread header) ──
+  const setPinned = useCallback(
+    (id: string, pin: boolean) => {
+      const pinned = prefsRef.current.pinned.filter(x => x !== id);
+      onPrefs({ pinned: pin ? [id, ...pinned] : pinned });
+    },
+    [onPrefs],
+  );
+  /** Home, with a project chosen and (for a fork) the first message written. */
+  const startInProject = useCallback(
+    (project: GroupProject | undefined, text = "") => {
+      setDraft({ text, nonce: Date.now(), ...(project ? { project } : {}) });
+      go({ view: "home" });
+    },
+    [go],
+  );
+  const onFork = useCallback(
+    (t: ThreadSummary) => {
+      const project: GroupProject | undefined = t.mode === "cloud" ? { mode: "cloud", url: t.repo } : t.machine ? undefined : { mode: "local", path: t.repo };
+      startInProject(project, forkPrompt(t, loadEvents(t.id)));
+    },
+    [startInProject],
+  );
+  const openThreadFolder = useCallback(
+    (t: ThreadSummary) => {
+      void threadFolder(t.repo, t.id)
+        .then(dir => openFolder(dir, prefs.editor))
+        .catch(err => console.warn("Couldn't open the thread's folder", err));
+    },
+    [prefs.editor],
+  );
+  const removeFromSidebar = useCallback(
+    async (t: ThreadSummary) => {
+      const machine = t.machine ? (loadMachines().find(m => m.id === t.machine)?.name ?? "a removed machine") : null;
+      if (!(await confirmAction(removeThreadText(t, machine)))) return;
+      const open = placeRef.current.view === "thread" && placeRef.current.selection.id === t.id;
+      onRemoveLocal(t.id, { stay: !open });
+    },
+    [onRemoveLocal],
+  );
+  /** "Remove from list" on a project: its threads are archived (Undo puts them back) and it leaves the recent projects. */
+  const removeProject = useCallback(
+    async (g: ThreadGroup) => {
+      const n = g.threads.length;
+      if (
+        !(await confirmAction(
+          `Take ${g.label} off the list? Its ${n === 1 ? "thread is" : `${n} threads are`} archived and its agents stop. Nothing in the folder or repository changes.`,
+        ))
+      )
+        return;
+      const p = prefsRef.current;
+      const archived = { ...p.archived };
+      const at = new Date().toISOString();
+      for (const t of g.threads) {
+        archived[t.id] = at;
+        if (t.mode === "local") void stopLocalRunner(t.id).finally(refreshRunners);
+      }
+      const ids = new Set(g.threads.map(t => t.id));
+      const path = g.project?.mode === "local" ? g.project.path : null;
+      onPrefs({
+        archived,
+        pinned: p.pinned.filter(id => !ids.has(id)),
+        ...(path ? { recentProjects: p.recentProjects.filter(x => x !== path) } : {}),
+      });
+      toast({
+        title: `Took ${g.label} off the list`,
+        action: {
+          label: "Undo",
+          onClick: () => {
+            const now = prefsRef.current;
+            const back = { ...now.archived };
+            for (const id of ids) delete back[id];
+            onPrefs({ archived: back, ...(path && !now.recentProjects.includes(path) ? { recentProjects: [...now.recentProjects, path] } : {}) });
+          },
+        },
+      });
+    },
+    [onPrefs, refreshRunners],
+  );
+  const openChild = useCallback(
+    (t: ThreadSummary, childId: string) => {
+      requestRevealChild(t.id, childId);
+      go({ view: "thread", selection: { mode: t.mode, id: t.id } });
+    },
+    [go],
+  );
+  const agentUsage = useAgentUsage(inDesktopShell());
+
   const selection = place.view === "thread" ? place.selection : null;
   const entryFor = useCallback(
     (sel: Selection): ThreadEntry | null => {
@@ -1324,6 +1423,24 @@ export function App() {
     return (
       <ThreadView
         unreadAfterSeq={unreadAfterSeq}
+        {...(summary
+          ? {
+              threadMenu: {
+                pinned: prefs.pinned.includes(summary.id),
+                unread: rowStates.unread.has(summary.id),
+                inSplit: layout ? openThreadIds(layout).has(summary.id) : false,
+                editor: Boolean(prefs.editor),
+                actions: {
+                  pin: (pin: boolean) => setPinned(summary.id, pin),
+                  unread: (u: boolean) => onMarkUnread(summary, u),
+                  split: () => openInSplit({ mode: summary.mode, id: summary.id }),
+                  fork: () => onFork(summary),
+                  archive: (a: boolean) => void onArchive(summary, a),
+                },
+                onRename: (title: string) => onRename(summary, title),
+              },
+            }
+          : {})}
         key={`${entry.mode}:${summaryId}`}
         {...paneProps}
         entry={entry}
@@ -1507,7 +1624,23 @@ export function App() {
         unread={rowStates.unread}
         onMarkUnread={onMarkUnread}
         onRename={onRename}
-        usageCard={summary ? <UsageCard summary={summary} /> : undefined}
+        onFork={onFork}
+        onRemove={t => void removeFromSidebar(t)}
+        onOpenChild={openChild}
+        onNewInProject={project => startInProject(project)}
+        onRemoveProject={g => void removeProject(g)}
+        editor={Boolean(prefs.editor)}
+        {...(inDesktopShell()
+          ? {
+              onOpenFolder: openThreadFolder,
+              onOpenProjectFolder: (path: string) => void openFolder(path, prefs.editor).catch(err => console.warn("Couldn't open the folder", err)),
+            }
+          : {})}
+        usageCard={
+          summary || agentUsage.length > 0 ? (
+            <SidebarUsageCard cloud={summary} agents={agentUsage} onOpenAccounts={() => openAgentsSettings({ tab: "accounts" })} />
+          ) : undefined
+        }
         notifications={className => (
           <NotificationCenter
             inbox={inbox}
@@ -1656,33 +1789,4 @@ function sameSet(a: Set<string>, b: string[]): boolean {
   if (a.size !== b.length) return false;
   for (const x of b) if (!a.has(x)) return false;
   return true;
-}
-
-/** The deployment's usage card at the foot of the sidebar (cloud hours and the like). */
-function UsageCard({ summary }: { summary: { title: string; detail: string; progress?: number; actionUrl?: string; actionLabel?: string } }) {
-  return (
-    <div className="rounded-xl border border-line bg-paper px-3 py-2.5">
-      <div className="flex items-baseline gap-2">
-        <p className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-ink">{summary.title}</p>
-        {summary.actionUrl && (
-          <button type="button" onClick={() => void openExternal(summary.actionUrl!)} className="shrink-0 text-[12.5px] font-medium text-leaf hover:underline">
-            {summary.actionLabel ?? "Manage"}
-          </button>
-        )}
-      </div>
-      <p className="mt-0.5 truncate text-[12.5px] text-ink-soft">{summary.detail}</p>
-      {summary.progress !== undefined && (
-        <div
-          className="mt-2 h-1.5 overflow-hidden rounded-full bg-cream-deep"
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(summary.progress * 100)}
-          aria-label={summary.title}
-        >
-          <div className="h-full rounded-full bg-lime" style={{ width: `${Math.round(summary.progress * 100)}%` }} />
-        </div>
-      )}
-    </div>
-  );
 }

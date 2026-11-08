@@ -29,6 +29,13 @@ const STARTERS = [
   },
 ];
 
+/** Text to put in the composer, and (for a new thread in a project, or a fork) the project to start in. */
+export interface HomeDraft {
+  text: string;
+  nonce: number;
+  project?: { mode: "local"; path: string } | { mode: "cloud"; url: string };
+}
+
 export interface HomeProps {
   cloudAvailable: boolean;
   threadCount: number;
@@ -39,7 +46,7 @@ export interface HomeProps {
   /** The LemonLime dashboard, when connected (for GitHub setup). */
   dashboardUrl?: string;
   /** Text to put in the composer (from Skills, Plugins…); a new nonce fills it again. */
-  draft?: { text: string; nonce: number } | null;
+  draft?: HomeDraft | null;
   /** ACP agents saved in Settings. */
   acpAgents?: Settings["acpAgents"];
   /** Agent CLIs found on this computer (null while looking), for the model picker's tabs. */
@@ -81,7 +88,16 @@ export function Home({
   const placeValue = place === "cloud" ? "cloud" : machine ? `machine:${machine.id}` : "local";
   const [remotePath, setRemotePath] = useState(() => machine?.recentPaths[0] ?? "");
   useEffect(() => {
-    if (draft) composer.current?.fill(draft.text);
+    if (draft && (draft.text || !draft.project)) composer.current?.fill(draft.text);
+    if (draft?.project?.mode === "local") {
+      setPicked("local");
+      void pickProject(draft.project.path);
+    } else if (draft?.project?.mode === "cloud") {
+      setPicked("cloud");
+      setRepoUrl(draft.project.url);
+    }
+    if (draft) composer.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft]);
   const agent = prefs.lastAgent;
   const caps = AGENT_CAPABILITIES[agent];

@@ -197,6 +197,10 @@ export const UiPrefs = z.object({
   agentIcons: z.boolean().default(false),
   /** Don't list subagents under their thread in the sidebar (its progress grid stays). */
   collapseChildren: z.boolean().default(false),
+  /** Sidebar thread groups folded away, by group key (see sidebarGroups.ts). */
+  collapsedGroups: z.array(z.string()).catch([]).default([]),
+  /** Sidebar thread groups in the order dragged into, by group key. */
+  groupOrder: z.array(z.string()).catch([]).default([]),
   notifications: z
     .object({
       enabled: z.boolean().default(true),

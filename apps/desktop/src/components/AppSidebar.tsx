@@ -1,17 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AlarmClock,
   Archive,
-  ArchiveRestore,
+  ArrowDown,
   ArrowDownUp,
+  ArrowUp,
   BookOpen,
   CircleAlert,
   CircleCheck,
   CircleMinus,
   CircleX,
   Hourglass,
-  MailCheck,
-  MailOpen,
   MessageCircleQuestion,
   PencilLine,
   Download,
@@ -19,17 +18,20 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Cloud,
   Columns2,
   Ellipsis,
   FolderGit2,
+  FolderOpen,
   GripVertical,
   Laptop,
   Layers,
   MessageSquare,
   PanelLeft,
   Pin,
-  PinOff,
+  Plus,
   Puzzle,
   Search,
   Settings as SettingsIcon,
@@ -37,18 +39,23 @@ import {
   SquareTerminal,
   SquarePen,
   Server,
+  Trash2,
   UserRound,
   X,
 } from "lucide-react";
 import type { ThreadSummary } from "../lib/threads.ts";
-import { useMachines, type Machine } from "../lib/machines.ts";
+import { useMachines } from "../lib/machines.ts";
 import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { NAV_ITEMS, type NavItem, type SidebarChild, type UiPrefs } from "../lib/storage.ts";
 import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.ts";
-import { Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip } from "./primitives.tsx";
+import { ContextMenu, Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip, Toggle } from "./primitives.tsx";
+import { GROUP_ROWS, groupThreads, moveGroup, orderGroups, toggleKey, groupRows, type GroupProject, type ThreadGroup } from "../lib/sidebarGroups.ts";
+import { knownPullRequests, subscribePullRequests } from "../lib/threadMenu.ts";
+import { useMissingFolders } from "../lib/missingFolders.ts";
+import { RenameField, ThreadMenu, ThreadRightClickMenu, type ThreadMenuProps } from "./ThreadMenu.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
 import { AgentIcon } from "./AgentIcon.tsx";
-import { LogoMark, Spinner, StatusDot, cx } from "./ui.tsx";
+import { LogoMark, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface AppSidebarProps {
   threads: ThreadSummary[];
@@ -97,6 +104,22 @@ export interface AppSidebarProps {
   onOpenInSplit?: (t: ThreadSummary) => void;
   /** A thread row is being dragged (to drop on a pane), or the drag ended (null). */
   onDragThread?: (t: ThreadSummary | null) => void;
+  /** Start a new thread in a group's project (Home, with the project chosen). */
+  onNewInProject?: (project: GroupProject) => void;
+  /** Open a project folder on this computer (in the editor, or the file manager). */
+  onOpenProjectFolder?: (path: string) => void;
+  /** Take a project off the list: its threads are archived. */
+  onRemoveProject?: (group: ThreadGroup) => void;
+  /** Start a new thread that carries on from this one. */
+  onFork?: (t: ThreadSummary) => void;
+  /** Open a thread's folder on this computer. */
+  onOpenFolder?: (t: ThreadSummary) => void;
+  /** Remove a local thread (asks first). */
+  onRemove?: (t: ThreadSummary) => void;
+  /** A subagent under a thread was clicked: open the thread at it. */
+  onOpenChild?: (t: ThreadSummary, childId: string) => void;
+  /** Folders open in an editor (Settings), rather than the file manager. */
+  editor?: boolean;
 }
 
 /** The drag data type for a thread row. */
@@ -131,13 +154,91 @@ export function AppSidebar(p: AppSidebarProps) {
   const machines = useMachines();
   const groups = useMemo(
     () =>
-      groupThreads(
-        filtered.filter(t => !p.prefs.archived[t.id]),
-        p.prefs,
-        machines,
+      orderGroups(
+        groupThreads(
+          filtered.filter(t => !p.prefs.archived[t.id]),
+          { organize: p.prefs.organize, pinned: p.prefs.pinned, machineName: id => machines.find(m => m.id === id)?.name },
+        ),
+        p.prefs.groupOrder,
       ),
-    [filtered, p.prefs, machines],
+    [filtered, p.prefs.organize, p.prefs.pinned, p.prefs.archived, p.prefs.groupOrder, machines],
   );
+  // One group of anything but a project needs no heading.
+  const showHeaders = groups.length > 1 || groups[0]?.kind === "project";
+  const movable = groups.filter(g => g.kind !== "pinned").map(g => g.key);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [dragGroup, setDragGroup] = useState<string | null>(null);
+  const missing = useMissingFolders(groups.flatMap(g => (g.project?.mode === "local" ? [g.project.path] : [])));
+  const pullRequests = useSyncExternalStore(subscribePullRequests, knownPullRequests);
+  const toggleGroup = (key: string) => p.onPrefs({ collapsedGroups: toggleKey(p.prefs.collapsedGroups, key) });
+  const moveTo = (key: string, to: number) => p.onPrefs({ groupOrder: moveGroup(p.prefs.groupOrder, movable, key, to) });
+  const headed = showHeaders ? groups : [];
+  const allCollapsed = headed.length > 0 && headed.every(g => p.prefs.collapsedGroups.includes(g.key));
+
+  /** The thread list's options, on its ⋯ and on a right-click on its heading. */
+  const listOptions = (withNew: boolean) => (
+    <>
+      {withNew && (
+        <MenuItem icon={<SquarePen />} onSelect={p.onNew} hint="⌘N">
+          New thread
+        </MenuItem>
+      )}
+      <MenuItem icon={<FolderPlus />} onSelect={p.onNewProject}>
+        New project…
+      </MenuItem>
+      <MenuSeparator />
+      <SubMenu icon={<Layers />} label="Organize">
+        <MenuChoice
+          value={p.prefs.organize}
+          onChange={organize => p.onPrefs({ organize })}
+          options={[
+            { value: "project", label: "By project" },
+            { value: "place", label: "By where it runs" },
+            { value: "agent", label: "By agent" },
+          ]}
+        />
+      </SubMenu>
+      <SubMenu icon={<ArrowDownUp />} label="Sort by">
+        <MenuChoice
+          value={p.prefs.sort}
+          onChange={sort => p.onPrefs({ sort })}
+          options={[
+            { value: "recent", label: "Recent activity" },
+            { value: "name", label: "Name" },
+          ]}
+        />
+      </SubMenu>
+      {headed.length > 1 && (
+        <>
+          <MenuSeparator />
+          <MenuItem
+            icon={allCollapsed ? <ChevronsUpDown /> : <ChevronsDownUp />}
+            onSelect={() => {
+              const keys = headed.map(g => g.key);
+              p.onPrefs({
+                collapsedGroups: allCollapsed ? p.prefs.collapsedGroups.filter(k => !keys.includes(k)) : [...new Set([...p.prefs.collapsedGroups, ...keys])],
+              });
+            }}
+          >
+            {allCollapsed ? "Expand all groups" : "Collapse all groups"}
+          </MenuItem>
+        </>
+      )}
+    </>
+  );
+
+  /** What a row's menus can do, besides what the row handles itself. */
+  const rowActions = (t: ThreadSummary) => {
+    const here = t.mode === "local" && !t.machine;
+    return {
+      ...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {}),
+      ...(p.onMarkUnread && !p.prefs.archived[t.id] ? { onMarkUnread: (u: boolean) => p.onMarkUnread!(t, u) } : {}),
+      ...(p.onFork ? { onFork: () => p.onFork!(t) } : {}),
+      ...(p.onOpenFolder && here ? { onOpenFolder: () => p.onOpenFolder!(t) } : {}),
+      ...(p.onRemove && t.mode === "local" ? { onRemove: () => p.onRemove!(t) } : {}),
+      ...(p.onOpenChild ? { onOpenChild: (childId: string) => p.onOpenChild!(t, childId) } : {}),
+    };
+  };
 
   const navAction = (item: NavItem) => {
     if (item === "new") p.onNew();
@@ -248,72 +349,47 @@ export function AppSidebar(p: AppSidebarProps) {
       )}
 
       {/* Threads */}
-      <div className="group/threads flex h-8 items-center gap-1 px-2 pl-4">
-        <button
-          type="button"
-          onClick={() => setThreadsOpen(o => !o)}
-          aria-expanded={threadsOpen}
-          className="flex flex-1 items-center gap-1 text-left text-[13.5px] text-ink-soft hover:text-ink"
-        >
-          Threads
-          <ChevronDown
-            aria-hidden="true"
-            className={cx(
-              "size-3.5 opacity-0 transition-[opacity,rotate] duration-150 group-hover/threads:opacity-100",
-              !threadsOpen && "-rotate-90 opacity-100",
-            )}
-          />
-        </button>
-        {p.cloudLoading && <Spinner className="size-3 text-ink-faint" />}
-        <Tip label="New thread">
+      <ContextMenu menu={listOptions(true)}>
+        <div className="group/threads flex h-8 items-center gap-1 px-2 pl-4">
           <button
             type="button"
-            onClick={p.onNew}
-            aria-label="New thread"
-            className="inline-flex size-7 items-center justify-center rounded-lg text-ink-soft opacity-0 transition-opacity group-hover/threads:opacity-100 hover:bg-cream-hover focus-visible:opacity-100"
+            onClick={() => setThreadsOpen(o => !o)}
+            aria-expanded={threadsOpen}
+            className="flex flex-1 items-center gap-1 text-left text-[13px] text-ink-soft hover:text-ink"
           >
-            <SquarePen aria-hidden="true" className="size-3.5" />
+            Threads
+            <ChevronDown
+              aria-hidden="true"
+              className={cx("size-3.5 opacity-0 transition-opacity duration-150 group-hover/threads:opacity-100", !threadsOpen && "-rotate-90 opacity-100")}
+            />
           </button>
-        </Tip>
-        <Menu
-          align="end"
-          trigger={
+          {p.cloudLoading && <Spinner className="size-3 text-ink-faint" />}
+          <Tip label="New thread">
             <button
               type="button"
-              aria-label="Thread list options"
-              className="inline-flex size-7 items-center justify-center rounded-lg text-ink-soft opacity-0 transition-opacity group-hover/threads:opacity-100 hover:bg-cream-hover focus-visible:opacity-100 data-[popup-open]:bg-cream-hover data-[popup-open]:opacity-100"
+              onClick={p.onNew}
+              aria-label="New thread"
+              className="inline-flex size-7 items-center justify-center rounded-lg text-ink-soft opacity-0 transition-opacity group-hover/threads:opacity-100 hover:bg-cream-hover focus-visible:opacity-100"
             >
-              <Ellipsis aria-hidden="true" className="size-4" />
+              <SquarePen aria-hidden="true" className="size-3.5" />
             </button>
-          }
-        >
-          <MenuItem icon={<FolderPlus />} onSelect={p.onNewProject}>
-            New project…
-          </MenuItem>
-          <MenuSeparator />
-          <SubMenu icon={<Layers />} label="Organize">
-            <MenuChoice
-              value={p.prefs.organize}
-              onChange={organize => p.onPrefs({ organize })}
-              options={[
-                { value: "project", label: "By project" },
-                { value: "place", label: "By where it runs" },
-                { value: "agent", label: "By agent" },
-              ]}
-            />
-          </SubMenu>
-          <SubMenu icon={<ArrowDownUp />} label="Sort by">
-            <MenuChoice
-              value={p.prefs.sort}
-              onChange={sort => p.onPrefs({ sort })}
-              options={[
-                { value: "recent", label: "Recent activity" },
-                { value: "name", label: "Name" },
-              ]}
-            />
-          </SubMenu>
-        </Menu>
-      </div>
+          </Tip>
+          <Menu
+            align="end"
+            trigger={
+              <button
+                type="button"
+                aria-label="Thread list options"
+                className="inline-flex size-7 items-center justify-center rounded-lg text-ink-soft opacity-0 transition-opacity group-hover/threads:opacity-100 hover:bg-cream-hover focus-visible:opacity-100 data-[popup-open]:bg-cream-hover data-[popup-open]:opacity-100"
+              >
+                <Ellipsis aria-hidden="true" className="size-4" />
+              </button>
+            }
+          >
+            {listOptions(false)}
+          </Menu>
+        </div>
+      </ContextMenu>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {threadsOpen &&
@@ -323,40 +399,68 @@ export function AppSidebar(p: AppSidebarProps) {
               {query ? "No threads match" : "No threads"}
             </p>
           ) : (
-            groups.map(g => (
-              <section key={g.key} aria-label={g.label} className="mb-2">
-                {groups.length > 1 && (
-                  <h3 className="flex h-7 items-center gap-2 px-2 font-sans text-[12.5px] font-medium tracking-normal text-ink-faint">
-                    {g.icon}
-                    <span className="truncate">{g.label}</span>
-                  </h3>
-                )}
-                <ul className="flex flex-col gap-px">
-                  {g.threads.map(t => (
-                    <ThreadRow
-                      key={`${t.mode}:${t.id}`}
-                      t={t}
-                      selected={t.id === p.selectedId}
-                      pinned={p.prefs.pinned.includes(t.id)}
-                      onSelect={p.onSelect}
-                      agentIcon={p.prefs.agentIcons}
-                      onPin={pin => p.onPrefs({ pinned: pin ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) })}
-                      archived={false}
-                      onArchive={a => p.onArchive(t, a)}
-                      glyph={p.glyphs?.[t.id] ?? null}
-                      kids={p.childrenOf?.[t.id] ?? []}
-                      showKids={!p.prefs.collapseChildren}
-                      unread={p.unread?.has(t.id) ?? false}
-                      {...(p.onMarkUnread ? { onMarkUnread: (u: boolean) => p.onMarkUnread!(t, u) } : {})}
-                      {...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {})}
-                      inSplit={p.openInSplit?.has(t.id) ?? false}
-                      {...(p.onOpenInSplit ? { onOpenInSplit: () => p.onOpenInSplit!(t) } : {})}
-                      {...(p.onDragThread ? { onDrag: p.onDragThread } : {})}
+            groups.map(g => {
+              const collapsed = showHeaders && p.prefs.collapsedGroups.includes(g.key);
+              const { shown, hidden } = groupRows(g.threads, { expanded: expanded.has(g.key), selectedId: p.selectedId });
+              const canMore = g.threads.length > GROUP_ROWS + 1;
+              return (
+                <section key={g.key} aria-label={g.label} className="mb-2">
+                  {showHeaders && (
+                    <GroupHeader
+                      group={g}
+                      collapsed={collapsed}
+                      missing={g.project?.mode === "local" && missing.has(g.project.path)}
+                      movable={movable}
+                      onToggle={() => toggleGroup(g.key)}
+                      onMove={moveTo}
+                      drag={dragGroup}
+                      onDrag={setDragGroup}
+                      {...(p.onNewInProject ? { onNewInProject: p.onNewInProject } : {})}
+                      {...(p.onOpenProjectFolder ? { onOpenFolder: p.onOpenProjectFolder } : {})}
+                      {...(p.onRemoveProject ? { onRemove: () => p.onRemoveProject!(g) } : {})}
                     />
-                  ))}
-                </ul>
-              </section>
-            ))
+                  )}
+                  {!collapsed && (
+                    <ul className="flex flex-col gap-px">
+                      {shown.map(t => (
+                        <ThreadRow
+                          key={`${t.mode}:${t.id}`}
+                          t={t}
+                          selected={t.id === p.selectedId}
+                          pinned={p.prefs.pinned.includes(t.id)}
+                          onSelect={p.onSelect}
+                          agentIcon={p.prefs.agentIcons}
+                          onPin={pin => p.onPrefs({ pinned: pin ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) })}
+                          archived={false}
+                          onArchive={a => p.onArchive(t, a)}
+                          glyph={p.glyphs?.[t.id] ?? null}
+                          kids={p.childrenOf?.[t.id] ?? []}
+                          showKids={!p.prefs.collapseChildren}
+                          unread={p.unread?.has(t.id) ?? false}
+                          editor={p.editor ?? false}
+                          prUrl={pullRequests.get(t.id) ?? null}
+                          {...rowActions(t)}
+                          inSplit={p.openInSplit?.has(t.id) ?? false}
+                          {...(p.onOpenInSplit ? { onOpenInSplit: () => p.onOpenInSplit!(t) } : {})}
+                          {...(p.onDragThread ? { onDrag: p.onDragThread } : {})}
+                        />
+                      ))}
+                      {canMore && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => setExpanded(s => toggleSet(s, g.key))}
+                            className="flex h-7 w-full items-center rounded-lg pl-[34px] text-left text-[13px] text-ink-faint transition-colors duration-100 hover:bg-cream-hover hover:text-ink"
+                          >
+                            {hidden > 0 ? `Show ${hidden} more` : "Show less"}
+                          </button>
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                </section>
+              );
+            })
           ))}
         {threadsOpen && archived.length > 0 && (
           <section aria-label="Archived" className="mb-2">
@@ -364,7 +468,7 @@ export function AppSidebar(p: AppSidebarProps) {
               type="button"
               aria-expanded={archivedOpen}
               onClick={() => setArchivedOpen(o => !o)}
-              className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12.5px] font-medium text-ink-faint hover:text-ink"
+              className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] font-medium text-ink-faint hover:text-ink"
             >
               <Archive aria-hidden="true" className="size-3.5" />
               <span className="flex-1">Archived</span>
@@ -384,7 +488,9 @@ export function AppSidebar(p: AppSidebarProps) {
                     onArchive={a => p.onArchive(t, a)}
                     glyph={null}
                     unread={false}
-                    {...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {})}
+                    editor={p.editor ?? false}
+                    prUrl={pullRequests.get(t.id) ?? null}
+                    {...rowActions(t)}
                   />
                 ))}
               </ul>
@@ -503,6 +609,12 @@ function ThreadRow({
   onDrag,
   kids = [],
   showKids = true,
+  onFork,
+  onOpenFolder,
+  onRemove,
+  onOpenChild,
+  editor = false,
+  prUrl = null,
 }: {
   inSplit?: boolean;
   onOpenInSplit?: () => void;
@@ -523,140 +635,303 @@ function ThreadRow({
   unread: boolean;
   onMarkUnread?: (unread: boolean) => void;
   onRename?: (title: string) => void;
+  onFork?: () => void;
+  onOpenFolder?: () => void;
+  onRemove?: () => void;
+  onOpenChild?: (childId: string) => void;
+  editor?: boolean;
+  /** Its pull request, when the app has seen one. */
+  prUrl?: string | null;
 }) {
   const [renaming, setRenaming] = useState(false);
   const machines = useMachines();
   const machineName = t.machine ? (machines.find(m => m.id === t.machine)?.name ?? "a removed machine") : null;
+  const menu: ThreadMenuProps = {
+    thread: { title: t.title, branch: t.branch },
+    state: { mode: t.mode, pinned, unread, archived, inSplit, editor, pullRequest: prUrl ? "view" : null },
+    actions: {
+      ...(onRename ? { rename: () => setRenaming(true) } : {}),
+      pin: onPin,
+      ...(onMarkUnread ? { unread: onMarkUnread } : {}),
+      ...(onOpenInSplit ? { split: onOpenInSplit } : {}),
+      ...(onFork ? { fork: onFork } : {}),
+      ...(onOpenFolder ? { openFolder: onOpenFolder } : {}),
+      ...(prUrl ? { pullRequest: () => void openExternal(prUrl) } : {}),
+      archive: onArchive,
+      ...(onRemove ? { remove: onRemove } : {}),
+    },
+  };
   return (
-    <li className="group/row relative">
-      {renaming && onRename ? (
-        <RenameField
-          initial={t.title}
-          onDone={title => {
-            setRenaming(false);
-            if (title !== null && title !== t.title) onRename(title);
-          }}
-        />
-      ) : (
-        <button
-          type="button"
-          onClick={() => onSelect(t)}
-          onDoubleClick={e => {
-            if (!onRename) return;
-            e.preventDefault();
-            setRenaming(true);
-          }}
-          aria-current={selected ? "page" : undefined}
-          // Drag it onto a pane to open it there, or onto a pane's edge to split.
-          draggable={Boolean(onDrag)}
-          onDragStart={e => {
-            if (!onDrag) return;
-            e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
-            e.dataTransfer.setData("text/plain", t.title);
-            onDrag(t);
-          }}
-          onDragEnd={() => onDrag?.(null)}
+    <ThreadRightClickMenu {...menu} disabled={renaming}>
+      <li className="group/row relative">
+        {renaming && onRename ? (
+          <RenameField
+            initial={t.title}
+            onDone={title => {
+              setRenaming(false);
+              if (title !== null && title !== t.title) onRename(title);
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSelect(t)}
+            onDoubleClick={e => {
+              if (!onRename) return;
+              e.preventDefault();
+              setRenaming(true);
+            }}
+            aria-current={selected ? "page" : undefined}
+            aria-keyshortcuts="Shift+F10"
+            // Drag it onto a pane to open it there, or onto a pane's edge to split.
+            draggable={Boolean(onDrag)}
+            onDragStart={e => {
+              if (!onDrag) return;
+              e.dataTransfer.effectAllowed = "move";
+              e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
+              e.dataTransfer.setData("text/plain", t.title);
+              onDrag(t);
+            }}
+            onDragEnd={() => onDrag?.(null)}
+            className={cx(
+              "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
+              selected ? "bg-cream-hover" : "hover:bg-cream-hover",
+            )}
+          >
+            {glyph ? (
+              <RowMark glyph={glyph} status={t.status} />
+            ) : agentIcon ? (
+              <AgentBadge kind={t.agent.kind} />
+            ) : t.mode === "cloud" ? (
+              <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+            ) : t.machine ? (
+              <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+            ) : (
+              <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+            )}
+            <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
+            {inSplit && (
+              <span role="img" aria-label="Open in the split view" title="Open in the split view" className="inline-flex shrink-0 group-hover/row:invisible">
+                <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
+              </span>
+            )}
+            {kids.length > 0 && <ProgressGrid kids={kids} />}
+            <span className="shrink-0 text-[12px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
+            <span className="sr-only">
+              {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
+              {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
+            </span>
+          </button>
+        )}
+        {showKids && kids.length > 0 && !renaming && (
+          <ul aria-label={`Subagents of ${t.title}`} className="mt-px mb-0.5 flex flex-col">
+            {kids.slice(0, KIDS_LISTED).map(k => (
+              <li key={k.id}>
+                <button
+                  type="button"
+                  onClick={() => (onOpenChild ? onOpenChild(k.id) : onSelect(t))}
+                  title={k.title}
+                  className="flex h-7 w-full items-center gap-2 rounded-lg pr-2 pl-[30px] text-left text-[13px] text-ink-soft transition-colors duration-100 hover:bg-cream-hover"
+                >
+                  <ChildMark state={k.state} />
+                  <span className="min-w-0 flex-1 truncate">{k.title}</span>
+                  <span className="sr-only">, {CHILD_STATE_LABEL[k.state]}</span>
+                </button>
+              </li>
+            ))}
+            {kids.length > KIDS_LISTED && (
+              <li className="flex h-6 items-center pl-[30px] text-[12px] text-ink-faint tabular-nums">and {kids.length - KIDS_LISTED} more</li>
+            )}
+          </ul>
+        )}
+        <div
           className={cx(
-            "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
-            selected ? "bg-cream-hover" : "hover:bg-cream-hover",
+            "absolute top-4 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100",
+            renaming && "hidden",
           )}
         >
-          {glyph ? (
-            <RowMark glyph={glyph} status={t.status} />
-          ) : agentIcon ? (
-            <AgentBadge kind={t.agent.kind} />
-          ) : t.mode === "cloud" ? (
-            <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-          ) : t.machine ? (
-            <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-          ) : (
-            <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-          )}
-          <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
-          {inSplit && (
-            <span role="img" aria-label="Open in the split view" title="Open in the split view" className="inline-flex shrink-0 group-hover/row:invisible">
-              <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
-            </span>
-          )}
-          {kids.length > 0 && <ProgressGrid kids={kids} />}
-          <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
-          <span className="sr-only">
-            {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
-            {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
-          </span>
-        </button>
-      )}
-      {showKids && kids.length > 0 && !renaming && (
-        <ul aria-label={`Subagents of ${t.title}`} className="mt-px mb-0.5 flex flex-col">
-          {kids.slice(0, KIDS_LISTED).map(k => (
-            <li key={k.id}>
+          <ThreadMenu
+            {...menu}
+            trigger={
               <button
                 type="button"
-                onClick={() => onSelect(t)}
-                title={k.title}
-                className="flex h-7 w-full items-center gap-2 rounded-lg pr-2 pl-[30px] text-left text-[13px] text-ink-soft transition-colors duration-100 hover:bg-cream-hover"
+                aria-label={`Options for ${t.title}`}
+                className="inline-flex size-6 items-center justify-center rounded-md text-ink-soft hover:bg-cream data-[popup-open]:bg-cream"
               >
-                <ChildMark state={k.state} />
-                <span className="min-w-0 flex-1 truncate">{k.title}</span>
-                <span className="sr-only">, {CHILD_STATE_LABEL[k.state]}</span>
+                <Ellipsis aria-hidden="true" className="size-4" />
               </button>
-            </li>
-          ))}
-          {kids.length > KIDS_LISTED && (
-            <li className="flex h-6 items-center pl-[30px] text-[12.5px] text-ink-faint tabular-nums">and {kids.length - KIDS_LISTED} more</li>
-          )}
-        </ul>
-      )}
-      <div
-        className={cx(
-          "absolute top-4 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100",
-          renaming && "hidden",
-        )}
-      >
-        <Menu
-          align="end"
-          trigger={
-            <button
-              type="button"
-              aria-label={`Options for ${t.title}`}
-              className="inline-flex size-6 items-center justify-center rounded-md text-ink-soft hover:bg-cream data-[popup-open]:bg-cream"
-            >
-              <Ellipsis aria-hidden="true" className="size-4" />
-            </button>
-          }
-        >
-          {!archived && (
-            <MenuItem icon={pinned ? <PinOff /> : <Pin />} onSelect={() => onPin(!pinned)}>
-              {pinned ? "Unpin" : "Pin to top"}
-            </MenuItem>
-          )}
-          {!archived && onOpenInSplit && (
-            <MenuItem icon={<Columns2 />} onSelect={onOpenInSplit}>
-              Open in split
-            </MenuItem>
-          )}
-          {onRename && (
-            <MenuItem icon={<PencilLine />} onSelect={() => setRenaming(true)}>
-              Rename
-            </MenuItem>
-          )}
-          {!archived && onMarkUnread && (
-            <MenuItem icon={unread ? <MailCheck /> : <MailOpen />} onSelect={() => onMarkUnread(!unread)}>
-              {unread ? "Mark as read" : "Mark as unread"}
-            </MenuItem>
-          )}
-          <MenuItem icon={archived ? <ArchiveRestore /> : <Archive />} onSelect={() => onArchive(!archived)}>
-            {archived ? "Unarchive" : "Archive"}
-          </MenuItem>
-          <MenuItem icon={<FolderGit2 />} onSelect={() => void navigator.clipboard?.writeText(t.branch)}>
-            Copy branch name
-          </MenuItem>
-        </Menu>
-      </div>
-    </li>
+            }
+          />
+        </div>
+      </li>
+    </ThreadRightClickMenu>
   );
 }
+
+/** A group's heading: fold it, start a thread in its project, drag it into place, or right-click for more. */
+function GroupHeader({
+  group: g,
+  collapsed,
+  missing,
+  movable,
+  onToggle,
+  onMove,
+  drag,
+  onDrag,
+  onNewInProject,
+  onOpenFolder,
+  onRemove,
+}: {
+  group: ThreadGroup;
+  collapsed: boolean;
+  /** Its folder on this computer is gone. */
+  missing: boolean;
+  /** The keys of the groups that can be moved, in order. */
+  movable: string[];
+  onToggle: () => void;
+  /** Move a group (this one, or the one dropped on it) to a place among the others (see moveGroup). */
+  onMove: (key: string, to: number) => void;
+  /** The group being dragged, if any. */
+  drag: string | null;
+  onDrag: (key: string | null) => void;
+  onNewInProject?: (project: GroupProject) => void;
+  onOpenFolder?: (path: string) => void;
+  onRemove?: () => void;
+}) {
+  const [drop, setDrop] = useState<"before" | "after" | null>(null);
+  const index = movable.indexOf(g.key);
+  const canMove = index >= 0 && movable.length > 1;
+  const local = g.project?.mode === "local" ? g.project.path : null;
+  const project = g.project && !missing ? g.project : null;
+  const icon =
+    g.kind === "pinned" ? (
+      <Pin />
+    ) : g.kind === "cloud" ? (
+      <Cloud />
+    ) : g.kind === "machine" ? (
+      <Server />
+    ) : g.kind === "computer" ? (
+      <Laptop />
+    ) : g.kind === "agent" && g.agent ? (
+      <AgentIcon kind={g.agent} className="size-3.5" />
+    ) : (
+      <FolderGit2 />
+    );
+  const menu = (
+    <>
+      {project && onNewInProject && (
+        <MenuItem icon={<SquarePen />} onSelect={() => onNewInProject(project)}>
+          New thread in this project
+        </MenuItem>
+      )}
+      <MenuItem icon={collapsed ? <ChevronsUpDown /> : <ChevronsDownUp />} onSelect={onToggle}>
+        {collapsed ? "Expand" : "Collapse"}
+      </MenuItem>
+      {local && onOpenFolder && (
+        <MenuItem icon={<FolderOpen />} disabled={missing} {...(missing ? { hint: "Folder missing" } : {})} onSelect={() => onOpenFolder(local)}>
+          Open folder
+        </MenuItem>
+      )}
+      {canMove && (
+        <>
+          <MenuSeparator />
+          <MenuItem icon={<ArrowUp />} disabled={index === 0} onSelect={() => onMove(g.key, index - 1)}>
+            Move up
+          </MenuItem>
+          <MenuItem icon={<ArrowDown />} disabled={index === movable.length - 1} onSelect={() => onMove(g.key, index + 1)}>
+            Move down
+          </MenuItem>
+        </>
+      )}
+      {g.kind === "project" && onRemove && (
+        <>
+          <MenuSeparator />
+          <MenuItem icon={<Trash2 />} danger onSelect={onRemove}>
+            Remove from list
+          </MenuItem>
+        </>
+      )}
+    </>
+  );
+  const dragging = drag !== null && drag !== g.key && canMove;
+  return (
+    <ContextMenu menu={menu}>
+      <div
+        className="group/head relative flex h-7 items-center gap-0.5 pr-1"
+        draggable={canMove}
+        onDragStart={e => {
+          if (!canMove) return;
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData(GROUP_DRAG_TYPE, g.key);
+          onDrag(g.key);
+        }}
+        onDragEnd={() => {
+          onDrag(null);
+          setDrop(null);
+        }}
+        onDragOver={e => {
+          if (!dragging || !e.dataTransfer.types.includes(GROUP_DRAG_TYPE)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          const r = e.currentTarget.getBoundingClientRect();
+          setDrop(e.clientY < r.top + r.height / 2 ? "before" : "after");
+        }}
+        onDragLeave={() => setDrop(null)}
+        onDrop={e => {
+          if (!dragging || !drag) return;
+          e.preventDefault();
+          const rest = movable.filter(k => k !== drag);
+          const at = rest.indexOf(g.key) + (drop === "after" ? 1 : 0);
+          setDrop(null);
+          onDrag(null);
+          onMove(drag, at);
+        }}
+      >
+        {drop && dragging && (
+          <span
+            aria-hidden="true"
+            className={cx("pointer-events-none absolute right-1 left-2 h-0.5 rounded-full bg-leaf", drop === "before" ? "-top-px" : "-bottom-px")}
+          />
+        )}
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          aria-keyshortcuts="Shift+F10"
+          onClick={onToggle}
+          className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-[12px] font-medium text-ink-faint hover:text-ink [&_svg]:size-3.5 [&_svg]:shrink-0"
+        >
+          {icon}
+          <span className="truncate">{g.label}</span>
+          {missing && (
+            <span role="img" aria-label="Folder missing" title="This folder is missing. It may have been moved or deleted." className="inline-flex">
+              <CircleAlert aria-hidden="true" className="text-amber" />
+            </span>
+          )}
+          {collapsed && <span className="text-ink-faint tabular-nums">{g.threads.length}</span>}
+          <ChevronDown
+            aria-hidden="true"
+            className={cx("opacity-0 transition-opacity duration-150 group-hover/head:opacity-100", collapsed && "-rotate-90 opacity-100")}
+          />
+        </button>
+        {project && onNewInProject && (
+          <Tip label={`New thread in ${g.label}`}>
+            <button
+              type="button"
+              aria-label={`New thread in ${g.label}`}
+              onClick={() => onNewInProject(project)}
+              className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-ink-soft opacity-0 transition-opacity group-hover/head:opacity-100 hover:bg-cream-hover focus-visible:opacity-100"
+            >
+              <Plus aria-hidden="true" className="size-3.5" />
+            </button>
+          </Tip>
+        )}
+      </div>
+    </ContextMenu>
+  );
+}
+
+/** The drag data type for a group heading. */
+const GROUP_DRAG_TYPE = "application/x-lemonlime-group";
 
 /** Subagents listed under a thread before "and N more". */
 const KIDS_LISTED = 4;
@@ -700,7 +975,7 @@ function RowMark({ glyph, status }: { glyph: Exclude<RowGlyph, null>; status: Th
     glyph === "error" ? (
       <CircleAlert className="size-4 text-danger" />
     ) : glyph === "waiting" ? (
-      <MessageCircleQuestion className="size-4 text-[#8A5A00]" />
+      <MessageCircleQuestion className="size-4 text-amber" />
     ) : glyph === "draft" ? (
       <PencilLine className="size-4 text-ink-faint" />
     ) : (
@@ -713,78 +988,11 @@ function RowMark({ glyph, status }: { glyph: Exclude<RowGlyph, null>; status: Th
   );
 }
 
-/** Inline rename: Enter or leaving the field saves, Escape cancels. */
-function RenameField({ initial, onDone }: { initial: string; onDone: (title: string | null) => void }) {
-  const [value, setValue] = useState(initial);
-  const ref = useRef<HTMLInputElement>(null);
-  const done = useRef(false);
-  useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
-  const finish = (title: string | null) => {
-    if (done.current) return;
-    done.current = true;
-    onDone(title === null ? null : title.trim() || null);
-  };
-  return (
-    <input
-      ref={ref}
-      value={value}
-      maxLength={200}
-      aria-label="Thread name"
-      onChange={e => setValue(e.target.value)}
-      onKeyDown={e => {
-        if (e.key === "Enter") finish(value);
-        else if (e.key === "Escape") finish(null);
-      }}
-      onBlur={() => finish(value)}
-      className="h-8 w-full rounded-lg border border-line-strong bg-paper px-2 text-[14px] text-ink outline-none focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-leaf"
-    />
-  );
-}
-
-interface Group {
-  key: string;
-  label: string;
-  icon: ReactNode;
-  threads: ThreadSummary[];
-}
-
-function groupThreads(threads: ThreadSummary[], prefs: UiPrefs, machines: readonly Machine[] = []): Group[] {
-  const pinned = threads.filter(t => prefs.pinned.includes(t.id));
-  const rest = threads.filter(t => !prefs.pinned.includes(t.id));
-  const groups = new Map<string, Group>();
-  for (const t of rest) {
-    const key = prefs.organize === "place" ? (t.machine ? `machine:${t.machine}` : t.mode) : prefs.organize === "agent" ? t.agent.kind : repoName(t.repo);
-    const label =
-      prefs.organize === "place"
-        ? t.mode === "cloud"
-          ? "Cloud"
-          : t.machine
-            ? `On ${machines.find(m => m.id === t.machine)?.name ?? "a removed machine"}`
-            : "On this computer"
-        : prefs.organize === "agent"
-          ? AGENT_LABELS[t.agent.kind]
-          : repoName(t.repo);
-    const icon =
-      prefs.organize === "place" ? (
-        t.mode === "cloud" ? (
-          <Cloud aria-hidden="true" className="size-3.5" />
-        ) : t.machine ? (
-          <Server aria-hidden="true" className="size-3.5" />
-        ) : (
-          <Laptop aria-hidden="true" className="size-3.5" />
-        )
-      ) : (
-        <FolderGit2 aria-hidden="true" className="size-3.5" />
-      );
-    if (!groups.has(key)) groups.set(key, { key, label, icon, threads: [] });
-    groups.get(key)!.threads.push(t);
-  }
-  const out = [...groups.values()];
-  if (pinned.length) out.unshift({ key: "pinned", label: "Pinned", icon: <Pin aria-hidden="true" className="size-3.5" />, threads: pinned });
-  return out;
+/** A copy of the set with `key` added, or taken out if it was there. */
+function toggleSet(s: ReadonlySet<string>, key: string): Set<string> {
+  const next = new Set(s);
+  if (!next.delete(key)) next.add(key);
+  return next;
 }
 
 function AgentBadge({ kind }: { kind: ThreadSummary["agent"]["kind"] }) {
@@ -848,15 +1056,11 @@ function CustomizeNav({ prefs, onPrefs, onDone }: { prefs: UiPrefs; onPrefs: (p:
                 <GripVertical aria-hidden="true" className="size-3.5" />
               </button>
               <Icon aria-hidden="true" className="size-4 text-ink-soft" />
-              <label htmlFor={`nav-${item}`} className="flex-1 text-[14px]">
-                {label}
-              </label>
-              <input
-                id={`nav-${item}`}
-                type="checkbox"
+              <span className="flex-1 text-[14px]">{label}</span>
+              <Toggle
+                label={`Show ${label} in the sidebar`}
                 checked={shown}
-                onChange={e => onPrefs({ hiddenNav: e.target.checked ? prefs.hiddenNav.filter(x => x !== item) : [...prefs.hiddenNav, item] })}
-                className="size-4 accent-[var(--color-leaf)]"
+                onChange={on => onPrefs({ hiddenNav: on ? prefs.hiddenNav.filter(x => x !== item) : [...prefs.hiddenNav, item] })}
               />
             </li>
           );

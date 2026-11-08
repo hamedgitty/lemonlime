@@ -16,6 +16,7 @@ import { confirmAction, inDesktopShell } from "../../lib/native.ts";
 import type { LoginUpdate } from "../../lib/useThreadSession.ts";
 import { AgentIcon } from "../AgentIcon.tsx";
 import { Button, IconButton, SegmentedControl, Spinner, TextInput, cx, openExternal } from "../ui.tsx";
+import { UsageBar } from "../UsageBar.tsx";
 import { ErrorText, Section } from "./parts.tsx";
 
 /** One sign-in under way, for one account. */
@@ -343,16 +344,7 @@ function UsageBars({ agent, usage }: { agent: AccountAgent; usage: NonNullable<A
         return (
           <div key={`${w.kind}:${w.label}`} className="grid grid-cols-[28px_1fr_40px] items-center gap-2.5 text-[13px]" title={resets ?? undefined}>
             <span className="text-ink-soft">{w.label}</span>
-            <span
-              role="meter"
-              aria-label={`${w.label} limit used${resets ? `, ${resets.toLowerCase()}` : ""}`}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={pct}
-              className="h-1.5 overflow-hidden rounded-full bg-cream-deep"
-            >
-              <span className={cx("block h-full rounded-full", pct >= 90 ? "bg-danger" : pct >= 70 ? "bg-lemon-2" : "bg-leaf")} style={{ width: `${pct}%` }} />
-            </span>
+            <UsageBar percent={pct} label={`${w.label} limit used${resets ? `, ${resets.toLowerCase()}` : ""}`} />
             <span className="text-right text-ink tabular-nums">{pct}%</span>
           </div>
         );
@@ -375,7 +367,7 @@ export function usageSeen(iso: string, now = Date.now()): string | null {
   return days === 1 ? "yesterday" : `${days} days ago`;
 }
 
-function resetText(iso: string): string {
+export function resetText(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   const sameDay = d.toDateString() === new Date().toDateString();

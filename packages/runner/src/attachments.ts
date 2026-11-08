@@ -1,5 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { basename, extname, join, sep } from "node:path";
 
 /** Uploads arrive in pieces of at most this size, so a dropped connection costs one piece. */
 export const ATTACHMENT_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -13,6 +13,18 @@ const IMAGE = /\.(png|jpe?g|gif|webp|bmp|heic|svg)$/i;
 export function isImage(name: string): boolean {
   return IMAGE.test(name);
 }
+
+/** Image types apps can show, by extension (HEIC and BMP aren't served: browsers can't show them all). */
+const IMAGE_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+const UPLOAD_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
 /** A safe file name: no folders, no leading dots, nothing odd. */
 export function cleanName(name: string): string {
@@ -50,7 +62,7 @@ export class Attachments {
 
   /** Start (or look up) an upload. Size limits are checked here, before any bytes move. */
   begin(id: string, name: string, size: number): Upload | { error: string; status: number } {
-    if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) return { error: "bad upload id", status: 400 };
+    if (!UPLOAD_ID.test(id)) return { error: "bad upload id", status: 400 };
     const existing = this.uploads.get(id);
     if (existing) return existing;
     const clean = cleanName(name);
@@ -83,6 +95,34 @@ export class Attachments {
       u.path = join(ATTACHMENTS_DIR, id, u.name);
     }
     return u;
+  }
+
+  /**
+   * A sent image, to show it back in the thread: the one finished file in
+   * `.lemonlime-attachments/<id>/`, read from disk so it still works after a restart. Only
+   * plain image files inside that folder qualify: no links, nothing half uploaded, nothing
+   * bigger than an image upload may be.
+   */
+  image(id: string): { path: string; name: string; type: string; size: number } | { error: string; status: number } {
+    if (!UPLOAD_ID.test(id)) return { error: "bad upload id", status: 400 };
+    const notFound = { error: "not found", status: 404 };
+    try {
+      const root = realpathSync(join(this.workdir, ATTACHMENTS_DIR));
+      const dir = join(root, id);
+      if (!lstatSync(dir).isDirectory()) return notFound;
+      const names = readdirSync(dir).filter(n => !n.endsWith(".part"));
+      if (names.length !== 1) return notFound;
+      const name = names[0]!;
+      const type = IMAGE_TYPES[extname(name).toLowerCase()];
+      if (!type) return { error: "not an image", status: 415 };
+      const path = join(dir, name);
+      const info = lstatSync(path);
+      if (!info.isFile() || info.size > MAX_IMAGE_BYTES) return notFound;
+      if (!realpathSync(path).startsWith(root + sep)) return notFound;
+      return { path, name, type, size: info.size };
+    } catch {
+      return notFound;
+    }
   }
 
   /** Finished uploads by id, or the ids that aren't finished. */

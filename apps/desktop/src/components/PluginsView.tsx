@@ -1,7 +1,22 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ChevronDown, MessageSquarePlus, ExternalLink, FolderOpen, GitBranch, Plus, Puzzle, RefreshCw, Search, Trash2, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  GitBranch,
+  ListFilter,
+  MessageSquarePlus,
+  Plus,
+  Puzzle,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+} from "lucide-react";
 import { Markdown } from "../lib/markdown.tsx";
 import { confirmAction, inDesktopShell } from "../lib/native.ts";
 import {
@@ -23,24 +38,31 @@ import {
   type PluginDetail,
   type PluginInstallResult,
   type PluginSummary,
-  type PluginTab,
   type PluginUpdateCheck,
 } from "../lib/plugins.ts";
-import { Menu, MenuItem, MenuLabel, MenuSeparator, Toggle } from "./primitives.tsx";
-import { Button, Spinner, TextInput, cx, openExternal } from "./ui.tsx";
+import {
+  OFFICIAL_MARKETPLACE,
+  browsePlugins,
+  catalogDetail,
+  categoryLabel,
+  groupByCategory,
+  installedFrom,
+  loadInstallAliases,
+  rememberInstallAlias,
+  searchCatalog,
+  type CatalogDetail,
+  type CatalogPlugin,
+} from "../lib/pluginCatalog.ts";
+import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, PageTabs, Toggle } from "./primitives.tsx";
+import { Button, IconButton, RetryCard, Skeleton, SkeletonRows, SkeletonText, Spinner, TextInput, cx, openExternal, rowFill } from "./ui.tsx";
 
 export interface PluginsViewProps {
   /** Start a new thread with this prompt (used by the "Create a plugin with an agent" example). */
   onPrompt?: (text: string) => void;
 }
 
+type Tab = "browse" | "installed" | "updates";
 type Pane = { kind: "detail"; name: string } | { kind: "git" } | { kind: "none" };
-
-const TABS: Array<{ value: PluginTab; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "installed", label: "Installed" },
-  { value: "updates", label: "Updates" },
-];
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -50,9 +72,10 @@ const shortDate = (iso: string) => {
 };
 
 /**
- * Plugins: install agent plugins (skills, slash commands, subagents and MCP servers in the
- * widely used plugin layout) from a git repository or a folder, turn them on or off, update
- * and remove them. Enabled plugins are added to every new local thread.
+ * Plugins: browse the official plugin directory and install from it, or install agent
+ * plugins (skills, slash commands, subagents and MCP servers in the widely used plugin
+ * layout) from any git repository or folder; turn them on or off, update and remove them.
+ * Enabled plugins are added to every new local thread.
  */
 export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
   const shell = inDesktopShell();
@@ -60,10 +83,11 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
   const [checks, setChecks] = useState<PluginUpdateCheck[] | null>(null);
   const [checking, setChecking] = useState(false);
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<PluginTab>("all");
+  const [tab, setTab] = useState<Tab | null>(null);
   const [pane, setPane] = useState<Pane>({ kind: "none" });
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [aliases, setAliases] = useState(loadInstallAliases);
 
   const reload = useCallback(async () => {
     try {
@@ -90,18 +114,24 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
 
   useEffect(() => {
     void reload().then(list => {
+      // With nothing installed yet, start on the directory.
+      setTab(t => t ?? (list.length ? "installed" : "browse"));
       if (list.length) setPane(p => (p.kind === "none" ? { kind: "detail", name: list[0]!.name } : p));
       if (list.some(p => p.sourceKind === "git")) void checkUpdates();
     });
   }, [reload, checkUpdates]);
 
   const updates = useMemo(() => new Set((checks ?? []).filter(c => c.hasUpdate).map(c => c.name)), [checks]);
-  const visible = useMemo(() => filterPlugins(plugins ?? [], query, tab, updates), [plugins, query, tab, updates]);
+  const visible = useMemo(() => filterPlugins(plugins ?? [], query, tab === "updates" ? "updates" : "installed", updates), [plugins, query, tab, updates]);
 
-  const afterInstall = async (result: PluginInstallResult) => {
+  const afterInstall = async (result: PluginInstallResult, fromCatalog?: string) => {
     await reload();
     const names = result.installed.map(p => p.name);
-    setPane({ kind: "detail", name: names[0]! });
+    if (fromCatalog && names[0]) setAliases(rememberInstallAlias(fromCatalog, names[0]));
+    if (!fromCatalog) {
+      setTab("installed");
+      setPane({ kind: "detail", name: names[0]! });
+    }
     const skipped = result.skipped.length ? ` Not installed: ${result.skipped.join(" ")}` : "";
     setNotice(
       names.length === 1
@@ -135,119 +165,138 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
   const createWithAgent = onPrompt ? () => onPrompt(CREATE_PLUGIN_PROMPT) : undefined;
   const openGit = () => {
     setNotice(null);
+    setTab(t => (t === "browse" ? "installed" : t));
     setPane({ kind: "git" });
   };
   const empty = plugins !== null && plugins.length === 0;
+  const shownTab = tab ?? "installed";
 
   return (
     <main className="@container flex min-h-0 min-w-0 flex-1 flex-col">
-      <header data-tauri-drag-region className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 overflow-hidden border-b border-line px-6">
-        <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
-          <Puzzle aria-hidden="true" className="size-4 text-ink-soft" />
-          Plugins
-        </h1>
-        <div className="flex-1" />
-        <label className="relative hidden w-full max-w-[240px] min-w-0 @md:block">
-          <span className="sr-only">Search plugins</span>
-          <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-faint" />
-          <TextInput type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search plugins" className="h-8 pl-9" />
-        </label>
-        <NewPluginButton disabled={!shell} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
-      </header>
-
-      <div className="flex items-center gap-4 border-b border-line px-6">
-        <div role="tablist" aria-label="Show" className="flex gap-1">
-          {TABS.map(t => {
-            const count = t.value === "updates" ? updates.size : null;
-            return (
-              <button
-                key={t.value}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.value}
-                onClick={() => setTab(t.value)}
-                className={cx(
-                  "-mb-px inline-flex h-10 items-center gap-1.5 border-b-2 px-2.5 text-[14px] font-medium transition-colors",
-                  tab === t.value ? "border-ink text-ink" : "border-transparent text-ink-faint hover:text-ink",
-                )}
-              >
-                {t.label}
-                {count ? <span className="rounded-full bg-lemon-soft px-1.5 text-[12px] tabular-nums text-ink">{count}</span> : null}
-              </button>
-            );
-          })}
+      <header className="shrink-0 border-b border-line px-6">
+        <div data-tauri-drag-region className="flex h-[52px] min-w-0 items-center gap-3 overflow-hidden">
+          <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
+            <Puzzle aria-hidden="true" className="size-4 text-ink-soft" />
+            Plugins
+          </h1>
+          <div className="flex-1" />
+          <NewPluginButton disabled={!shell} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
         </div>
-        <div className="flex-1" />
-        {tab === "updates" && (
-          <Button size="sm" variant="ghost" disabled={!shell || checking} onClick={() => void checkUpdates()}>
-            {checking ? <Spinner /> : <RefreshCw aria-hidden="true" className="size-3.5" />}
-            {checking ? "Checking…" : "Check again"}
-          </Button>
-        )}
-      </div>
+        <div className="flex items-center gap-3">
+          <PageTabs
+            label="Plugins"
+            value={shownTab}
+            onChange={setTab}
+            tabs={[
+              { id: "browse", label: "Browse" },
+              { id: "installed", label: "Installed", ...(plugins ? { count: plugins.length } : {}) },
+              { id: "updates", label: "Updates", ...(updates.size ? { count: updates.size, attention: true } : {}) },
+            ]}
+          />
+          <div className="flex-1" />
+          {shownTab === "updates" && (
+            <Button size="sm" variant="ghost" disabled={!shell || checking} onClick={() => void checkUpdates()}>
+              {checking ? <Spinner /> : <RefreshCw aria-hidden="true" className="size-3.5" />}
+              {checking ? "Checking…" : "Check again"}
+            </Button>
+          )}
+        </div>
+      </header>
 
       {(error || notice) && (
         <div className="px-6 pt-3">
           <p
             role={error ? "alert" : "status"}
             className={cx(
-              "flex items-start gap-2 rounded-lg border px-3 py-2 text-[13.5px]",
-              error ? "border-danger/20 bg-danger-soft text-ink" : "border-line bg-lime-soft text-ink",
+              "flex items-start gap-2 rounded-lg border px-3 py-2 text-[13.5px] text-ink",
+              error ? "border-danger/20 bg-danger-soft" : "border-line bg-lime-soft",
             )}
           >
             <span className="min-w-0 flex-1">{error ?? notice}</span>
-            <button type="button" aria-label="Dismiss" className="text-ink-faint hover:text-ink" onClick={() => (error ? setError(null) : setNotice(null))}>
-              <X aria-hidden="true" className="size-4" />
-            </button>
+            <IconButton label="Dismiss" className="-my-1 -mr-1.5" onClick={() => (error ? setError(null) : setNotice(null))}>
+              <X aria-hidden="true" />
+            </IconButton>
           </p>
         </div>
       )}
 
-      {empty && pane.kind !== "git" ? (
-        <EmptyState shell={shell} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
+      {tab === "browse" ? (
+        <Catalogue
+          installed={plugins ?? []}
+          aliases={aliases}
+          shell={shell}
+          onInstall={async p => {
+            setError(null);
+            setNotice(null);
+            await afterInstall(await installPluginFromGit(OFFICIAL_MARKETPLACE.url, undefined, p.name), p.name);
+          }}
+          onRemove={async (p, installedName) => {
+            if (!(await confirmAction(`Remove ${installedName}? New threads won't get it, and running threads drop it when they restart.`))) return;
+            setError(null);
+            await removePlugin(installedName);
+            await reload();
+            setNotice(`Removed ${p.title}.`);
+          }}
+          onToggle={(p, v) => void toggle(p, v)}
+          onOpenInstalled={name => {
+            setTab("installed");
+            setPane({ kind: "detail", name });
+          }}
+        />
+      ) : empty && pane.kind !== "git" ? (
+        <EmptyState shell={shell} onBrowse={() => setTab("browse")} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
       ) : (
         <div className="flex min-h-0 flex-1">
-          <aside aria-label="Installed plugins" className="scroll-thin w-[320px] shrink-0 overflow-y-auto border-r border-line">
-            {plugins === null ? (
-              <p className="flex items-center gap-2 px-6 py-5 text-[14px] text-ink-soft">
-                <Spinner /> Loading…
-              </p>
-            ) : visible.length === 0 ? (
-              <p className="px-6 py-5 text-[14px] text-ink-soft">
-                {tab === "updates" ? (checking ? "Checking for updates…" : "Everything is up to date.") : query ? "No plugins match that." : "No plugins yet."}
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-0.5 p-2">
-                {visible.map(p => (
-                  <PluginRow
-                    key={p.name}
-                    plugin={p}
-                    selected={pane.kind === "detail" && pane.name === p.name}
-                    hasUpdate={updates.has(p.name)}
-                    onSelect={() => setPane({ kind: "detail", name: p.name })}
-                    onToggle={v => void toggle(p, v)}
-                  />
-                ))}
-              </ul>
-            )}
-            {tab === "all" && createWithAgent && plugins !== null && (
-              <div className="border-t border-line p-4">
-                <p className="mb-2 text-[13px] font-medium text-ink-soft">Examples</p>
-                <button
-                  type="button"
-                  onClick={createWithAgent}
-                  className="flex w-full items-start gap-3 rounded-xl border border-line bg-paper p-3 text-left transition-colors hover:bg-cream-deep"
-                >
-                  <MessageSquarePlus aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
-                  <span>
-                    <span className="block text-[14px] font-medium text-ink">Create a plugin with an agent</span>
-                    <span className="block text-[13px] text-ink-faint">Starts a thread that builds one with you.</span>
-                  </span>
-                </button>
-              </div>
-            )}
+          <aside aria-label="Installed plugins" className="flex w-[clamp(240px,40%,320px)] shrink-0 flex-col border-r border-line">
+            <div className="p-3">
+              <SearchBox value={query} onChange={setQuery} label="Search installed plugins" />
+            </div>
+            <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+              {plugins === null ? (
+                <SkeletonRows rows={5} tile label="Loading plugins" />
+              ) : visible.length === 0 ? (
+                <p className="px-5 py-3 text-[14px] text-ink-soft">
+                  {shownTab === "updates"
+                    ? checking
+                      ? "Checking for updates…"
+                      : "Everything is up to date."
+                    : query
+                      ? "No plugins match that."
+                      : "No plugins yet."}
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-0.5 px-2 pb-2">
+                  {visible.map(p => (
+                    <PluginRow
+                      key={p.name}
+                      plugin={p}
+                      selected={pane.kind === "detail" && pane.name === p.name}
+                      hasUpdate={updates.has(p.name)}
+                      onSelect={() => setPane({ kind: "detail", name: p.name })}
+                      onToggle={v => void toggle(p, v)}
+                    />
+                  ))}
+                </ul>
+              )}
+              {shownTab === "installed" && createWithAgent && plugins !== null && (
+                <div className="border-t border-line p-4">
+                  <p className="mb-2 text-[13px] font-medium text-ink-soft">Examples</p>
+                  <button
+                    type="button"
+                    onClick={createWithAgent}
+                    className="flex w-full items-start gap-3 rounded-xl border border-line bg-paper p-3 text-left transition-colors hover:bg-cream-deep"
+                  >
+                    <MessageSquarePlus aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
+                    <span>
+                      <span className="block text-[14px] font-medium text-ink">Create a plugin with an agent</span>
+                      <span className="block text-[13px] text-ink-faint">Starts a thread that builds one with you.</span>
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
           </aside>
-          <section className="scroll-thin min-w-0 flex-1 overflow-y-auto">
+          <section className="@container scroll-thin min-w-0 flex-1 overflow-y-auto">
             {pane.kind === "git" ? (
               <GitInstallForm
                 onCancel={() => setPane(plugins?.[0] ? { kind: "detail", name: plugins[0].name } : { kind: "none" })}
@@ -285,6 +334,347 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
   );
 }
 
+function SearchBox({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
+  return (
+    <label className="relative block min-w-0 flex-1">
+      <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-faint" />
+      <TextInput
+        type="search"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={label}
+        aria-label={label}
+        className="h-8 pl-8 text-[13.5px]"
+      />
+    </label>
+  );
+}
+
+// ── The official directory ──────────────────────────────────
+
+function Catalogue({
+  installed,
+  aliases,
+  shell,
+  onInstall,
+  onRemove,
+  onToggle,
+  onOpenInstalled,
+}: {
+  installed: PluginSummary[];
+  aliases: Record<string, string>;
+  shell: boolean;
+  onInstall: (p: CatalogPlugin) => Promise<void>;
+  onRemove: (p: CatalogPlugin, installedName: string) => Promise<void>;
+  onToggle: (p: PluginSummary, v: boolean) => void;
+  onOpenInstalled: (name: string) => void;
+}) {
+  const [list, setList] = useState<CatalogPlugin[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const load = useCallback((force = false) => {
+    setError(null);
+    setLoading(true);
+    browsePlugins(force)
+      .then(setList, e => setError(message(e)))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => load(), [load]);
+
+  const categories = useMemo(() => groupByCategory(list ?? []).map(g => ({ id: g.category, n: g.plugins.length })), [list]);
+  const groups = useMemo(() => groupByCategory(searchCatalog(list ?? [], query, category)), [list, query, category]);
+  const flat = groups.flatMap(g => g.plugins);
+  const current = flat.find(p => p.name === selected) ?? flat[0] ?? null;
+
+  if (error && !list) {
+    return (
+      <div className="flex flex-1 items-center justify-center p-8">
+        <RetryCard title="The plugin directory didn't load" detail={error} busy={loading} onRetry={() => load(true)} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1">
+      <aside aria-label="Plugins to install" className="flex w-[clamp(240px,40%,320px)] shrink-0 flex-col border-r border-line">
+        <div className="flex flex-col gap-1.5 p-3">
+          <div className="flex items-center gap-1.5">
+            <SearchBox value={query} onChange={setQuery} label="Search the directory" />
+            <Menu
+              align="end"
+              trigger={
+                <IconButton
+                  label={category === "all" ? "Show a category" : `Showing ${categoryLabel(category)}`}
+                  className={cx(category !== "all" && "bg-cream-hover text-ink")}
+                >
+                  <ListFilter aria-hidden="true" />
+                </IconButton>
+              }
+            >
+              <MenuLabel>Category</MenuLabel>
+              <MenuChoice
+                value={category}
+                onChange={setCategory}
+                closeOnClick
+                options={[
+                  { value: "all", label: `Every category (${list?.length ?? 0})` },
+                  ...categories.map(c => ({ value: c.id, label: `${categoryLabel(c.id)} (${c.n})` })),
+                ]}
+              />
+            </Menu>
+          </div>
+          <p className="px-1 text-[13px] text-ink-faint">
+            {category !== "all" ? (
+              <>
+                {categoryLabel(category)} only.{" "}
+                <button type="button" className="text-leaf hover:underline" onClick={() => setCategory("all")}>
+                  Show all
+                </button>
+              </>
+            ) : (
+              <>
+                From{" "}
+                <button type="button" className="inline text-left text-leaf hover:underline" onClick={() => void openExternal(OFFICIAL_MARKETPLACE.url)}>
+                  {OFFICIAL_MARKETPLACE.label}
+                </button>
+              </>
+            )}
+          </p>
+        </div>
+        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto pb-2">
+          {list === null ? (
+            <SkeletonRows rows={8} tile label="Loading the plugin directory" />
+          ) : flat.length === 0 ? (
+            <p className="px-5 py-3 text-[14px] text-ink-soft">No plugins match that.</p>
+          ) : (
+            groups.map(g => (
+              <section key={g.category} aria-label={categoryLabel(g.category)}>
+                <h2 className="sticky top-0 z-10 bg-cream px-5 pt-3 pb-1 font-sans text-[13px] font-medium tracking-normal text-ink-faint">
+                  {categoryLabel(g.category)} <span className="tabular-nums">{g.plugins.length}</span>
+                </h2>
+                <ul className="flex flex-col gap-0.5 px-2">
+                  {g.plugins.map(p => {
+                    const mine = installedFrom(p, installed, aliases);
+                    return (
+                      <li key={p.name}>
+                        <button
+                          type="button"
+                          onClick={() => setSelected(p.name)}
+                          aria-current={current?.name === p.name ? "true" : undefined}
+                          className={cx(
+                            "flex w-full items-start gap-3 rounded-xl p-2.5 text-left transition-colors duration-100",
+                            rowFill(current?.name === p.name),
+                          )}
+                        >
+                          <PluginTile name={p.title} />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-ink">{p.title}</span>
+                              {mine && (
+                                <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-leaf">
+                                  <Check aria-hidden="true" className="size-3.5" />
+                                  Installed
+                                </span>
+                              )}
+                            </span>
+                            <span className="line-clamp-2 text-[13px] text-ink-faint">{p.description}</span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))
+          )}
+        </div>
+      </aside>
+      <section className="@container scroll-thin min-w-0 flex-1 overflow-y-auto">
+        {current && (
+          <CatalogPane
+            key={current.name}
+            plugin={current}
+            mine={installedFrom(current, installed, aliases)}
+            shell={shell}
+            onInstall={() => onInstall(current)}
+            onRemove={name => onRemove(current, name)}
+            onToggle={onToggle}
+            onOpenInstalled={onOpenInstalled}
+          />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CatalogPane({
+  plugin: p,
+  mine,
+  shell,
+  onInstall,
+  onRemove,
+  onToggle,
+  onOpenInstalled,
+}: {
+  plugin: CatalogPlugin;
+  mine: PluginSummary | null;
+  shell: boolean;
+  onInstall: () => Promise<void>;
+  onRemove: (installedName: string) => Promise<void>;
+  onToggle: (p: PluginSummary, v: boolean) => void;
+  onOpenInstalled: (name: string) => void;
+}) {
+  const [detail, setDetail] = useState<CatalogDetail | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [busy, setBusy] = useState<"install" | "remove" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    setDetailError(null);
+    catalogDetail(p).then(
+      d => live && setDetail(d),
+      e => live && setDetailError(message(e)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [p, attempt]);
+
+  const run = async (what: "install" | "remove", fn: () => Promise<void>) => {
+    setBusy(what);
+    setActionError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setActionError(message(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const c = detail?.contents;
+
+  return (
+    <article className="mx-auto flex w-full max-w-[760px] flex-col gap-7 px-8 py-8">
+      <div className="flex items-start gap-4">
+        <PluginTile name={p.title} size="lg" />
+        <div className="min-w-0 flex-1">
+          <h2 className="font-display text-[22px] font-semibold tracking-[-0.015em] text-balance break-words">{p.title}</h2>
+          <p className="mt-0.5 text-[13.5px] text-ink-soft">
+            {p.author && `By ${p.author}. `}
+            <span className="text-ink-faint">{categoryLabel(p.category)}</span>
+          </p>
+        </div>
+        {mine && (
+          <label className="flex shrink-0 items-center gap-2 pt-1 text-[13.5px] text-ink-soft">
+            {mine.enabled ? "On" : "Off"}
+            <Toggle checked={mine.enabled} onChange={v => onToggle(mine, v)} label={`Use ${mine.name} in new threads`} />
+          </label>
+        )}
+      </div>
+
+      {p.description && <p className="-mt-2 text-[14.5px] text-pretty text-ink">{p.description}</p>}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {mine ? (
+          <>
+            <Button onClick={() => onOpenInstalled(mine.name)}>
+              <Check aria-hidden="true" className="size-4 text-leaf" />
+              Installed
+            </Button>
+            <Button variant="danger" disabled={busy !== null} onClick={() => void run("remove", () => onRemove(mine.name))}>
+              {busy === "remove" ? <Spinner /> : <Trash2 aria-hidden="true" className="size-4" />}
+              Remove
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" disabled={!shell || !p.installable || busy !== null} onClick={() => void run("install", onInstall)}>
+            {busy === "install" ? <Spinner /> : <Download aria-hidden="true" className="size-4" />}
+            {busy === "install" ? "Installing…" : "Install"}
+          </Button>
+        )}
+        {p.homepage && (
+          <Button variant="ghost" onClick={() => void openExternal(p.homepage!)}>
+            <ExternalLink aria-hidden="true" className="size-4" />
+            Homepage
+          </Button>
+        )}
+      </div>
+      {!p.installable && (
+        <p className="-mt-3 text-[13.5px] text-ink-soft">This one is set up by running a program on your computer, which LemonLime doesn't do.</p>
+      )}
+      {!shell && <p className="-mt-3 text-[13.5px] text-ink-faint">Plugins install in the LemonLime desktop app.</p>}
+      {actionError && (
+        <p role="alert" className="-mt-3 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px] text-ink">
+          {actionError}
+        </p>
+      )}
+
+      <section aria-labelledby="catalog-gives">
+        <h3 id="catalog-gives" className="font-sans text-[16px] font-semibold tracking-normal">
+          What it adds
+        </h3>
+        {detailError ? (
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-paper px-4 py-3 text-[13.5px]">
+            <span className="min-w-0 flex-1 text-ink-soft">Its files couldn't be looked at just now. {detailError}</span>
+            {p.where.kind === "github" && (
+              <Button size="sm" onClick={() => setAttempt(a => a + 1)}>
+                Try again
+              </Button>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="mt-3 grid gap-3 @lg:grid-cols-2">
+              <GivesOrSkeleton title="Commands" items={c?.commands.map(x => `/${x.split("/").pop()}`)} mono />
+              <GivesOrSkeleton title="Subagents" items={c?.agents} />
+              <GivesOrSkeleton title="Skills" items={c?.skills} />
+              <GivesOrSkeleton title="MCP servers" items={c?.mcpServers} mono />
+              {p.lspServers.length > 0 && <Gives title="Language servers" items={p.lspServers} mono />}
+            </div>
+            {c?.hooks && (
+              <div className="mt-3 rounded-xl border border-line bg-cream px-4 py-3 text-[13.5px]">
+                <p className="font-medium text-ink">Hooks: not applied</p>
+                <p className="mt-0.5 text-ink-faint">It defines hooks. LemonLime doesn't run plugin hooks, because they run commands on every tool call.</p>
+              </div>
+            )}
+            {c?.partial && <p className="mt-2 text-[13px] text-ink-faint">Its repository is very large, so this list may be missing some.</p>}
+          </>
+        )}
+      </section>
+
+      {(detail?.readme || (!detail && !detailError)) && (
+        <section aria-labelledby="catalog-overview">
+          <h3 id="catalog-overview" className="font-sans text-[16px] font-semibold tracking-normal">
+            Overview
+          </h3>
+          <div className="mt-3 rounded-2xl border border-line bg-paper px-5 py-4 text-[14px]">
+            {detail?.readme ? <Markdown text={detail.readme} onLink={url => void openExternal(url)} /> : <SkeletonText label="Loading its README" />}
+          </div>
+        </section>
+      )}
+    </article>
+  );
+}
+
+function GivesOrSkeleton({ title, items, mono }: { title: string; items: string[] | undefined; mono?: boolean }) {
+  if (items) return <Gives title={title} items={items} {...(mono ? { mono } : {})} />;
+  return (
+    <div className="rounded-xl border border-line bg-paper px-4 py-3">
+      <p className="text-[14px] font-medium text-ink">{title}</p>
+      <div className="mt-2 flex flex-col gap-1.5">
+        <Skeleton className="h-3 w-3/5" />
+        <Skeleton className="h-3 w-2/5" />
+      </div>
+    </div>
+  );
+}
+
 function NewPluginButton({
   disabled,
   onGit,
@@ -305,7 +695,7 @@ function NewPluginButton({
       <Menu
         align="end"
         trigger={
-          <Button variant="primary" aria-label="More ways to add a plugin" className="rounded-l-none border-l-[#d9bd00] px-2" disabled={disabled}>
+          <Button variant="primary" aria-label="More ways to add a plugin" className="rounded-l-none border-l-lemon-seam px-2" disabled={disabled}>
             <ChevronDown aria-hidden="true" className="size-4" />
           </Button>
         }
@@ -361,7 +751,7 @@ function PluginRow({
   onToggle: (v: boolean) => void;
 }) {
   return (
-    <li className={cx("flex items-center gap-2 rounded-xl pr-3 transition-colors", selected ? "bg-cream-deep" : "hover:bg-cream-deep/60")}>
+    <li className={cx("flex items-center gap-2 rounded-xl pr-3 transition-colors duration-100", rowFill(selected))}>
       <button
         type="button"
         onClick={onSelect}
@@ -456,7 +846,19 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onIns
   );
 }
 
-function EmptyState({ shell, onGit, onFolder, onCreate }: { shell: boolean; onGit: () => void; onFolder: () => void; onCreate?: (() => void) | undefined }) {
+function EmptyState({
+  shell,
+  onBrowse,
+  onGit,
+  onFolder,
+  onCreate,
+}: {
+  shell: boolean;
+  onBrowse: () => void;
+  onGit: () => void;
+  onFolder: () => void;
+  onCreate?: (() => void) | undefined;
+}) {
   return (
     <div className="flex flex-1 items-center justify-center p-10">
       <div className="max-w-md text-center">
@@ -465,7 +867,11 @@ function EmptyState({ shell, onGit, onFolder, onCreate }: { shell: boolean; onGi
         <p className="mt-2 text-[14px] text-ink-soft">Plugins add skills, slash commands, subagents and MCP servers to the agents in your new threads.</p>
         {shell ? (
           <div className="mt-4 flex flex-wrap justify-center gap-2">
-            <Button variant="primary" onClick={onGit}>
+            <Button variant="primary" onClick={onBrowse}>
+              <Puzzle aria-hidden="true" className="size-4" />
+              Browse the directory
+            </Button>
+            <Button onClick={onGit}>
               <GitBranch aria-hidden="true" className="size-4" />
               Install from Git URL…
             </Button>
@@ -517,9 +923,9 @@ function PluginDetailPane({
   if (loadError) return <p className="px-8 py-10 text-[14px] text-danger">{loadError}</p>;
   if (!detail) {
     return (
-      <p className="flex items-center gap-2 px-8 py-10 text-[14px] text-ink-soft">
-        <Spinner /> Loading…
-      </p>
+      <div className="mx-auto w-full max-w-[760px] px-8 py-8">
+        <SkeletonText label="Loading the plugin" />
+      </div>
     );
   }
   const p = { ...detail, enabled: summary?.enabled ?? detail.enabled };
@@ -626,7 +1032,7 @@ function PluginDetailPane({
         <p className="mt-1 text-[13.5px] text-ink-faint">
           Skills reach every agent. Commands and subagents reach Claude Code, MCP servers reach Claude Code and Codex. New threads pick up changes.
         </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 grid gap-3 @lg:grid-cols-2">
           <Gives title="Skills" items={c.skills} />
           <Gives title="Commands" items={c.commands.map(x => `/${x.split("/").pop()}`)} mono />
           <Gives title="Subagents" items={c.agents} />

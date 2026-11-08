@@ -55,9 +55,25 @@ export const Composer = forwardRef<
     history?: readonly string[];
     /** Keep unsent text under this key (a thread id) across switches and restarts. */
     draftKey?: string;
+    /** ⌥Enter: hand the message over to be sent later (e.g. once subagents finish). */
+    onHold?: (text: string) => void;
   }
 >(function Composer(
-  { onSend, onInterrupt, working = false, disabled = false, disabledReason, placeholder, tools, busy = false, autoFocus, suggestions, history = [], draftKey },
+  {
+    onSend,
+    onInterrupt,
+    working = false,
+    disabled = false,
+    disabledReason,
+    placeholder,
+    tools,
+    busy = false,
+    autoFocus,
+    suggestions,
+    history = [],
+    draftKey,
+    onHold,
+  },
   handle,
 ) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
@@ -213,9 +229,9 @@ export const Composer = forwardRef<
   };
 
   const canSend = !disabled && !busy && text.trim().length > 0;
-  const submit = () => {
+  const submit = (send: (text: string) => void = onSend) => {
     if (!canSend) return;
-    onSend(text.trim());
+    send(text.trim());
     setText("");
     historyState.current = HISTORY_IDLE;
     setTrigger(null);
@@ -258,7 +274,7 @@ export const Composer = forwardRef<
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      submit();
+      submit(e.altKey && onHold ? onHold : onSend);
     }
     if (e.key === "Escape" && working && onInterrupt) {
       e.preventDefault();
@@ -329,7 +345,7 @@ export const Composer = forwardRef<
           )}
           <button
             type="button"
-            onClick={submit}
+            onClick={() => submit()}
             disabled={!canSend}
             aria-label="Send message"
             title="Send (Enter)"

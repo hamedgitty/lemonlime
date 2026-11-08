@@ -36,14 +36,34 @@ const LABELS: Record<TerminalState, string> = {
   reconnecting: "Reconnecting…",
   exited: "The shell has exited.",
   unavailable: "No terminal here.",
-  closed: "",
+  closed: "This terminal was closed.",
 };
 
 /**
  * A shell in the thread's own folder (its branch), on the computer or sandbox where the
  * agent runs. It keeps running when the panel closes; reopening picks up where it was.
+ * A thread can have several, each with its own `terminal` id.
  */
-export function TerminalPanel({ connection }: { connection: { url: string; token: () => Promise<string> } | null }) {
+export function TerminalPanel({
+  connection,
+  terminal,
+  active = true,
+  onName,
+  onTitle,
+}: {
+  connection: { url: string; token: () => Promise<string> } | null;
+  /** Which of the thread's terminals (the runner's default when left out). */
+  terminal?: string;
+  /** On screen: takes the keyboard when it becomes active. */
+  active?: boolean;
+  /** The shell's name, e.g. "zsh". */
+  onName?: (name: string) => void;
+  /** The title the shell set (often its current folder). */
+  onTitle?: (title: string) => void;
+}) {
+  const termRef = useRef<Terminal | null>(null);
+  const names = useRef({ onName, onTitle });
+  names.current = { onName, onTitle };
   const host = useRef<HTMLDivElement>(null);
   const clientRef = useRef<TerminalClient | null>(null);
   const [state, setState] = useState<TerminalState>("connecting");
@@ -64,9 +84,13 @@ export function TerminalPanel({ connection }: { connection: { url: string; token
     term.loadAddon(fit);
     term.open(host.current);
     fit.fit();
+    termRef.current = term;
+    const title = term.onTitleChange(t => names.current.onTitle?.(t));
     const client = new TerminalClient({
       url: terminalUrl(connection.url),
       token: connection.token,
+      ...(terminal ? { terminal } : {}),
+      onName: n => names.current.onName?.(n),
       cols: term.cols,
       rows: term.rows,
       onData: d => term.write(d),
@@ -91,13 +115,29 @@ export function TerminalPanel({ connection }: { connection: { url: string; token
     term.focus();
     return () => {
       observer.disconnect();
+      title.dispose();
+      termRef.current = null;
       input.dispose();
       resize.dispose();
       client.close();
       clientRef.current = null;
       term.dispose();
     };
-  }, [connection]);
+  }, [connection, terminal]);
+
+  // Coming back to this tab: refit (it was hidden) and take the keyboard.
+  useEffect(() => {
+    if (!active) return;
+    const t = termRef.current;
+    if (!t) return;
+    requestAnimationFrame(() => {
+      try {
+        t.focus();
+      } catch {
+        /* disposed */
+      }
+    });
+  }, [active]);
 
   if (!connection) {
     return (
@@ -125,4 +165,14 @@ export function TerminalPanel({ connection }: { connection: { url: string; token
       <div ref={host} aria-label="Terminal" className="min-h-0 flex-1 px-2 py-1.5" />
     </div>
   );
+}
+
+/** End one of the thread's terminals for good (its tab was closed). */
+export function closeTerminal(connection: { url: string; token: () => Promise<string> } | null, terminal: string): void {
+  if (!connection) return;
+  const client = new TerminalClient({ url: terminalUrl(connection.url), token: connection.token, terminal, cols: 80, rows: 24, onData: () => {} });
+  client.connect();
+  client.kill();
+  // Give up if the runner can't be reached soon; the shell ends with the runner anyway.
+  setTimeout(() => client.close(), 15_000);
 }

@@ -6,6 +6,9 @@ import {
   ArrowDownUp,
   BookOpen,
   CircleAlert,
+  CircleCheck,
+  CircleX,
+  Hourglass,
   MailCheck,
   MailOpen,
   MessageCircleQuestion,
@@ -36,7 +39,8 @@ import {
 } from "lucide-react";
 import type { ThreadSummary } from "../lib/threads.ts";
 import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/format.ts";
-import { NAV_ITEMS, type NavItem, type UiPrefs } from "../lib/storage.ts";
+import { NAV_ITEMS, type NavItem, type SidebarChild, type UiPrefs } from "../lib/storage.ts";
+import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.ts";
 import { Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip } from "./primitives.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
 import { LogoMark, Spinner, StatusDot, cx } from "./ui.tsx";
@@ -71,6 +75,8 @@ export interface AppSidebarProps {
   onArchive: (t: ThreadSummary, archive: boolean) => void;
   /** Each thread's status mark (see threadState.ts); missing means none. */
   glyphs?: Record<string, RowGlyph>;
+  /** Each thread's latest subagents, nested under it. */
+  childrenOf?: Record<string, SidebarChild[]>;
   /** Unread threads show their title in bold. */
   unread?: Set<string>;
   onMarkUnread?: (t: ThreadSummary, unread: boolean) => void;
@@ -321,6 +327,8 @@ export function AppSidebar(p: AppSidebarProps) {
                       archived={false}
                       onArchive={a => p.onArchive(t, a)}
                       glyph={p.glyphs?.[t.id] ?? null}
+                      kids={p.childrenOf?.[t.id] ?? []}
+                      showKids={!p.prefs.collapseChildren}
                       unread={p.unread?.has(t.id) ?? false}
                       {...(p.onMarkUnread ? { onMarkUnread: (u: boolean) => p.onMarkUnread!(t, u) } : {})}
                       {...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {})}
@@ -469,8 +477,14 @@ function ThreadRow({
   unread,
   onMarkUnread,
   onRename,
+  kids = [],
+  showKids = true,
 }: {
   t: ThreadSummary;
+  /** Subagents working (or done) for this thread. */
+  kids?: SidebarChild[];
+  /** List them under the row (the grid shows either way). */
+  showKids?: boolean;
   selected: boolean;
   agentIcon?: boolean;
   pinned: boolean;
@@ -519,6 +533,7 @@ function ThreadRow({
             <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
           )}
           <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
+          {kids.length > 0 && <ProgressGrid kids={kids} />}
           <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
           <span className="sr-only">
             {t.mode === "cloud" ? "Cloud" : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
@@ -526,9 +541,30 @@ function ThreadRow({
           </span>
         </button>
       )}
+      {showKids && kids.length > 0 && !renaming && (
+        <ul aria-label={`Subagents of ${t.title}`} className="mt-px mb-0.5 flex flex-col">
+          {kids.slice(0, KIDS_LISTED).map(k => (
+            <li key={k.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(t)}
+                title={k.title}
+                className="flex h-7 w-full items-center gap-2 rounded-lg pr-2 pl-[30px] text-left text-[13px] text-ink-soft transition-colors duration-100 hover:bg-cream-hover"
+              >
+                <ChildMark state={k.state} />
+                <span className="min-w-0 flex-1 truncate">{k.title}</span>
+                <span className="sr-only">, {CHILD_STATE_LABEL[k.state]}</span>
+              </button>
+            </li>
+          ))}
+          {kids.length > KIDS_LISTED && (
+            <li className="flex h-6 items-center pl-[30px] text-[12.5px] text-ink-faint tabular-nums">and {kids.length - KIDS_LISTED} more</li>
+          )}
+        </ul>
+      )}
       <div
         className={cx(
-          "absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100",
+          "absolute top-4 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100",
           renaming && "hidden",
         )}
       >
@@ -569,6 +605,37 @@ function ThreadRow({
       </div>
     </li>
   );
+}
+
+/** Subagents listed under a thread before "and N more". */
+const KIDS_LISTED = 4;
+
+/** Each cell's look: every state has its own shape as well as colour. */
+const CELL: Record<SidebarChild["state"], string> = {
+  done: "bg-leaf",
+  running: "bg-lime ring-1 ring-inset ring-leaf/60",
+  waiting: "border-[1.5px] border-amber bg-transparent",
+  failed: "bg-danger [clip-path:polygon(50%_0,100%_50%,50%_100%,0_50%)]",
+};
+
+/** One small cell per subagent: done, running, waiting or failed. */
+function ProgressGrid({ kids }: { kids: SidebarChild[] }) {
+  const { cells, more } = gridCells(kids);
+  return (
+    <span title={childrenSummary(kids)} className="flex max-w-[64px] shrink-0 flex-wrap items-center gap-[2px]">
+      {cells.map(c => (
+        <span key={c.id} role="img" aria-label={`${c.title}: ${CHILD_STATE_LABEL[c.state]}`} className={cx("size-[7px] rounded-[2px]", CELL[c.state])} />
+      ))}
+      {more > 0 && <span className="text-[11px] leading-none text-ink-faint tabular-nums">+{more}</span>}
+    </span>
+  );
+}
+
+function ChildMark({ state }: { state: SidebarChild["state"] }) {
+  if (state === "running") return <Spinner className="size-3 shrink-0 text-leaf" />;
+  if (state === "waiting") return <Hourglass aria-hidden="true" className="size-3.5 shrink-0 text-amber" />;
+  if (state === "failed") return <CircleX aria-hidden="true" className="size-3.5 shrink-0 text-danger" />;
+  return <CircleCheck aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />;
 }
 
 /** The row's one status mark. Each has its own shape, so none relies on colour alone. */

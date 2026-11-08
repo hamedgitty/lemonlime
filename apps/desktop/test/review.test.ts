@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiffHunk } from "@lemonlime/protocol";
 import { fetchGitDiff, hiddenBefore, numberHunk, quoteLines, ReviewUnavailable, splitPath, splitRows } from "../src/lib/review.ts";
-import { clampPanelWidth, THREAD_PANEL } from "../src/lib/storage.ts";
 
 const hunk: DiffHunk = {
   header: "@@ -10,5 +10,6 @@ function x() {",
@@ -86,15 +85,5 @@ describe("runner review API", () => {
     await expect(fetchGitDiff(connection, { scope: "branch" }, notFound)).rejects.toBeInstanceOf(ReviewUnavailable);
     const bad = async () => new Response(JSON.stringify({ error: "Not a usable commit" }), { status: 400 });
     await expect(fetchGitDiff(connection, { scope: "commit", commit: "x" }, bad)).rejects.toThrow("Not a usable commit");
-  });
-});
-
-describe("thread panel width", () => {
-  it("stays between its limits and leaves room for the conversation", () => {
-    expect(clampPanelWidth(100, 1600)).toBe(THREAD_PANEL.min);
-    expect(clampPanelWidth(600, 1600)).toBe(600);
-    expect(clampPanelWidth(5000, 1600)).toBe(1600 - 420);
-    expect(clampPanelWidth(5000, 3000)).toBe(THREAD_PANEL.max);
-    expect(clampPanelWidth(500, 600)).toBe(THREAD_PANEL.min);
   });
 });

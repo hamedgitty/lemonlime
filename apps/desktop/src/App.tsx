@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
-import { branchForThread, isSafeBranchPrefix, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
+import { branchForThread, isSafeBranchPrefix, newThreadId, type ChildWork, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
 import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
@@ -17,6 +17,7 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { Toaster, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
+import { settled, withChildren } from "./lib/children.ts";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
@@ -46,11 +47,14 @@ import {
   loadLocalThreads,
   loadSettings,
   loadUiPrefs,
+  loadThreadChildren,
+  saveThreadChildren,
   saveLocalThreads,
   saveSettings,
   saveUiPrefs,
   type LocalThreadMeta,
   type Settings,
+  type SidebarChild,
   type UiPrefs,
 } from "./lib/storage.ts";
 import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
@@ -615,6 +619,12 @@ export function App() {
         case "find":
           if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:find"));
           return;
+        case "quick-open":
+          if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:quick-open"));
+          return;
+        case "reopen-tab":
+          if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:reopen-tab"));
+          return;
         case "toggle-sidebar":
           return onPrefs({ sidebarCollapsed: !pr.sidebarCollapsed });
         case "back":
@@ -673,6 +683,18 @@ export function App() {
   // ── Sidebar states: waiting, unread, drafts; the dock badge ──
   const [openWaiting, setOpenWaiting] = useState<Record<string, number>>({});
   const onWaiting = useCallback((id: string, count: number) => setOpenWaiting(w => (w[id] === count ? w : { ...w, [id]: count })), []);
+  // Each thread's subagents, nested under it in the sidebar.
+  const [threadChildren, setThreadChildren] = useState(loadThreadChildren);
+  const onChildren = useCallback((id: string, list: ChildWork[]) => setThreadChildren(all => withChildren(all, id, list)), []);
+  useEffect(() => saveThreadChildren(threadChildren), [threadChildren]);
+  const sidebarChildren = useMemo(() => {
+    const out: Record<string, SidebarChild[]> = {};
+    for (const [id, list] of Object.entries(threadChildren)) {
+      const local = localThreads.some(m => m.id === id);
+      out[id] = settled(list, !local || running.has(id));
+    }
+    return out;
+  }, [threadChildren, localThreads, running]);
   const [drafts, setDrafts] = useState<Set<string>>(draftThreadIds);
   useEffect(() => {
     const update = () => setDrafts(draftThreadIds());
@@ -819,7 +841,7 @@ export function App() {
       { id: "theme:system", label: "Match the system theme", keywords: "appearance colour auto" },
     ];
     // "settings" is the same as Settings: Account; thread commands only make sense in one.
-    const skip: ShortcutId[] = ["settings", ...(inThread ? [] : (["pin-thread", "archive-thread", "find"] as const))];
+    const skip: ShortcutId[] = ["settings", ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "quick-open", "reopen-tab"] as const))];
     // Unarchived threads first, as in the sidebar.
     const sortedThreads = [...threads.filter(t => !t.detail?.endsWith(", archived")), ...threads.filter(t => t.detail?.endsWith(", archived"))];
     return [...sortedThreads, ...projects, ...appCommands(extras, skip)];
@@ -960,6 +982,7 @@ export function App() {
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
         glyphs={rowStates.glyphs}
+        childrenOf={sidebarChildren}
         unread={rowStates.unread}
         onMarkUnread={onMarkUnread}
         onRename={onRename}
@@ -1087,6 +1110,8 @@ export function App() {
                     ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
                     : {})}
                   onWaiting={onWaiting}
+                  onChildren={onChildren}
+                  shortcuts={prefs.shortcuts}
                   computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
                   onComputerLevel={level => {
                     if (selectedEntry.mode !== "cloud") return;

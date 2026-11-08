@@ -5,13 +5,10 @@ import {
   CloudUpload,
   Ellipsis,
   ExternalLink,
-  FileDiff,
   FolderOpen,
   GitBranch,
-  Globe,
   KeyRound,
   Laptop,
-  MessagesSquare,
   Monitor,
   PanelRight,
   Paperclip,
@@ -20,15 +17,17 @@ import {
   Power,
   RotateCw,
   Shrink,
-  SquareTerminal,
   Trash2,
   X,
 } from "lucide-react";
 import {
   agentLoopState,
+  backgroundWork,
+  childrenSettled,
   AGENT_CAPABILITIES,
   IMPLEMENT_PLAN_PROMPT,
   modeAfterPlan,
+  type ChildWork,
   type PolicyDenied,
   type ThreadOptions,
   type ThreadStatus,
@@ -48,14 +47,14 @@ import { Timeline } from "./Timeline.tsx";
 import { FindBar } from "./FindBar.tsx";
 import { SelectionQuote } from "./SelectionQuote.tsx";
 import { Composer, type ComposerHandle } from "./Composer.tsx";
-import { TerminalPanel } from "./TerminalPanel.tsx";
-import { SideChatPanel } from "./SideChatPanel.tsx";
-import { PreviewPanel } from "./PreviewPanel.tsx";
 import { SignInPanel } from "./SignInPanel.tsx";
-import { DiffView } from "./DiffView.tsx";
-import { ReviewPanel } from "./ReviewPanel.tsx";
+import { ThreadPanel } from "./ThreadPanel.tsx";
+import { QuickOpen } from "./QuickOpen.tsx";
+import { BackgroundWorkCard, type HeldMessage } from "./BackgroundWork.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
-import { clampPanelWidth, loadPanelWidth, saveDraft, savePanelWidth, THREAD_PANEL } from "../lib/storage.ts";
+import { saveDraft } from "../lib/storage.ts";
+import { loadPanelState, openFile, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
+import { keysFor } from "../lib/shortcuts.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
@@ -88,6 +87,10 @@ export interface ThreadViewProps {
   onComputerLevel: (level: ComputerLevel) => void;
   /** How many answers the agent is waiting for in this thread (for the sidebar and dock badge). */
   onWaiting?: (threadId: string, count: number) => void;
+  /** The subagents working for this thread right now (for the sidebar). */
+  onChildren?: (threadId: string, children: ChildWork[]) => void;
+  /** Shortcuts the user changed (for menu hints). */
+  shortcuts?: Record<string, string>;
 }
 
 export function ThreadView(props: ThreadViewProps) {
@@ -126,6 +129,8 @@ function ThreadSessionView({
   notifyWhenFocused = false,
   onOpenFolder,
   onWaiting,
+  onChildren,
+  shortcuts = {},
 }: ThreadViewProps & { target: SessionTarget }) {
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
@@ -326,7 +331,52 @@ function ThreadSessionView({
     session.rewind(seq, restoreFiles);
     composerRef.current?.fill(text);
   };
-  const [panelTab, setPanelTab] = useState<"changes" | "terminal" | "side" | "browser">("changes");
+  // The side panel's tabs, kept per thread.
+  const [panel, setPanelState] = useState<PanelState>(() => loadPanelState(summary.id));
+  const setPanel = (update: (s: PanelState) => PanelState) => setPanelState(s => update(s));
+  useEffect(() => savePanelState(summary.id, panel), [summary.id, panel]);
+  const [quickOpen, setQuickOpen] = useState(false);
+  useEffect(() => {
+    const open = () => setQuickOpen(true);
+    const reopen = () => {
+      setPanelState(reopenTab);
+      setPanelOpen(true);
+    };
+    window.addEventListener("lemonlime:quick-open", open);
+    window.addEventListener("lemonlime:reopen-tab", reopen);
+    return () => {
+      window.removeEventListener("lemonlime:quick-open", open);
+      window.removeEventListener("lemonlime:reopen-tab", reopen);
+    };
+  }, []);
+
+  // Subagents and background commands; messages held (⌥Enter) until the subagents finish.
+  const work = useMemo(() => backgroundWork(session.events), [session.events]);
+  const workKey = work.children.map(c => `${c.id}:${c.state}`).join(",");
+  useEffect(() => {
+    onChildren?.(summary.id, work.children);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workKey]);
+  const [held, setHeld] = useState<HeldMessage[]>([]);
+  const settled = childrenSettled(work.children);
+  const hold = (text: string) => {
+    if (settled) return sendWithFiles(text);
+    saveDraft(summary.id, "");
+    setHeld(h => [...h, { id: crypto.randomUUID(), text }]);
+  };
+  const sendHeld = (id: string) => {
+    const m = held.find(h => h.id === id);
+    if (!m) return;
+    setHeld(h => h.filter(x => x.id !== id));
+    session.send(m.text);
+  };
+  useEffect(() => {
+    if (!settled || !held.length || session.state !== "live") return;
+    const all = held;
+    setHeld([]);
+    for (const m of all) session.send(m.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settled, held.length, session.state]);
 
   // Put text into the message being written (e.g. lines picked in a diff), after what's there.
   // Other parts of the app can do the same with a "lemonlime:composer-insert" event ({ text }).
@@ -354,7 +404,7 @@ function ThreadSessionView({
   const gitRefresh = `${fileDiffs}:${liveStatus ?? ""}`;
   const git = useGitState({ connection: session.connection, mode: entry.mode, threadId: summary.id, cloudApi, refreshKey: gitRefresh });
   const showChanges = () => {
-    setPanelTab("changes");
+    setPanel(s => ({ ...s, active: "changes" }));
     setPanelOpen(true);
   };
 
@@ -575,6 +625,16 @@ function ThreadSessionView({
               />
             )}
             {loop.todos && <TodoCard items={loop.todos} />}
+            <BackgroundWorkCard
+              work={work}
+              held={held}
+              onSendHeld={sendHeld}
+              onCancelHeld={id => {
+                const m = held.find(h => h.id === id);
+                setHeld(h => h.filter(x => x.id !== id));
+                if (m) composerRef.current?.fill(m.text);
+              }}
+            />
             {git.available && <GitStrip git={git} onOpenChanges={showChanges} />}
             {files.items.length > 0 && (
               <ul aria-label="Attached files" className="mb-2 flex flex-wrap gap-1.5">
@@ -617,6 +677,7 @@ function ThreadSessionView({
             <Composer
               ref={composerRef}
               onSend={sendWithFiles}
+              onHold={hold}
               suggestions={composerSuggestions}
               history={prompts}
               draftKey={summary.id}
@@ -680,194 +741,32 @@ function ThreadSessionView({
         </div>
       </section>
       {panelOpen && (
-        <SidePanel
-          tab={panelTab}
-          onTab={setPanelTab}
+        <ThreadPanel
+          state={panel}
+          onState={setPanel}
           session={session}
           mode={entry.mode}
           runnerPath={runnerPath}
           onClose={() => setPanelOpen(false)}
           refreshKey={gitRefresh}
+          onQuickOpen={() => setQuickOpen(true)}
+          shortcuts={{ quickOpen: keysFor("quick-open", shortcuts), reopen: keysFor("reopen-tab", shortcuts) }}
           onAddToChat={text => {
             insertIntoComposer(text);
             composerRef.current?.focus();
           }}
         />
       )}
-    </div>
-  );
-}
-
-/** The right panel: the files the agent changed, and the thread's terminal. */
-function SidePanel({
-  tab,
-  onTab,
-  session,
-  mode,
-  runnerPath,
-  onClose,
-  refreshKey,
-  onAddToChat,
-}: {
-  refreshKey: string;
-  onAddToChat: (text: string) => void;
-  tab: "changes" | "terminal" | "side" | "browser";
-  onTab: (t: "changes" | "terminal" | "side" | "browser") => void;
-  session: ReturnType<typeof useThreadSession>;
-  mode: "local" | "cloud";
-  runnerPath: string;
-  onClose: () => void;
-}) {
-  const [width, setWidth] = useState(() => clampPanelWidth(loadPanelWidth(), window.innerWidth));
-  const changed = useMemo(() => new Set(session.events.filter(e => e.type === "file_diff").map(e => (e as { path: string }).path)).size, [session.events]);
-  // Mounted once opened, so switching tabs doesn't drop the terminal's screen.
-  const [terminalSeen, setTerminalSeen] = useState(tab === "terminal");
-  useEffect(() => {
-    if (tab === "terminal") setTerminalSeen(true);
-  }, [tab]);
-  const tabClass = (on: boolean) =>
-    cx(
-      "inline-flex h-[30px] items-center gap-2 rounded-lg px-2.5 text-[14px] font-medium",
-      on ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60 hover:text-ink",
-    );
-  return (
-    <aside aria-label="Thread panel" style={{ width }} className="relative flex shrink-0 flex-col border-l border-line bg-cream">
-      <PanelResizer width={width} onWidth={setWidth} />
-      <div role="tablist" aria-label="Panel" className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3">
-        <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => onTab("changes")} className={tabClass(tab === "changes")}>
-          <FileDiff aria-hidden="true" className="size-3.5" />
-          Changes
-          {changed > 0 && <span className="text-ink-faint tabular-nums">{changed}</span>}
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "terminal"} onClick={() => onTab("terminal")} className={tabClass(tab === "terminal")}>
-          <SquareTerminal aria-hidden="true" className="size-3.5" />
-          Terminal
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "browser"} onClick={() => onTab("browser")} className={tabClass(tab === "browser")}>
-          <Globe aria-hidden="true" className="size-3.5" />
-          Browser
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "side"} onClick={() => onTab("side")} className={tabClass(tab === "side")}>
-          <MessagesSquare aria-hidden="true" className="size-3.5" />
-          Side chat
-        </button>
-        <span className="flex-1" />
-        <button
-          type="button"
-          aria-label="Close panel"
-          onClick={onClose}
-          className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep"
-        >
-          <X aria-hidden="true" className="size-4" />
-        </button>
-      </div>
-      {tab === "changes" && (
-        <ReviewPanel connection={session.connection} refreshKey={refreshKey} onAddToChat={onAddToChat} fallback={<ChangesList events={session.events} />} />
-      )}
-      {tab === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
-      {tab === "browser" && <PreviewPanel events={session.events} mode={mode} connection={session.connection} {...(runnerPath ? { runnerPath } : {})} />}
-      {terminalSeen && (
-        <div className={cx("min-h-0 flex-1 flex-col", tab === "terminal" ? "flex" : "hidden")}>
-          <TerminalPanel connection={session.connection} />
-        </div>
-      )}
-    </aside>
-  );
-}
-
-/**
- * The panel's left edge: drag to resize (arrow keys too, double-click for the default).
- * The width is remembered on this computer.
- */
-function PanelResizer({ width, onWidth }: { width: number; onWidth: (w: number) => void }) {
-  const drag = useRef<{ x: number; w: number } | null>(null);
-  const set = (w: number, save: boolean) => {
-    const next = clampPanelWidth(w, window.innerWidth);
-    onWidth(next);
-    if (save) savePanelWidth(next);
-  };
-  return (
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the panel"
-      aria-valuenow={width}
-      aria-valuemin={THREAD_PANEL.min}
-      aria-valuemax={THREAD_PANEL.max}
-      tabIndex={0}
-      onPointerDown={e => {
-        e.preventDefault();
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { x: e.clientX, w: width };
-      }}
-      onPointerMove={e => {
-        if (drag.current) set(drag.current.w + (drag.current.x - e.clientX), false);
-      }}
-      onPointerUp={e => {
-        if (drag.current) set(drag.current.w + (drag.current.x - e.clientX), true);
-        drag.current = null;
-      }}
-      onDoubleClick={() => set(THREAD_PANEL.default, true)}
-      onKeyDown={e => {
-        const step = e.shiftKey ? 64 : 16;
-        if (e.key === "ArrowLeft") set(width + step, true);
-        else if (e.key === "ArrowRight") set(width - step, true);
-        else return;
-        e.preventDefault();
-      }}
-      className="absolute inset-y-0 -left-[3px] z-20 w-[6px] cursor-col-resize outline-none hover:bg-line-strong/60 focus-visible:bg-leaf/40 active:bg-line-strong"
-    />
-  );
-}
-
-/** Every file the agent changed in this thread, latest diff first. */
-function ChangesList({ events }: { events: ReturnType<typeof useThreadSession>["events"] }) {
-  const files = useMemo(() => {
-    const latest = new Map<string, Extract<(typeof events)[number], { type: "file_diff" }>>();
-    for (const e of events) if (e.type === "file_diff") latest.set(e.path, e);
-    return [...latest.values()].reverse();
-  }, [events]);
-  const [open, setOpen] = useState<string | null>(null);
-  const shown = files.find(f => f.path === open);
-  return (
-    <div role="tabpanel" aria-label="Changes" className="flex min-h-0 flex-1 flex-col">
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto p-2">
-        {files.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
-            Files the agent changes show up here after each turn.
-          </p>
-        ) : shown ? (
-          <div>
-            <button
-              type="button"
-              onClick={() => setOpen(null)}
-              className="mb-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13.5px] text-ink-soft hover:bg-cream-deep"
-            >
-              ← All files
-            </button>
-            <DiffView path={shown.path} change={shown.change} diff={shown.diff} truncated={shown.truncated} />
-          </div>
-        ) : (
-          <ul className="flex flex-col gap-px">
-            {files.map(f => (
-              <li key={f.path}>
-                <button
-                  type="button"
-                  onClick={() => setOpen(f.path)}
-                  className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left hover:bg-cream-deep"
-                >
-                  <span
-                    className={cx("size-1.5 shrink-0 rounded-full", f.change === "added" ? "bg-lime-2" : f.change === "deleted" ? "bg-danger" : "bg-lemon-2")}
-                    aria-hidden="true"
-                  />
-                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{f.path}</span>
-                  <span className="shrink-0 text-[12.5px] text-ink-faint">{f.change}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <QuickOpen
+        open={quickOpen}
+        onOpenChange={setQuickOpen}
+        searchFiles={suggestions.searchFiles}
+        connected={session.connection !== null}
+        onPick={path => {
+          setPanel(s => openFile(s, path));
+          setPanelOpen(true);
+        }}
+      />
     </div>
   );
 }

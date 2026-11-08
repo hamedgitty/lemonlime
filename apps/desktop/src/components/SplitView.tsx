@@ -38,6 +38,7 @@ export function SplitView({
   onEven,
   dragging,
   onDrop,
+  dimInactive = true,
 }: {
   layout: SplitLayout;
   renderPane: (pane: PaneNode, info: PaneInfo) => ReactNode;
@@ -49,6 +50,8 @@ export function SplitView({
   /** A thread being dragged from the sidebar: the panes show where it can land. */
   dragging: boolean;
   onDrop: (paneId: string, zone: DropZone) => void;
+  /** The panes you aren't typing in sit back a little (Settings → Appearance). */
+  dimInactive?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -91,7 +94,7 @@ export function SplitView({
           >
             {renderPane(pane, { active, split, maximised: max === id, index: order.indexOf(pane) + 1, width: Math.round((full ? 1 : b.w) * size.w) })}
             {/* The panes you aren't typing in sit back a little. */}
-            {split && !active && !hidden && <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 bg-ink/[0.035]" />}
+            {dimInactive && split && !active && !hidden && <div aria-hidden="true" className="pointer-events-none absolute inset-0 z-10 bg-ink/[0.035]" />}
             {dragging && !hidden && <DropTarget splittable={splittable} onDrop={zone => onDrop(id, zone)} />}
           </div>
         );

@@ -107,17 +107,20 @@ export function PermissionPicker({
   working,
   disabled,
   onChange,
+  side = "top",
 }: {
   kind: AgentKind;
   value: PermissionMode;
   working: boolean;
   disabled: boolean;
   onChange: (mode: PermissionMode) => void;
+  /** Where the menu opens (above the thread's composer; below it on Home). */
+  side?: "top" | "bottom";
 }) {
   const modes = AGENT_CAPABILITIES[kind].permissions;
   return (
     <Menu
-      side="top"
+      side={side}
       trigger={
         <PickerButton
           icon={PERMISSION_ICONS[value]}

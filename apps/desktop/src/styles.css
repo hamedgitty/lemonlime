@@ -386,3 +386,18 @@
   border-radius: 14px;
   animation: flash-hit 1100ms ease-out;
 }
+
+/* Settings search landed on this row: a tint around it that fades. Colour only. */
+.setting-hit {
+  position: relative;
+  isolation: isolate;
+}
+.setting-hit::before {
+  content: "";
+  position: absolute;
+  inset: -8px -10px;
+  z-index: -1;
+  border-radius: 10px;
+  pointer-events: none;
+  animation: flash-hit 1600ms ease-out forwards;
+}

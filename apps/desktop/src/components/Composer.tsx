@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, BookOpen, FileText, Mic, Puzzle, Square, SquareSlash } from "lucide-react";
-import { joinDictation, useDictation } from "../lib/dictation.ts";
+import { joinDictation, startLevelMeter, useDictation } from "../lib/dictation.ts";
+import { loadUiPrefs } from "../lib/storage.ts";
 import { fuzzyFilter, fuzzyMatchPath, type AgentCommand, type FuzzyMatch } from "@lemonlime/protocol";
 import { applyPick, detectTrigger, insertQuote, type Trigger } from "../lib/composerTriggers.ts";
 import { HISTORY_IDLE, loadDraft, saveDraft, stepHistory, type HistoryState } from "../lib/promptHistory.ts";
@@ -360,13 +361,15 @@ export const Composer = forwardRef<
             <span className="sr-only">Press Tab to use it.</span>
           </span>
         )}
-        {(dictation.listening || dictation.error) && (
-          <p role="status" className={cx("px-4 pb-1 text-[13px]", dictation.error ? "text-danger" : "text-ink-faint")}>
-            {dictation.error ?? (dictation.interim ? dictation.interim : "Listening… speak, then press the microphone again to stop.")}
+        {dictation.listening && <DictationBar interim={dictation.interim} onStop={dictation.stop} />}
+        {dictation.error && !dictation.listening && (
+          <p role="alert" className="px-4 pb-1 text-[13px] text-danger">
+            {dictation.error}
           </p>
         )}
         <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-          <div className="flex min-w-0 flex-1 items-center gap-0.5">{tools}</div>
+          {/* In a narrow column the pickers are cut off rather than running under the buttons. */}
+          <div className="-m-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden p-1">{tools}</div>
           {dictation.supported && !disabled && (
             <Tip label={dictation.listening ? "Stop dictating" : "Dictate"}>
               <button
@@ -434,6 +437,67 @@ export const Composer = forwardRef<
     </div>
   );
 });
+
+const BARS = 28;
+
+/**
+ * Shown while dictating: a live level meter from the microphone, what's being heard so far,
+ * and Stop. The meter is drawn by moving bars (transforms only), never by re-rendering.
+ */
+function DictationBar({ interim, onStop }: { interim: string; onStop: () => void }) {
+  const bars = useRef<(HTMLSpanElement | null)[]>([]);
+  const [meter, setMeter] = useState<"on" | "off">("on");
+  useEffect(() => {
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    const levels: number[] = Array.from({ length: BARS }, () => 0);
+    void startLevelMeter(loadUiPrefs().micDeviceId, level => {
+      levels.shift();
+      levels.push(level);
+      levels.forEach((l, i) => {
+        const el = bars.current[i];
+        if (el) el.style.transform = `scaleY(${Math.max(0.12, l)})`;
+      });
+    }).then(
+      s => (cancelled ? s() : (stop = s)),
+      () => !cancelled && setMeter("off"),
+    );
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, []);
+  return (
+    <div className="mx-2.5 mb-1 flex h-9 items-center gap-3 rounded-lg bg-cream-deep pr-1 pl-3">
+      {meter === "on" ? (
+        <span aria-hidden="true" className="flex h-5 shrink-0 items-center gap-[2px]">
+          {Array.from({ length: BARS }, (_, i) => (
+            <span
+              key={i}
+              ref={el => {
+                bars.current[i] = el;
+              }}
+              className="h-5 w-[3px] origin-center scale-y-[0.12] rounded-full bg-leaf transition-transform duration-75 ease-out"
+            />
+          ))}
+        </span>
+      ) : (
+        <Mic aria-hidden="true" className="size-4 shrink-0 text-leaf" />
+      )}
+      <p role="status" className="min-w-0 flex-1 truncate text-[13.5px] text-ink-soft">
+        {interim || "Listening…"}
+      </p>
+      <button
+        type="button"
+        onClick={onStop}
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[13.5px] font-medium text-ink hover:bg-cream-hover"
+      >
+        <Square aria-hidden="true" className="size-3 fill-current" />
+        Stop
+      </button>
+    </div>
+  );
+}
 
 const SOURCE_LABEL: Record<AgentCommand["source"], string> = {
   agent: "",

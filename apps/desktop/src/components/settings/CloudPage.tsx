@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { CloudError, DEFAULT_WORKSPACE_SETTINGS, type WorkspaceCloudSettings } from "../../lib/cloud.ts";
 import { confirmAction, listSkills, type SkillInfo } from "../../lib/native.ts";
@@ -10,7 +11,7 @@ import { ErrorText, Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, useS
 type Tab = "environment" | "keys" | "skills" | "cleanup";
 
 export function CloudPage({ ctx }: { ctx: SettingsCtx }) {
-  const [tab, setTab] = useState<Tab>("environment");
+  const [tab, setTab] = useSettingsTab<Tab>("cloud", "environment", ["environment", "keys", "skills", "cleanup"]);
   const [ws, setWs] = useState<WorkspaceCloudSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, markSaved] = useSaved();

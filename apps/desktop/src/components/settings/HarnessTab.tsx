@@ -85,7 +85,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
   const testedVersion = (kind: string) => TESTED_AGENTS.find(t => t.kind === kind)?.version;
 
   return (
-    <section className="mb-8">
+    <section className="mb-8" data-setting="Harness">
       <div className="flex items-end gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="font-sans text-[15px] font-semibold tracking-normal">Harness</h3>
@@ -110,16 +110,19 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
               <th scope="col" className="py-2.5 pl-1 font-medium">
                 Agent
               </th>
-              <th scope="col" className="w-[76px] py-2 text-center leading-tight font-medium">
-                This computer
+              <th scope="col" className="w-[56px] py-2 text-center font-medium whitespace-nowrap">
+                <span title="Installed on this computer" aria-hidden="true">
+                  Here
+                </span>
+                <span className="sr-only">On this computer</span>
               </th>
-              <th scope="col" className="w-[60px] py-2 text-center font-medium @max-[600px]/harness:hidden">
-                Cloud
+              <th scope="col" className={cx("w-[60px] py-2 text-center font-medium", GIVE_WAY_CLOUD)}>
+                <span>Cloud</span>
               </th>
-              <th scope="col" className="w-[88px] py-2 text-center font-medium">
-                Auto-update
+              <th scope="col" className={cx("w-[88px] py-2 text-center font-medium whitespace-nowrap", GIVE_WAY_UPDATE)}>
+                <span>Auto-update</span>
               </th>
-              <th scope="col" className="w-[88px] py-2 text-center font-medium">
+              <th scope="col" className="w-[88px] py-2 text-center font-medium whitespace-nowrap">
                 Status
               </th>
               <th scope="col" className="w-9">
@@ -167,7 +170,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
                   <Check aria-label="Installed" className="inline size-4 text-leaf" />
                 </td>
                 <CloudCell row={r} />
-                <td className="text-center">
+                <td className={cx("text-center", GIVE_WAY_UPDATE)}>
                   {r.autoUpdate === "unavailable" ? (
                     <span title="Not installed with npm, so it updates itself or by hand" className="inline-flex">
                       <Minus aria-label="Not installed with npm" className="size-4 text-ink-faint" />
@@ -240,7 +243,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
                     <Minus aria-label="Not installed" className="inline size-4 text-ink-faint" />
                   </td>
                   <CloudCell row={r} />
-                  <td className="text-center">
+                  <td className={cx("text-center", GIVE_WAY_UPDATE)}>
                     <Minus aria-hidden="true" className="inline size-4 text-ink-faint" />
                   </td>
                   <td className="py-2.5 text-center">
@@ -285,15 +288,31 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
   );
 }
 
+/*
+ * Columns that give way in a narrow window. They shrink to nothing rather than disappear:
+ * a fixed-layout table would otherwise hand their room to empty columns, not to the names.
+ */
+const GIVE_WAY_CLOUD = "overflow-hidden @max-[600px]/harness:w-0 @max-[600px]/harness:px-0 @max-[600px]/harness:*:hidden";
+const GIVE_WAY_UPDATE = "overflow-hidden @max-[560px]/harness:w-0 @max-[560px]/harness:px-0 @max-[560px]/harness:*:hidden";
+
 function AgentCell({ row }: { row: HarnessRow }) {
   return (
     <td className="py-2.5 pl-1">
       <span className="flex min-w-0 items-center gap-2.5 overflow-hidden">
-        <AgentIcon kind={row.kind} color className="size-[18px]" />
-        <span className="shrink-0 font-medium text-ink">{AGENT_LABELS[row.kind]}</span>
-        {row.version && <span className="min-w-0 truncate text-[12.5px] text-ink-faint tabular-nums @max-[600px]/harness:hidden">{row.version}</span>}
-        {row.isDefault && <Pill tone="good">Default</Pill>}
-        {row.hidden && <Pill>Hidden</Pill>}
+        <AgentIcon kind={row.kind} color className="size-[18px] shrink-0" />
+        {/* The name gives way last: the version, then the tags, go first in a narrow window. */}
+        <span className="min-w-[5ch] shrink truncate font-medium text-ink" title={AGENT_LABELS[row.kind]}>
+          {AGENT_LABELS[row.kind]}
+        </span>
+        {row.version && (
+          <span className="min-w-0 shrink-[2] truncate text-[12.5px] text-ink-faint tabular-nums @max-[600px]/harness:hidden">{row.version}</span>
+        )}
+        {(row.isDefault || row.hidden) && (
+          <span className="flex shrink-0 gap-1.5 @max-[540px]/harness:hidden">
+            {row.isDefault && <Pill tone="good">Default</Pill>}
+            {row.hidden && <Pill>Hidden</Pill>}
+          </span>
+        )}
       </span>
     </td>
   );
@@ -301,11 +320,13 @@ function AgentCell({ row }: { row: HarnessRow }) {
 
 function CloudCell({ row }: { row: HarnessRow }) {
   return (
-    <td className="text-center @max-[600px]/harness:hidden">
+    <td className={cx("text-center", GIVE_WAY_CLOUD)}>
       {row.cloud ? (
         <Check aria-label="Runs in the cloud" className="inline size-4 text-leaf" />
       ) : (
-        <span className="text-[12.5px] text-ink-soft">This computer only</span>
+        <span title="This computer only" className="inline-flex">
+          <Minus aria-label="This computer only" className="size-4 text-ink-faint" />
+        </span>
       )}
     </td>
   );

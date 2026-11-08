@@ -14,6 +14,16 @@ export interface Attachment {
   error?: string;
 }
 
+/** A new upload id, as the runner expects them. */
+export const newAttachmentId = () => `up-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
+
+/** Why a file can't be attached (too big), or null. */
+export function attachmentProblem(file: { name: string; size: number }): string | null {
+  const image = IMAGE.test(file.name);
+  const limit = image ? 10 * MB : 100 * MB;
+  return file.size > limit ? `${image ? "Images" : "Files"} can be up to ${limit / MB} MB.` : null;
+}
+
 /** Files picked for the next message, uploaded to the thread's runner as soon as they're added. */
 export function useAttachments(connection: Connection | null) {
   const [items, setItems] = useState<Attachment[]>([]);
@@ -25,15 +35,15 @@ export function useAttachments(connection: Connection | null) {
   const add = useCallback(
     (files: File[]) => {
       for (const file of files) {
-        const id = `up-${crypto.randomUUID().replace(/-/g, "").slice(0, 24)}`;
-        const limit = IMAGE.test(file.name) ? 10 * MB : 100 * MB;
+        const id = newAttachmentId();
         const base: Attachment = { id, name: file.name || "pasted-image.png", size: file.size, sent: 0, state: "uploading" };
         if (!connection) {
           setItems(l => [...l, { ...base, state: "failed", error: "Attach files once the thread is running." }]);
           continue;
         }
-        if (file.size > limit) {
-          setItems(l => [...l, { ...base, state: "failed", error: `${IMAGE.test(file.name) ? "Images" : "Files"} can be up to ${limit / MB} MB.` }]);
+        const problem = attachmentProblem(file);
+        if (problem) {
+          setItems(l => [...l, { ...base, state: "failed", error: problem }]);
           continue;
         }
         setItems(l => [...l, base]);

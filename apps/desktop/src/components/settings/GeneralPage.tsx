@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { inDesktopShell } from "../../lib/native.ts";
 import { listEditors, notificationPermission, notify, type EditorInfo } from "../../lib/system.ts";
+import { allowMicrophone, listMicrophones, micOptions } from "../../lib/dictation.ts";
 import type { UiPrefs } from "../../lib/storage.ts";
 import { Button, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
@@ -12,7 +14,7 @@ import { QrCode } from "../QrCode.tsx";
 type Tab = "general" | "notifications" | "awake" | "files" | "phone";
 
 export function GeneralPage({ ctx }: { ctx: SettingsCtx }) {
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useSettingsTab<Tab>("general", "general", ["general", "notifications", "awake", "files", "phone"]);
   return (
     <>
       <Tabs
@@ -71,6 +73,21 @@ function GeneralTab({ ctx }: { ctx: SettingsCtx }) {
           checked={prefs.projectHint}
           onChange={projectHint => onPrefs({ projectHint })}
         />
+        <ToggleRow
+          label="Rename vague thread titles"
+          description="A thread is named from your first message. When that says little (“hi”, “fix this”), it takes its name from your next message instead. Worked out on this computer; no model is asked. Names you type yourself stay."
+          checked={prefs.renameVagueTitles}
+          onChange={renameVagueTitles => onPrefs({ renameVagueTitles })}
+        />
+        <ToggleRow
+          label="Open links in the side panel"
+          description="Links in the agent's replies open in the side panel's browser instead of your usual browser. Some websites refuse to be shown inside another app; open those from the panel's address bar."
+          checked={prefs.openLinksInPanel}
+          onChange={openLinksInPanel => onPrefs({ openLinksInPanel })}
+        />
+      </Section>
+      <Section title="Voice input">
+        <MicrophoneRow value={prefs.micDeviceId} onChange={micDeviceId => onPrefs({ micDeviceId })} />
       </Section>
       <Section
         title="Threads on this computer"
@@ -294,6 +311,55 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
             or download files, use this computer's apps, sign the agent in, or give the agent full access. Those stay here.
           </p>
         </Section>
+      )}
+    </>
+  );
+}
+
+/** Which microphone the dictation meter listens on. */
+function MicrophoneRow({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const [mics, setMics] = useState<MediaDeviceInfo[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => void listMicrophones().then(m => live && setMics(m));
+    load();
+    navigator.mediaDevices?.addEventListener?.("devicechange", load);
+    return () => {
+      live = false;
+      navigator.mediaDevices?.removeEventListener?.("devicechange", load);
+    };
+  }, []);
+  const options = micOptions(mics ?? []);
+  // Until the microphone has been allowed once, the system keeps the names to itself.
+  const unnamed = (mics ?? []).length > 0 && !(mics ?? []).some(m => m.label);
+  return (
+    <>
+      <Row
+        label="Microphone"
+        description="The level meter listens on this one while you dictate. Speech recognition uses your system's default microphone, so pick the same one in your system's sound settings."
+      >
+        <Select label="Microphone" value={options.some(o => o.value === value) ? value : ""} onChange={onChange} options={options} className="w-[240px]" />
+      </Row>
+      {(unnamed || mics?.length === 0) && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
+          {mics?.length === 0 ? (
+            <p className="text-[13.5px] text-ink-soft">No microphone found.</p>
+          ) : (
+            <Button
+              onClick={() => {
+                setError(null);
+                void allowMicrophone().then(
+                  () => listMicrophones().then(setMics),
+                  () => setError("LemonLime isn't allowed to use the microphone. Turn it on in your system's privacy settings."),
+                );
+              }}
+            >
+              Show microphone names
+            </Button>
+          )}
+          <ErrorText>{error}</ErrorText>
+        </div>
       )}
     </>
   );

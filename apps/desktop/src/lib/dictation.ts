@@ -102,3 +102,73 @@ export function useDictation(onPhrase: (text: string) => void) {
 
   return { supported, listening, interim, error, start, stop, toggle: () => (rec.current ? stop() : start()) };
 }
+
+// ── The microphone level meter shown while dictating ──
+
+/** How loud a frame of samples is, 0 to 1 (from the analyser's 0–255 time-domain bytes). */
+export function levelFromSamples(samples: ArrayLike<number>): number {
+  if (!samples.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const v = (samples[i]! - 128) / 128;
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / samples.length);
+  // Speech sits low on the scale; lift it so a normal voice fills most of the meter.
+  return Math.min(1, Math.sqrt(rms) * 1.6);
+}
+
+/** The microphones this computer has (names show once the microphone has been allowed). */
+export async function listMicrophones(): Promise<MediaDeviceInfo[]> {
+  try {
+    const all = (await navigator.mediaDevices?.enumerateDevices?.()) ?? [];
+    return all.filter(d => d.kind === "audioinput");
+  } catch {
+    return [];
+  }
+}
+
+/** Choices for the microphone setting: the system default first, then each one by name. */
+export function micOptions(mics: readonly Pick<MediaDeviceInfo, "deviceId" | "label">[]): { value: string; label: string }[] {
+  const named = mics.filter(m => m.deviceId && m.deviceId !== "default" && m.deviceId !== "communications");
+  return [{ value: "", label: "System default" }, ...named.map((m, i) => ({ value: m.deviceId, label: m.label || `Microphone ${i + 1}` }))];
+}
+
+/** Ask once for the microphone, so the system tells us the microphones' names. */
+export async function allowMicrophone(): Promise<void> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  for (const t of stream.getTracks()) t.stop();
+}
+
+/**
+ * Listen on a microphone (the default when `deviceId` is empty or gone) and report its level
+ * about 20 times a second. Resolves to a function that stops listening.
+ */
+export async function startLevelMeter(deviceId: string, onLevel: (level: number) => void): Promise<() => void> {
+  const media = navigator.mediaDevices;
+  if (!media?.getUserMedia || typeof AudioContext === "undefined") throw new Error("No microphone access here.");
+  let stream: MediaStream;
+  try {
+    stream = await media.getUserMedia({ audio: deviceId ? { deviceId: { exact: deviceId } } : true });
+  } catch (err) {
+    // The chosen microphone was unplugged: fall back to the default.
+    if (!deviceId) throw err;
+    stream = await media.getUserMedia({ audio: true });
+  }
+  const ctx = new AudioContext();
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+  const buf = new Uint8Array(analyser.fftSize);
+  const timer = setInterval(() => {
+    analyser.getByteTimeDomainData(buf);
+    onLevel(levelFromSamples(buf));
+  }, 50);
+  return () => {
+    clearInterval(timer);
+    source.disconnect();
+    for (const t of stream.getTracks()) t.stop();
+    void ctx.close().catch(() => undefined);
+  };
+}

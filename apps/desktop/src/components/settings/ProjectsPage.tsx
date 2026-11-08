@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { ArchiveRestore, ArrowDown, ArrowUp, ExternalLink, FolderGit2, Plus, Search, Trash2 } from "lucide-react";
 import type { ThreadEvent } from "@lemonlime/protocol";
 import { AGENT_LABELS, relativeTime, repoName } from "../../lib/format.ts";
@@ -13,7 +14,7 @@ import { ErrorText, Row, SavedNote, Section, Select, Tabs, useSaved } from "./pa
 type Tab = "projects" | "archived" | "import" | "export";
 
 export function ProjectsPage({ ctx, importTab }: { ctx: SettingsCtx; importTab?: ReactNode }) {
-  const [tab, setTab] = useState<Tab>("projects");
+  const [tab, setTab] = useSettingsTab<Tab>("projects", "projects", ["projects", "archived", "import", "export"]);
   const archivedCount = ctx.threads.filter(t => ctx.prefs.archived[t.id]).length;
   return (
     <>

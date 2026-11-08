@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RunnerClient } from "@lemonlime/client";
+import { RunnerClient, runnerHttpBase, uploadAttachment } from "@lemonlime/client";
 import {
   signToken,
   type ClientLimitAction,
@@ -17,6 +17,8 @@ import { confirmAction, isLocalRunnerRunning } from "./native.ts";
 import { answerComputerRequest, type ComputerLevel } from "./computer.ts";
 import type { CloudApi } from "./cloud.ts";
 import { machineName, startThreadRunner } from "./threadRunner.ts";
+import { deliverFirstMessage, forgetFirstMessage, peekFirstMessage } from "./firstMessage.ts";
+import { newAttachmentId } from "./useAttachments.ts";
 
 export type SessionState =
   /** Starting the local runner or asking the control plane where to connect. */
@@ -227,6 +229,12 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       }
 
       setConnection(conn);
+      let markLive = () => {};
+      const live = new Promise<void>((resolve, reject) => {
+        markLive = resolve;
+        // Torn down before it was live: the next connection hands the first message over.
+        failLive = () => reject(new Error("closed"));
+      });
       client = new RunnerClient({
         url: conn.url,
         token: conn.token,
@@ -271,7 +279,10 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
           if (cancelled || disconnectedRef.current) return;
           if (s === "closed") return;
           setState(s);
-          if (s === "live") setError(null);
+          if (s === "live") {
+            setError(null);
+            markLive();
+          }
           if (s === "reconnecting" && targetRef.current.mode === "local" && !checkingRunner) {
             checkingRunner = true;
             void isLocalRunnerRunning(threadId)
@@ -308,11 +319,45 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         document.removeEventListener("visibilitychange", wake);
       };
 
-      // Local threads carry their first prompt until it has been handed over.
+      // Local threads carry their first prompt until it has been handed over. A thread started
+      // from Home may also have files and a mode to start in, waiting for the runner.
       const t = targetRef.current;
-      if (t.mode === "local" && t.meta.pendingPrompt) {
-        const text = t.meta.pendingPrompt;
-        callbacksRef.current.onPromptSent?.(threadId);
+      const first = peekFirstMessage(threadId);
+      const text = t.mode === "local" ? t.meta.pendingPrompt : first?.text;
+      if (first?.delivering) {
+        /* already being handed over by an earlier connection */
+      } else if (first && (first.files.length || first.permission)) {
+        first.delivering = true;
+        const clientMsgId = newClientMsgId();
+        if (text) setPending(p => [...p, { clientMsgId, text, at: new Date().toISOString() }]);
+        const sendTo = client;
+        void deliverFirstMessage(first, text ?? "", {
+          ready: () => live,
+          setPermission: permission => sendTo.setOptions({ permission }),
+          upload: (file, id) =>
+            uploadAttachment({
+              base: runnerHttpBase(conn.url),
+              token: conn.token,
+              file: Object.assign(file.slice(0, file.size, file.type), { name: file.name }),
+              id,
+            }).then(() => undefined),
+          send: (msg, ids) => {
+            if (t.mode === "local") callbacksRef.current.onPromptSent?.(threadId);
+            sendTo.send(msg, clientMsgId, ids);
+          },
+          newId: newAttachmentId,
+        }).then(
+          ({ failed }) => {
+            forgetFirstMessage(threadId);
+            if (failed.length && !cancelled) setError(`Couldn't attach ${failed.map(f => f.name).join(", ")}: ${failed[0]!.error}`);
+          },
+          () => {
+            first.delivering = false;
+          },
+        );
+      } else if (text) {
+        forgetFirstMessage(threadId);
+        if (t.mode === "local") callbacksRef.current.onPromptSent?.(threadId);
         const clientMsgId = newClientMsgId();
         setPending(p => [...p, { clientMsgId, text, at: new Date().toISOString() }]);
         client.send(text, clientMsgId);
@@ -320,10 +365,12 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     };
 
     let removeWakeListeners = () => {};
+    let failLive = () => {};
     void run();
 
     return () => {
       cancelled = true;
+      failLive();
       setConnection(null);
       removeWakeListeners();
       if (flushHandle) clearTimeout(flushHandle);

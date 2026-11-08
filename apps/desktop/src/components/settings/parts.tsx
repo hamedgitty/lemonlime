@@ -1,13 +1,27 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check } from "lucide-react";
+import { Select as BaseSelect } from "@base-ui/react/select";
+import { Check, ChevronDown } from "lucide-react";
 import { Toggle } from "../primitives.tsx";
 import { cx } from "../ui.tsx";
 
 /** Building blocks every Settings page uses. */
 
-export function Section({ title, description, children, aside }: { title?: string; description?: ReactNode; children: ReactNode; aside?: ReactNode }) {
+export function Section({
+  title,
+  description,
+  children,
+  aside,
+  anchor,
+}: {
+  title?: string;
+  description?: ReactNode;
+  children: ReactNode;
+  aside?: ReactNode;
+  /** What Settings search jumps to (the title by default). */
+  anchor?: string;
+}) {
   return (
-    <section className="mb-8">
+    <section className="mb-8" data-setting={anchor ?? title}>
       {(title || aside) && (
         <div className="flex items-end gap-3">
           <div className="min-w-0 flex-1">
@@ -22,9 +36,22 @@ export function Section({ title, description, children, aside }: { title?: strin
   );
 }
 
-export function Row({ label, description, htmlFor, children }: { label: ReactNode; description?: ReactNode; htmlFor?: string; children?: ReactNode }) {
+export function Row({
+  label,
+  description,
+  htmlFor,
+  children,
+  anchor,
+}: {
+  label: ReactNode;
+  description?: ReactNode;
+  htmlFor?: string;
+  children?: ReactNode;
+  /** What Settings search jumps to (the label, when it's text, by default). */
+  anchor?: string;
+}) {
   return (
-    <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+    <div className="flex flex-wrap items-start gap-x-6 gap-y-2" data-setting={anchor ?? (typeof label === "string" ? label : undefined)}>
       <div className="min-w-0 flex-1 basis-[240px]">
         {htmlFor ? (
           <label htmlFor={htmlFor} className="text-[15px] text-ink">
@@ -47,50 +74,78 @@ export function ToggleRow({
   checked,
   onChange,
   disabled,
+  anchor,
 }: {
   label: string;
   description?: ReactNode;
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
+  anchor?: string;
 }) {
   return (
-    <Row label={label} description={description}>
+    <Row label={label} description={description} {...(anchor ? { anchor } : {})}>
       <Toggle label={label} checked={checked} onChange={onChange} {...(disabled !== undefined ? { disabled } : {})} />
     </Row>
   );
 }
 
-/** A labelled native select, styled like the rest. */
+/**
+ * A labelled pick-one list: a button showing the choice, opening a list in our menu style.
+ * Arrow keys, typing a letter, Enter and Escape work as in any select.
+ */
 export function Select<T extends string>({
   label,
   value,
   onChange,
   options,
   className,
+  disabled,
 }: {
   label: string;
   value: T;
   onChange: (v: T) => void;
   options: { value: T; label: string }[];
   className?: string;
+  disabled?: boolean;
 }) {
   return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={e => onChange(e.target.value as T)}
-      className={cx(
-        "h-9 rounded-lg border border-line-strong bg-paper px-2.5 text-[14px] text-ink focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-leaf",
-        className ?? "w-[220px]",
-      )}
-    >
-      {options.map(o => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <BaseSelect.Root<T> value={value} onValueChange={v => v !== null && onChange(v)} items={options} {...(disabled ? { disabled } : {})}>
+      <BaseSelect.Trigger
+        aria-label={label}
+        className={cx(
+          "inline-flex h-9 items-center justify-between gap-2 rounded-lg border border-line-strong bg-paper pr-2 pl-2.5 text-left text-[14px] text-ink hover:bg-cream focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-leaf data-[disabled]:opacity-50 data-[popup-open]:bg-cream",
+          className ?? "w-[220px]",
+        )}
+      >
+        <BaseSelect.Value className="min-w-0 flex-1 truncate" />
+        <BaseSelect.Icon className="shrink-0 text-ink-faint">
+          <ChevronDown aria-hidden="true" className="size-4" />
+        </BaseSelect.Icon>
+      </BaseSelect.Trigger>
+      <BaseSelect.Portal>
+        <BaseSelect.Positioner sideOffset={6} alignItemWithTrigger={false} className="z-50 outline-none">
+          <BaseSelect.Popup className="scroll-thin max-h-[min(320px,var(--available-height))] min-w-(--anchor-width) origin-(--transform-origin) overflow-y-auto rounded-[10px] border border-line bg-paper p-1 text-[14px] text-ink shadow-pop outline-none transition-[opacity,scale] duration-150 ease-(--ease-out) data-[ending-style]:opacity-0 data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0">
+            <BaseSelect.List>
+              {options.map(o => (
+                <BaseSelect.Item
+                  key={o.value}
+                  value={o.value}
+                  className="flex h-8 cursor-default items-center gap-2.5 rounded-[7px] px-2.5 outline-none select-none data-[highlighted]:bg-cream-deep"
+                >
+                  <BaseSelect.ItemText className="min-w-0 flex-1 truncate">{o.label}</BaseSelect.ItemText>
+                  <span className="inline-flex size-4 shrink-0">
+                    <BaseSelect.ItemIndicator>
+                      <Check aria-hidden="true" className="size-4 text-leaf" />
+                    </BaseSelect.ItemIndicator>
+                  </span>
+                </BaseSelect.Item>
+              ))}
+            </BaseSelect.List>
+          </BaseSelect.Popup>
+        </BaseSelect.Positioner>
+      </BaseSelect.Portal>
+    </BaseSelect.Root>
   );
 }
 

@@ -1,6 +1,14 @@
-import type { AgentKind, PolicyDenied, ReasoningLevel, SandboxSize } from "@lemonlime/protocol";
+import type { AgentKind, PermissionMode, PolicyDenied, ReasoningLevel, SandboxSize } from "@lemonlime/protocol";
 
-export interface NewLocalThread {
+/** What both kinds of new thread may take along with the first message. */
+interface FirstMessageExtras {
+  /** Files to send with the first message, uploaded once the thread's runner is up. */
+  attachments?: File[] | undefined;
+  /** The permission mode to start in, when it isn't the usual one for where it runs. */
+  permission?: PermissionMode | undefined;
+}
+
+export interface NewLocalThread extends FirstMessageExtras {
   mode: "local";
   title: string;
   agent: AgentKind;
@@ -16,7 +24,7 @@ export interface NewLocalThread {
   prompt: string | undefined;
 }
 
-export interface NewCloudThread {
+export interface NewCloudThread extends FirstMessageExtras {
   mode: "cloud";
   title: string;
   agent: AgentKind;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { listSkills, type SkillInfo } from "../../lib/native.ts";
 import type { SettingsCtx } from "./context.ts";
 import { Pill, SavedNote, Section, Tabs, ToggleRow, useSaved } from "./parts.tsx";
@@ -6,7 +7,7 @@ import { Pill, SavedNote, Section, Tabs, ToggleRow, useSaved } from "./parts.tsx
 const MAX = 32_000;
 
 export function InstructionsPage({ ctx }: { ctx: SettingsCtx }) {
-  const [tab, setTab] = useState<"custom" | "builtin">("custom");
+  const [tab, setTab] = useSettingsTab<"custom" | "builtin">("instructions", "custom", ["custom", "builtin"]);
   return (
     <>
       <Tabs

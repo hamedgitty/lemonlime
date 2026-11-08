@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, ExternalLink, Globe, Maximize2, Minimize2, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
+import { ArrowLeftRight, Globe, Maximize2, Minimize2, Plus, SquareTerminal, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { inDesktopShell } from "../lib/native.ts";
 import { Tip } from "./primitives.tsx";
-import { Button, cx, openExternal } from "./ui.tsx";
+import { BrowserView, NewTabPage } from "./PanelBrowser.tsx";
+import { Button, ICON_BUTTON, cx } from "./ui.tsx";
 
 export type PanelTab =
   { id: string; kind: "terminal"; title: string } | { id: string; kind: "browser"; title: string; url: string } | { id: string; kind: "new"; title: string };
@@ -84,7 +85,7 @@ export function GlobalPanel({
               key={t.id}
               className={cx(
                 "group/tab inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg pr-1 pl-2.5 text-[13px]",
-                t.id === current?.id ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60",
+                t.id === current?.id ? "bg-cream-hover text-ink" : "text-ink-soft hover:bg-cream-deep",
               )}
             >
               <button type="button" role="tab" aria-selected={t.id === current?.id} onClick={() => onActive(t.id)} className="inline-flex items-center gap-1.5">
@@ -101,7 +102,7 @@ export function GlobalPanel({
                 type="button"
                 aria-label={`Close ${t.title}`}
                 onClick={() => close(t.id)}
-                className="inline-flex size-5 items-center justify-center rounded text-ink-faint opacity-0 group-hover/tab:opacity-100 hover:text-ink focus-visible:opacity-100"
+                className="inline-flex size-5 items-center justify-center rounded-md text-ink-faint opacity-0 group-hover/tab:opacity-100 hover:bg-cream-hover hover:text-ink focus-visible:opacity-100"
               >
                 <X aria-hidden="true" className="size-3" />
               </button>
@@ -109,7 +110,7 @@ export function GlobalPanel({
           ))}
         </div>
         <Tip label="New tab" side="bottom">
-          <button type="button" aria-label="New tab" onClick={add} className={ICON}>
+          <button type="button" aria-label="New tab" onClick={add} className={ICON_BUTTON}>
             <Plus aria-hidden="true" className="size-4" />
           </button>
         </Tip>
@@ -118,18 +119,18 @@ export function GlobalPanel({
             type="button"
             aria-label={side === "right" ? "Move panel to the left" : "Move panel to the right"}
             onClick={() => onSide(side === "right" ? "left" : "right")}
-            className={ICON}
+            className={ICON_BUTTON}
           >
             <ArrowLeftRight aria-hidden="true" className="size-4" />
           </button>
         </Tip>
         <Tip label={full ? "Exit full screen" : "Full screen"} side="bottom">
-          <button type="button" aria-label={full ? "Exit full screen" : "Full screen"} onClick={() => setFull(f => !f)} className={ICON}>
+          <button type="button" aria-label={full ? "Exit full screen" : "Full screen"} onClick={() => setFull(f => !f)} className={ICON_BUTTON}>
             {full ? <Minimize2 aria-hidden="true" className="size-4" /> : <Maximize2 aria-hidden="true" className="size-4" />}
           </button>
         </Tip>
         <Tip label="Close panel" side="bottom">
-          <button type="button" aria-label="Close panel" onClick={onClose} className={ICON}>
+          <button type="button" aria-label="Close panel" onClick={onClose} className={ICON_BUTTON}>
             <X aria-hidden="true" className="size-4" />
           </button>
         </Tip>
@@ -137,20 +138,20 @@ export function GlobalPanel({
       {tabs.map(t => (
         <div key={t.id} className={cx("min-h-0 flex-1 flex-col", t.id === current?.id ? "flex" : "hidden")}>
           {t.kind === "new" && (
-            <NewTab
-              onTerminal={() => replace(t.id, { id: t.id, kind: "terminal", title: "Terminal" })}
+            <NewTabPage
+              onTerminal={inDesktopShell() ? () => replace(t.id, { id: t.id, kind: "terminal", title: "Terminal" }) : undefined}
               onBrowser={url => replace(t.id, { id: t.id, kind: "browser", title: hostOf(url), url })}
             />
           )}
           {t.kind === "terminal" && <HostTerminal onTitle={title => replace(t.id, { ...t, title })} visible={!hidden && t.id === current?.id} />}
-          {t.kind === "browser" && <Browser url={t.url} onUrl={url => replace(t.id, { ...t, url, title: hostOf(url) })} />}
+          {t.kind === "browser" && (
+            <BrowserView url={t.url} title={t.title} onAddress={url => url !== t.url && replace(t.id, { ...t, url, title: hostOf(url) })} />
+          )}
         </div>
       ))}
     </aside>
   );
 }
-
-const ICON = "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink";
 
 const hostOf = (url: string) => {
   try {
@@ -160,97 +161,7 @@ const hostOf = (url: string) => {
   }
 };
 
-/** Makes "localhost:3000" or "example.com" into a full address. */
-export function normalizeUrl(input: string): string | null {
-  const v = input.trim();
-  if (!v) return null;
-  const withScheme = /^https?:\/\//i.test(v) ? v : /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(v) ? `http://${v}` : `https://${v}`;
-  try {
-    const u = new URL(withScheme);
-    return u.protocol === "http:" || u.protocol === "https:" ? u.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
-function NewTab({ onTerminal, onBrowser }: { onTerminal: () => void; onBrowser: (url: string) => void }) {
-  const [url, setUrl] = useState("localhost:3000");
-  const [error, setError] = useState(false);
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 text-center">
-      <p className="text-[15px] font-medium">Open in this panel</p>
-      <div className="flex w-full max-w-[320px] flex-col gap-3">
-        <Button onClick={onTerminal} disabled={!inDesktopShell()}>
-          <SquareTerminal aria-hidden="true" className="size-4" />
-          Start a terminal on this computer
-        </Button>
-        <form
-          onSubmit={e => {
-            e.preventDefault();
-            const u = normalizeUrl(url);
-            setError(!u);
-            if (u) onBrowser(u);
-          }}
-          className="flex gap-2"
-        >
-          <input
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            aria-label="Address to open"
-            aria-invalid={error}
-            spellCheck={false}
-            className="h-9 min-w-0 flex-1 rounded-lg border border-line-strong bg-paper px-2.5 font-mono text-[13px] outline-none focus:border-leaf"
-          />
-          <Button type="submit">
-            <Globe aria-hidden="true" className="size-4" />
-            Open
-          </Button>
-        </form>
-        <p className="text-[12.5px] text-ink-faint">Local dev servers work best; many websites refuse to be shown inside another app.</p>
-      </div>
-    </div>
-  );
-}
-
-function Browser({ url, onUrl }: { url: string; onUrl: (url: string) => void }) {
-  const [typed, setTyped] = useState(url);
-  const [reload, setReload] = useState(0);
-  useEffect(() => setTyped(url), [url]);
-  return (
-    <>
-      <form
-        onSubmit={e => {
-          e.preventDefault();
-          const u = normalizeUrl(typed);
-          if (u) onUrl(u);
-          setReload(r => r + 1);
-        }}
-        className="flex items-center gap-1 border-b border-line px-2 py-1.5"
-      >
-        <button type="button" aria-label="Reload" onClick={() => setReload(r => r + 1)} className={ICON}>
-          <RotateCw aria-hidden="true" className="size-4" />
-        </button>
-        <input
-          value={typed}
-          onChange={e => setTyped(e.target.value)}
-          aria-label="Address"
-          spellCheck={false}
-          className="h-8 min-w-0 flex-1 rounded-md border border-line bg-paper px-2 font-mono text-[12.5px] outline-none focus:border-leaf"
-        />
-        <button type="button" aria-label="Open in your browser" onClick={() => void openExternal(url)} className={ICON}>
-          <ExternalLink aria-hidden="true" className="size-4" />
-        </button>
-      </form>
-      <iframe
-        key={`${url}#${reload}`}
-        title={hostOf(url)}
-        src={url}
-        sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
-        className="min-h-0 w-full flex-1 bg-paper"
-      />
-    </>
-  );
-}
+export { normalizeUrl } from "../lib/browser.ts";
 
 type HostOutput = { id: number; data: string | null; exited: boolean };
 

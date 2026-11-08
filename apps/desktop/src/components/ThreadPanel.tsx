@@ -309,7 +309,16 @@ export function ThreadPanel({
         <ReviewPanel connection={session.connection} refreshKey={refreshKey} onAddToChat={onAddToChat} fallback={<ChangesList events={session.events} />} />
       )}
       {active === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
-      {active === "browser" && <PreviewPanel events={session.events} mode={mode} connection={session.connection} {...(runnerPath ? { runnerPath } : {})} />}
+      {active === "browser" && (
+        <PreviewPanel
+          events={session.events}
+          mode={mode}
+          connection={session.connection}
+          onFindFile={onQuickOpen}
+          findFileKeys={shortcuts.quickOpen ? keyCaps(shortcuts.quickOpen) : []}
+          {...(runnerPath ? { runnerPath } : {})}
+        />
+      )}
       {state.tabs.map(tab => {
         if (tab.kind === "file") {
           return tab.id === active ? (

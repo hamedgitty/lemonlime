@@ -19,6 +19,7 @@ function fakeDocker(): { bin: string; calls: () => string[][] } {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n");
+fs.appendFileSync(${JSON.stringify(log)}.replace("calls", "env"), JSON.stringify({ secret: process.env.LEMONLIME_THREAD_SECRET ?? null }) + "\\n");
 const f = args[0] === "inspect" ? args[2] : "";
 if (args[0] === "run") console.log("0123456789abcdef");
 else if (f === "{{.State.Status}}") console.log("running");
@@ -48,6 +49,18 @@ describe("DockerProvider", () => {
     const run = d.calls()[0]!;
     expect(run).toEqual(expect.arrayContaining(["-p", "127.0.0.1::7420", "--name", containerName("thread-abc123"), "lemonlime.runner-port=7420"]));
     expect(run).not.toContain("--network");
+  });
+
+  it("keeps secrets out of its command line, and runs an init that reaps finished processes", async () => {
+    const d = fakeDocker();
+    const p = new DockerProvider({ image: "img", docker: d.bin });
+    await p.create({ threadId: "thread-abc123", size: "small", runner, labels: {} });
+    const run = d.calls()[0]!;
+    expect(run.join(" ")).not.toContain("LEMONLIME_THREAD_SECRET=s");
+    expect(run).toEqual(expect.arrayContaining(["-e", "LEMONLIME_THREAD_SECRET", "--init"]));
+    // The value reaches docker through its environment instead.
+    const env = readFileSync(d.bin.replace(/docker$/, "env.jsonl"), "utf8").trim().split("\n")[0]!;
+    expect(JSON.parse(env)).toEqual({ secret: "s" });
   });
 
   it("behind a proxy: joins the network, opens no port, and gives a path-based URL", async () => {

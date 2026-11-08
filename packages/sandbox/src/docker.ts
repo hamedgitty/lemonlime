@@ -1,7 +1,7 @@
 import { SANDBOX_RESOURCES } from "@lemonlime/protocol";
 import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
 
-type Run = (file: string, args: string[], opts: { maxBuffer: number }) => Promise<{ stdout: string; stderr: string }>;
+type Run = (file: string, args: string[], opts: { maxBuffer: number; env?: NodeJS.ProcessEnv }) => Promise<{ stdout: string; stderr: string }>;
 let runner: Promise<Run> | undefined;
 
 /**
@@ -56,9 +56,9 @@ export class DockerProvider implements SandboxProvider {
     this.bindHost = opts.bindHost ?? "127.0.0.1";
   }
 
-  private async exec(args: string[]): Promise<string> {
+  private async exec(args: string[], env?: Record<string, string>): Promise<string> {
     const run = await loadRun();
-    const { stdout } = await run(this.docker, args, { maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await run(this.docker, args, { maxBuffer: 4 * 1024 * 1024, ...(env ? { env: { ...process.env, ...env } } : {}) });
     return stdout.trim();
   }
 
@@ -84,18 +84,23 @@ export class DockerProvider implements SandboxProvider {
       "ALL",
       "--pids-limit",
       "1024",
+      // A small init as process 1 reaps what the agent's processes leave behind, so finished
+      // ones don't pile up toward the process limit.
+      "--init",
       ...(this.opts.publicUrl ? [] : ["-p", `${this.bindHost}::${o.runner.port}`]),
       ...(this.opts.network ? ["--network", this.opts.network] : []),
       "--label",
       `lemonlime.runner-port=${o.runner.port}`,
       ...Object.entries(labels).flatMap(([k, v]) => ["--label", `${k}=${v}`]),
-      ...Object.entries(o.runner.env).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
+      // Names only: docker takes each value from its own environment, so secrets never
+      // appear in the host's process list.
+      ...Object.keys(o.runner.env).flatMap(k => ["-e", k]),
       this.opts.image,
       "sh",
       "-c",
       launchCommand(o.runner),
     ];
-    const id = await this.exec(args);
+    const id = await this.exec(args, o.runner.env);
     return this.info(id, o.runner.port);
   }
 

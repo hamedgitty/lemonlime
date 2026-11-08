@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { AgentConfig, RepoRef, SandboxSize, ThreadMode, ThreadStatus } from "@lemonlime/protocol";
+import type { AgentConfig, RepoRef, SandboxSize, ThreadMode, ThreadStatus, UserSkill } from "@lemonlime/protocol";
 
 /**
  * LemonLime control plane schema (SQLite: Cloudflare D1 or a local SQLite file).
@@ -388,9 +388,38 @@ export const automationRuns = sqliteTable(
     threadId: text("thread_id"),
     /** Why it was skipped or failed, in words for the user. */
     detail: text("detail"),
+    /** When someone in the workspace marked the run as looked at; null until then. */
+    reviewedAt: text("reviewed_at"),
   },
   t => [index("automation_runs_automation_idx").on(t.automationId, t.ranAt)],
 );
+
+// ─── Workspace settings for cloud threads ────────────────────────────────────
+
+/**
+ * What every new cloud sandbox in a workspace starts with. One row per workspace, created
+ * the first time an owner saves; a workspace without one uses the defaults.
+ */
+export const workspaceSettings = sqliteTable("workspace_settings", {
+  workspaceId: text("workspace_id")
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: "cascade" }),
+  /** Custom instructions added to every agent turn. */
+  instructions: text("instructions").notNull().default(""),
+  /** Shell script run once in each new sandbox before the runner starts. */
+  setupScript: text("setup_script").notNull().default(""),
+  stripCoauthors: integer("strip_coauthors", { mode: "boolean" }).notNull().default(false),
+  /** Retry turns that hit a busy provider or a usage limit for up to this long; 0: off. */
+  retryMaxWaitMinutes: integer("retry_max_wait_minutes").notNull().default(0),
+  /** Close cloud threads idle this many days and delete their sandboxes; null: never. */
+  autoDeleteDays: integer("auto_delete_days"),
+  /** The workspace's own skills: [{ name, files: { path: content } }]. */
+  skills: text("skills", { mode: "json" }).$type<UserSkill[]>().notNull().default([]),
+  updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+  updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
+});
+
+export type WorkspaceSettingsRow = typeof workspaceSettings.$inferSelect;
 
 // ─── Personal access tokens (desktop app) ────────────────────────────────────
 

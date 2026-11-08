@@ -187,6 +187,8 @@ describe("automation check scripts", () => {
     const [listed] = await listAutomations(ctx, alice.workspaceId);
     expect(listed!.recentRuns).toMatchObject([{ status: "skipped", outcome: "skipped", detail: expect.stringContaining("printed nothing") }]);
     expect(sandbox.calls).toContain(`destroy:${thread!.sandboxId}`);
+    // The empty thread doesn't linger in thread lists.
+    expect(await db.select().from(threads)).toHaveLength(0);
     // Skips don't count as failures.
     expect(listed!.enabled).toBe(true);
   });

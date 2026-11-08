@@ -399,7 +399,15 @@ export async function recordCheckSkips(ctx: AppContext, threadId: string, skippe
     .where(and(eq(automationRuns.threadId, threadId), eq(automationRuns.status, "started")));
   const row = await getThreadRow(ctx, threadId);
   if (row && row.mode === "cloud" && row.status !== "stopped") {
-    await endRun(ctx, row, "idle", { destroy: true }).catch(err => console.error("[lemonlime] could not stop a skipped automation's sandbox:", err));
+    const stopped = await endRun(ctx, row, "idle", { destroy: true }).then(
+      () => true,
+      err => (console.error("[lemonlime] could not stop a skipped automation's sandbox:", err), false),
+    );
+    // Nothing happened in it, so it doesn't belong in anyone's thread list. The run keeps why.
+    if (stopped) {
+      await ctx.db.update(automationRuns).set({ threadId: null }).where(eq(automationRuns.threadId, threadId));
+      await ctx.db.delete(threads).where(eq(threads.id, threadId));
+    }
   }
 }
 

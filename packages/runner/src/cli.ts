@@ -39,6 +39,7 @@ import { importHistory, scanHistory } from "./history/index.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { accountsCommand } from "./accounts-cli.ts";
 import { RUNNER_VERSION } from "./version.ts";
+import { readSecretLine, releaseStdin } from "./secret-stdin.ts";
 
 // Output piped into something that stops reading early (`lemonlime-runner --help | head`):
 // stop quietly instead of crashing with a stack trace. 141 is what a shell reports for a
@@ -95,7 +96,12 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            folder, erase disks or fork-bomb (blocked by default: Claude Code
                            through a hook, Codex through a hook in cloud sandboxes, OpenCode
                            and other ACP agents when they ask before running a command)
-  --exit-with-parent       Stop when the process that started this runner exits (for apps)
+  --exit-with-parent       Stop when the process that started this runner exits (for apps).
+                           With --secret-stdin, also stop when stdin closes (the SSH
+                           session that started it ended)
+  --secret-stdin           Read the thread secret from the first line of stdin instead of
+                           LEMONLIME_THREAD_SECRET (apps starting a runner over SSH). Nothing
+                           else is read from stdin
   --instructions-file <path>
                            Your own instructions, added to every turn (Claude Code's system
                            prompt, Codex's developer instructions, the first message of each
@@ -114,6 +120,7 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --memory-limit-mb <n>    Local threads: stop the agent when what it started uses more
                            than this much memory (default: half the computer's)
   --no-git                 Don't manage a branch or commit changes
+  -v, --version            Print the runner's version
   -h, --help               Show this help
 
 Environment:
@@ -292,18 +299,24 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       "memory-limit-mb": { type: "string" },
       "no-command-guard": { type: "boolean", default: false },
       "exit-with-parent": { type: "boolean", default: false },
+      "secret-stdin": { type: "boolean", default: false },
       "instructions-file": { type: "string" },
       "strip-coauthors": { type: "boolean", default: false },
       "branch-prefix": { type: "string" },
       "retry-max-wait": { type: "string" },
       "disable-skills": { type: "string", multiple: true },
       help: { type: "boolean", short: "h", default: false },
+      version: { type: "boolean", short: "v", default: false },
     },
     strict: true,
   });
 
   if (values.help) {
     process.stdout.write(HELP);
+    return;
+  }
+  if (values.version) {
+    process.stdout.write(`lemonlime-runner ${RUNNER_VERSION}\n`);
     return;
   }
 
@@ -317,8 +330,17 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const agent = AgentKind.safeParse(values.agent);
   if (!agent.success) fail("--agent must be one of claude-code, codex, opencode, acp");
   // The secret comes in the environment, or stays with a keeper (keeper.ts) this runner asks.
-  const keeperSocket = process.env.LEMONLIME_KEEPER;
-  const secret = process.env.LEMONLIME_THREAD_SECRET ?? "";
+  // With --secret-stdin it is the first line on stdin, so it never shows on a command line.
+  const keeperSocket = values["secret-stdin"] ? undefined : process.env.LEMONLIME_KEEPER;
+  let secret = process.env.LEMONLIME_THREAD_SECRET ?? "";
+  if (values["secret-stdin"]) {
+    try {
+      secret = await readSecretLine(process.stdin);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+    if (secret.length < 16) fail("the thread secret on stdin must be at least 16 characters");
+  }
   if (!keeperSocket && secret.length < 16) fail("LEMONLIME_THREAD_SECRET must be set (at least 16 characters)");
   let keys: ThreadKeys;
   try {
@@ -554,6 +576,18 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   process.on("exit", () => killAllAgentGroups());
   // Started by an app that wants this runner gone with it: if that app dies without stopping
   // it (a crash, a force quit), the runner is handed to another parent, and stops.
+  // Stdin carried only the secret. Over SSH, the session closing shows up as stdin closing.
+  if (values["secret-stdin"]) {
+    releaseStdin(
+      process.stdin,
+      values["exit-with-parent"]
+        ? () => {
+            log("the session that started this runner closed; stopping");
+            void shutdown(0);
+          }
+        : undefined,
+    );
+  }
   if (values["exit-with-parent"]) {
     const parent = process.ppid;
     setInterval(() => {

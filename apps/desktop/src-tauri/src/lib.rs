@@ -2,6 +2,7 @@
 //! processes that back local threads.
 
 mod computer;
+mod history;
 mod paths;
 mod previews;
 mod repo;
@@ -52,6 +53,8 @@ pub fn run() {
             skills::add_skill,
             skills::remove_skill,
             skills::skills_folder,
+            history::scan_agent_history,
+            history::import_agent_sessions,
             confirm_quit,
         ])
         .build(tauri::generate_context!())

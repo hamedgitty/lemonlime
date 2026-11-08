@@ -61,6 +61,10 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable).
                            Skills in ~/.lemonlime/skills are always copied too.
   --no-bundled-skills      Don't copy LemonLime's own skills into the thread
+  --plugins-dir <dir>      Agent plugins folder (plugins.json + one folder per plugin; the
+                           desktop app passes ~/.lemonlime/plugins). Enabled plugins add
+                           skills for every agent, commands and subagents for Claude Code,
+                           and MCP servers for Claude Code and Codex. Hooks are never run.
   --no-command-guard       Let the agent run commands that wipe the computer or home
                            folder, erase disks or fork-bomb (blocked by default; Claude Code)
   --memory-limit-mb <n>    Local threads: stop the agent when what it started uses more
@@ -161,6 +165,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       "no-git": { type: "boolean", default: false },
       skills: { type: "string", multiple: true },
       "no-bundled-skills": { type: "boolean", default: false },
+      "plugins-dir": { type: "string" },
       "memory-limit-mb": { type: "string" },
       "no-command-guard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -252,6 +257,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       : {}),
     // The user's own skills (added in the desktop app's settings), then any given here.
     extraSkillDirs: [join(home, "skills"), ...(values.skills ?? []).map(d => resolve(d))],
+    ...(values["plugins-dir"] ? { pluginsDir: resolve(values["plugins-dir"]) } : {}),
   });
 
   const log = (m: string) => process.stderr.write(`[runner ${id}] ${m}\n`);

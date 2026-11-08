@@ -14,6 +14,7 @@ export { credentialHelperCommand, gitCredential, RUNNER_BIN } from "./git-creden
 export { isSingleExecutable, selfCommand } from "./self.ts";
 export { runApprovalMcp } from "./approval-mcp.ts";
 export { BUNDLED_SKILLS_DIR, installSkills, listSkills, skillsDirFor } from "./skills.ts";
+export * from "./agent-plugins.ts";
 export * from "./agents/index.ts";
 export { MemoryGuard, OOM_SCORE_FOR_WORK, descendants, listProcesses, prioritizeMemory, type Proc } from "./memory-guard.ts";
 export { TerminalSession, loadPty, shellEnv, type Pty, type SpawnPty } from "./terminal.ts";

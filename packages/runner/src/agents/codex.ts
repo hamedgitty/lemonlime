@@ -1,6 +1,7 @@
 import type { NewEvent } from "@lemonlime/protocol";
 import { runLineProcess, tryJson } from "./process.ts";
 import { selfCommand } from "../self.ts";
+import { codexMcpFlags } from "../agent-plugins.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
@@ -44,6 +45,8 @@ class CodexSession implements AgentSession {
         `mcp_servers.lemonlime_subagents.env_vars=${JSON.stringify(["LEMONLIME_RUNNER_URL", "LEMONLIME_THREAD_ID", "LEMONLIME_THREAD_SECRET", "LEMONLIME_SUBAGENT_ID", "LEMONLIME_COMPUTER_TOOLS"])}`,
       );
     }
+    // The user's plugin servers. Unlike LemonLime's own, their tools aren't pre-approved.
+    flags.push(...codexMcpFlags(this.opts.mcpServers ?? {}));
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
     else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
     const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, ctx.prompt] : ["exec", ...flags, ctx.prompt];

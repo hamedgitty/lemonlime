@@ -157,7 +157,8 @@ mod tests {
     fn refuses_relative_dotdot_and_links() {
         assert!(safe_path("notes.txt").is_err());
         assert!(safe_path("/tmp/../etc/passwd").is_err());
-        let dir = std::env::temp_dir().join(format!("lemonlime-computer-{}", std::process::id()));
+        // macOS's temp folder sits behind a link (/var → /private/var), which the checks refuse; use its real path.
+        let dir = fs::canonicalize(std::env::temp_dir()).unwrap().join(format!("lemonlime-computer-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let real = dir.join("real.txt");
         fs::write(&real, "hi").unwrap();

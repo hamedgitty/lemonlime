@@ -124,15 +124,7 @@ fn signed_in(kind: &str, path: &PathBuf) -> Option<bool> {
             if home().is_some_and(|h| h.join(".claude").join(".credentials.json").is_file()) {
                 return Some(true);
             }
-            #[cfg(target_os = "macos")]
-            {
-                // The keychain item's existence only (no -w, so the secret isn't read).
-                let mut c = Command::new("/usr/bin/security");
-                c.args(["find-generic-password", "-s", "Claude Code-credentials"]);
-                return run_with_timeout(c, Duration::from_secs(5)).map(|(ok, _)| ok);
-            }
-            #[cfg(not(target_os = "macos"))]
-            Some(false)
+            claude_keychain_item()
         }
         "codex" => {
             let mut c = program_command(path);
@@ -142,6 +134,20 @@ fn signed_in(kind: &str, path: &PathBuf) -> Option<bool> {
         "opencode" => home().map(|h| h.join(".local").join("share").join("opencode").join("auth.json").is_file()),
         _ => None,
     }
+}
+
+/// macOS keeps Claude Code's sign-in in the keychain: check the item exists (no -w, so the
+/// secret itself is never read).
+#[cfg(target_os = "macos")]
+fn claude_keychain_item() -> Option<bool> {
+    let mut c = Command::new("/usr/bin/security");
+    c.args(["find-generic-password", "-s", "Claude Code-credentials"]);
+    run_with_timeout(c, Duration::from_secs(5)).map(|(ok, _)| ok)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn claude_keychain_item() -> Option<bool> {
+    Some(false)
 }
 
 fn detect_one(cli: &AgentCli) -> AgentInstall {
@@ -282,52 +288,52 @@ extern "system" {
     fn SetThreadExecutionState(flags: u32) -> u32;
 }
 
+#[cfg(target_os = "macos")]
 fn hold_awake(display: bool) -> Result<AwakeHold, String> {
-    #[cfg(target_os = "macos")]
-    {
-        // -i: no idle sleep; -d: display stays on too. Ends when we kill it (or the app exits: -w).
-        let flags = if display { "-di" } else { "-i" };
-        let child = Command::new("/usr/bin/caffeinate")
-            .args([flags, "-w", &std::process::id().to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Couldn't keep the computer awake: {e}"))?;
-        return Ok(AwakeHold { display, child });
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let inhibit = paths::find_program("systemd-inhibit").ok_or("Keeping awake needs systemd-inhibit, which isn't on this computer.")?;
-        let what = if display { "idle:sleep" } else { "sleep" };
-        let child = Command::new(inhibit)
-            .args([&format!("--what={what}"), "--who=LemonLime", "--why=Agents are working", "sleep", "infinity"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("Couldn't keep the computer awake: {e}"))?;
-        return Ok(AwakeHold { display, child });
-    }
-    #[cfg(windows)]
-    {
-        // The request lasts while the thread that made it is alive.
-        const ES_CONTINUOUS: u32 = 0x8000_0000;
-        const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
-        const ES_DISPLAY_REQUIRED: u32 = 0x0000_0002;
-        let (tx, rx) = mpsc::channel::<()>();
-        thread::spawn(move || {
-            let flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED | if display { ES_DISPLAY_REQUIRED } else { 0 };
-            unsafe {
-                SetThreadExecutionState(flags);
-            }
-            let _ = rx.recv();
-            unsafe {
-                SetThreadExecutionState(ES_CONTINUOUS);
-            }
-        });
-        return Ok(AwakeHold { display, stop: tx });
-    }
+    // -i: no idle sleep; -d: display stays on too. Ends when we kill it (or the app exits: -w).
+    let flags = if display { "-di" } else { "-i" };
+    let child = Command::new("/usr/bin/caffeinate")
+        .args([flags, "-w", &std::process::id().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't keep the computer awake: {e}"))?;
+    Ok(AwakeHold { display, child })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn hold_awake(display: bool) -> Result<AwakeHold, String> {
+    let inhibit = paths::find_program("systemd-inhibit").ok_or("Keeping awake needs systemd-inhibit, which isn't on this computer.")?;
+    let what = if display { "idle:sleep" } else { "sleep" };
+    let child = Command::new(inhibit)
+        .args([&format!("--what={what}"), "--who=LemonLime", "--why=Agents are working", "sleep", "infinity"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Couldn't keep the computer awake: {e}"))?;
+    Ok(AwakeHold { display, child })
+}
+
+#[cfg(windows)]
+fn hold_awake(display: bool) -> Result<AwakeHold, String> {
+    // The request lasts while the thread that made it is alive.
+    const ES_CONTINUOUS: u32 = 0x8000_0000;
+    const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
+    const ES_DISPLAY_REQUIRED: u32 = 0x0000_0002;
+    let (tx, rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let flags = ES_CONTINUOUS | ES_SYSTEM_REQUIRED | if display { ES_DISPLAY_REQUIRED } else { 0 };
+        unsafe {
+            SetThreadExecutionState(flags);
+        }
+        let _ = rx.recv();
+        unsafe {
+            SetThreadExecutionState(ES_CONTINUOUS);
+        }
+    });
+    Ok(AwakeHold { display, stop: tx })
 }
 
 /// Keep the computer from sleeping (on) or let it (off). `display` keeps the screen on too.

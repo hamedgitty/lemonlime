@@ -38,14 +38,37 @@ function normalize(argv) {
   return kept.map((a, i) => (kept[i - 1] === "--mcp-config" ? "<mcp-config>" : a));
 }
 
+/**
+ * The prompt can come on the command line (older recordings) or on stdin (`claude -p` with
+ * no argument, `codex exec ... -`). Put it back in its place in argv so both compare alike.
+ */
+function withPrompt(argv, stdin) {
+  if (stdin === null) return argv;
+  const dash = argv.lastIndexOf("-");
+  if (dash >= 0) return [...argv.slice(0, dash), stdin, ...argv.slice(dash + 1)];
+  const p = argv.indexOf("-p");
+  if (p >= 0 && (p + 1 >= argv.length || argv[p + 1].startsWith("--"))) return [...argv.slice(0, p + 1), stdin, ...argv.slice(p + 1)];
+  return argv;
+}
+
+function readStdin() {
+  try {
+    return readFileSync(0, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 function replayOneShot() {
   const turns = [];
   for (const r of rows) {
-    if (r.dir === "argv") turns.push({ argv: normalize(JSON.parse(r.line).slice(1)), out: [], exit: 0 });
+    if (r.dir === "argv") turns.push({ argv: JSON.parse(r.line).slice(1), stdin: null, out: [], exit: 0 });
+    else if (r.dir === "in") turns.at(-1).stdin = turns.at(-1).stdin === null ? r.line : `${turns.at(-1).stdin}\n${r.line}`;
     else if (r.dir === "out") turns.at(-1).out.push(r.line);
     else if (r.dir === "exit") turns.at(-1).exit = JSON.parse(r.line).code ?? 1;
   }
-  const given = normalize(args);
+  for (const t of turns) t.argv = normalize(withPrompt(t.argv, t.stdin));
+  const given = normalize(withPrompt(args, readStdin()));
   const turn = turns.find(t => JSON.stringify(t.argv) === JSON.stringify(given));
   if (!turn) {
     process.stderr.write(

@@ -20,7 +20,9 @@ All were recorded at autonomy `edits` (the local default), through the real runn
 One JSON object per line. The first is `meta` (agent, CLI, version, date, note). Then:
 
 - `argv`: the command the adapter ran (one per turn for one-shot CLIs)
-- `in`: a line the runner wrote to the agent's stdin (ACP only)
+- `in`: a line the runner wrote to the agent's stdin (ACP messages; for one-shot CLIs, the
+  prompt, which the runner now sends on stdin. Older recordings have it in `argv` instead,
+  and the replay accepts both)
 - `out`: a line the agent printed on stdout
 - `exit`: the exit code or signal
 

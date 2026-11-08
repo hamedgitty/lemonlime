@@ -5,8 +5,8 @@ import { codexMcpFlags } from "../agent-plugins.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
- * Codex CLI: `codex exec --json <prompt>`, then `codex exec resume <thread_id> --json <prompt>`
- * for every later turn so the agent keeps its context.
+ * Codex CLI: `codex exec --json -`, then `codex exec resume --json <thread_id> -` for every
+ * later turn so the agent keeps its context. The prompt goes on stdin.
  */
 export const codexAdapter: AgentAdapter = {
   kind: "codex",
@@ -51,7 +51,8 @@ class CodexSession implements AgentSession {
     flags.push(...codexMcpFlags(this.opts.mcpServers ?? {}));
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
     else flags.push("-c", this.opts.autonomy === "read" ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
-    const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, ctx.prompt] : ["exec", ...flags, ctx.prompt];
+    // "-" reads the prompt from stdin, so it can't be taken for a flag or be too long for argv.
+    const args = this.threadId ? ["exec", "resume", ...flags, this.threadId, "-"] : ["exec", ...flags, "-"];
 
     let failure: string | null = null;
     let processError: unknown;
@@ -61,6 +62,7 @@ class CodexSession implements AgentSession {
       cwd: this.opts.cwd,
       env: this.opts.env,
       signal: ctx.signal,
+      input: ctx.prompt,
       onLine: line => {
         const parsed = parseCodexLine(line);
         if (parsed.threadId) this.threadId = parsed.threadId;

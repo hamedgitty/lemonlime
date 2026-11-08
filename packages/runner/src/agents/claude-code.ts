@@ -8,7 +8,7 @@ import { runLineProcess, tryJson } from "./process.ts";
 import { oversizeNotice, turnFailure, type AgentAdapter, type AgentSession, type SessionOptions, type TurnContext } from "./types.ts";
 
 /**
- * Claude Code in print mode: `claude -p <prompt> --output-format stream-json --verbose`.
+ * Claude Code in print mode: `claude -p --output-format stream-json --verbose`, prompt on stdin.
  * Each turn is one process; `--resume <session_id>` continues the same conversation.
  */
 export const claudeCodeAdapter: AgentAdapter = {
@@ -69,7 +69,8 @@ class ClaudeCodeSession implements AgentSession {
   }
 
   async runTurn(ctx: TurnContext): Promise<void> {
-    const args = ["-p", ctx.prompt, "--output-format", "stream-json", "--verbose"];
+    // The prompt goes on stdin (see runLineProcess), so "-p" here takes no argument.
+    const args = ["-p", "--output-format", "stream-json", "--verbose"];
     if (this.sessionId) args.push("--resume", this.sessionId);
     if (this.opts.model) args.push("--model", this.opts.model);
     // The user's own instructions join the system prompt on every turn.
@@ -102,6 +103,7 @@ class ClaudeCodeSession implements AgentSession {
       cwd: this.opts.cwd,
       env,
       signal: ctx.signal,
+      input: ctx.prompt,
       onLine: line => {
         const parsed = parseClaudeLine(line);
         if (parsed.sessionId) this.sessionId = parsed.sessionId;

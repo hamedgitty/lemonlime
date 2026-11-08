@@ -8,6 +8,11 @@ export interface LineProcessOptions {
   cwd: string;
   env?: Record<string, string>;
   signal: AbortSignal;
+  /**
+   * Written to the CLI's stdin, which is then closed. Prompts go this way rather than on the
+   * command line, where one starting with "-" reads as a flag and long ones hit the OS limit.
+   */
+  input?: string;
   onLine(line: string): void;
   /** A line too long to keep was dropped. */
   onOversize?(bytes: number): void;
@@ -27,12 +32,18 @@ export function runLineProcess(o: LineProcessOptions): Promise<void> {
       child = spawn(o.command, o.args, {
         cwd: o.cwd,
         env: { ...process.env, ...o.env },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [o.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         windowsHide: true,
       });
     } catch (err) {
       reject(new AgentError(`Could not start ${o.command}: ${String(err)}`, "agent_not_found"));
       return;
+    }
+
+    if (o.input !== undefined && child.stdin) {
+      // A CLI that exits without reading all of it closes the pipe; that's not our failure.
+      child.stdin.on("error", () => undefined);
+      child.stdin.end(o.input);
     }
 
     let stderr = "";

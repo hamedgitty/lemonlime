@@ -362,6 +362,9 @@ export class AcpTranslator {
   private text = "";
   /** The whole message so far, sent as one `partial: false` event when it ends. */
   private message = "";
+  /** The same two for the agent's reasoning (`agent_thought_chunk`). */
+  private thoughtText = "";
+  private thought = "";
   /** Tool calls announced without their input yet, keyed by id. */
   private readonly waiting = new Map<string, { name: string; input: unknown }>();
   private readonly started = new Set<string>();
@@ -373,14 +376,25 @@ export class AcpTranslator {
       case "agent_message_chunk": {
         const c = u.content as Json | undefined;
         if (c?.type === "text" && typeof c.text === "string") {
+          out.push(...this.endThought());
           this.text += c.text;
           this.message += c.text;
+        }
+        break;
+      }
+      case "agent_thought_chunk": {
+        const c = u.content as Json | undefined;
+        if (c?.type === "text" && typeof c.text === "string") {
+          out.push(...this.endMessage());
+          this.thoughtText += c.text;
+          this.thought += c.text;
         }
         break;
       }
       case "tool_call":
       case "tool_call_update": {
         const id = String(u.toolCallId);
+        out.push(...this.endThought());
         if (u.sessionUpdate === "tool_call") out.push(...this.endMessage());
         // Agents such as OpenCode announce a call with empty or partial input and fill it in
         // while it is still pending, so hold the call until the tool actually starts.
@@ -419,7 +433,7 @@ export class AcpTranslator {
           out.push({ type: "context_usage", used: Math.min(Math.round(u.used), Math.round(u.size)), window: Math.round(u.size) });
         }
         break;
-      // agent_thought_chunk, user_message_chunk, available_commands_update: not shown.
+      // user_message_chunk, available_commands_update: not shown.
     }
     return out;
   }
@@ -429,20 +443,34 @@ export class AcpTranslator {
     return this.waiting.get(id) ?? this.startedCalls.get(id);
   }
 
-  /** Emit buffered streamed text as one partial agent message chunk. */
+  /** Emit buffered streamed text (reasoning, then message) as partial chunks. */
   flushText(): NewEvent[] {
-    if (!this.text) return [];
-    const text = this.text;
+    const out: NewEvent[] = [];
+    if (this.thoughtText) out.push({ type: "agent_reasoning", text: this.thoughtText, partial: true });
+    if (this.text) out.push({ type: "agent_message", text: this.text, partial: true });
+    this.thoughtText = "";
     this.text = "";
-    return [{ type: "agent_message", text, partial: true }];
+    return out;
   }
 
-  /** End of turn: close the open message and record calls that never got their input. */
+  /** End of turn: close the open reasoning and message, and record calls that never got their input. */
   finish(): NewEvent[] {
-    const out = this.endMessage();
+    const out = [...this.endThought(), ...this.endMessage()];
     for (const [id, call] of this.waiting) out.push({ type: "tool_call", callId: id, name: call.name, input: call.input });
     this.waiting.clear();
     return out;
+  }
+
+  /** Close the open reasoning with one whole copy, as endMessage does for messages. */
+  private endThought(): NewEvent[] {
+    this.thoughtText = "";
+    if (!this.thought.trim()) {
+      this.thought = "";
+      return [];
+    }
+    const text = this.thought;
+    this.thought = "";
+    return [{ type: "agent_reasoning", text, partial: false }];
   }
 
   /** Close the open message with one whole copy; clients replace the streamed chunks with it. */

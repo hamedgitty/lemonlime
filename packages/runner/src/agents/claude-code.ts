@@ -226,6 +226,7 @@ export interface ParsedLine {
 
 type ContentBlock =
   | { type: "text"; text: string }
+  | { type: "thinking"; thinking: string }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean }
   | { type: string; [k: string]: unknown };
@@ -313,6 +314,9 @@ export function parseClaudeLine(line: string, state: ClaudeParseState = newClaud
     for (const block of content) {
       if (block.type === "text" && msg.type === "assistant" && typeof block.text === "string" && block.text.trim()) {
         events.push({ type: "agent_message", text: block.text, partial: false });
+      } else if (block.type === "thinking" && msg.type === "assistant" && typeof block.thinking === "string" && block.thinking.trim()) {
+        // Extended thinking arrives whole, as its own block; redacted thinking has nothing to show.
+        events.push({ type: "agent_reasoning", text: block.thinking.trim(), partial: false });
       } else if (block.type === "tool_use") {
         const b = block as Extract<ContentBlock, { type: "tool_use" }>;
         if (b.name === "ExitPlanMode") {

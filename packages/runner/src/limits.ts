@@ -13,6 +13,7 @@ export const MAX_TOOL_CHARS = 256 * 1024;
 export function capEvent(event: NewEvent): NewEvent {
   switch (event.type) {
     case "agent_message":
+    case "agent_reasoning":
       return event.text.length > MAX_MESSAGE_CHARS ? { ...event, text: cutText(event.text, MAX_MESSAGE_CHARS) } : event;
     case "tool_call":
       return { ...event, input: capValue(event.input) };

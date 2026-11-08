@@ -21,7 +21,7 @@ export interface TeleportExport {
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 
 /** The kinds of event worth carrying over: the conversation and what was done, not live state. */
-const CARRIED = new Set(["user_message", "agent_message", "tool_call", "tool_result", "file_diff", "notice", "error"]);
+const CARRIED = new Set(["user_message", "agent_message", "agent_reasoning", "tool_call", "tool_result", "file_diff", "notice", "error"]);
 
 /**
  * Pack a thread to move it: its own commits (from where it left the base branch) as a git
@@ -46,7 +46,9 @@ export async function exportThread(o: { git: GitWorkspace | null; baseBranch: st
       bundle = readFileSync(file);
     }
   }
-  const history = Buffer.from(JSON.stringify(o.events.filter(e => CARRIED.has(e.type) && !(e.type === "agent_message" && e.partial))));
+  const history = Buffer.from(
+    JSON.stringify(o.events.filter(e => CARRIED.has(e.type) && !((e.type === "agent_message" || e.type === "agent_reasoning") && e.partial))),
+  );
   writeFileSync(join(out, "history.json"), history);
   const checksum = `${sha(bundle)}:${sha(history)}`;
   writeFileSync(join(out, "meta.json"), JSON.stringify({ checksum, baseCommit, headCommit }));

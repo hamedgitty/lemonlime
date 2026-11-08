@@ -29,6 +29,18 @@ export const AgentMessageEvent = z.object({
   partial: z.boolean().default(false),
 });
 
+/**
+ * The agent's own reasoning before it acts or replies ("thinking"), when the agent shares it.
+ * Streams like `agent_message`: chunks (`partial: true`) are joined, and a whole copy
+ * (`partial: false`) that follows them replaces them. Apps show it folded away.
+ */
+export const AgentReasoningEvent = z.object({
+  ...base,
+  type: z.literal("agent_reasoning"),
+  text: z.string(),
+  partial: z.boolean().default(false),
+});
+
 export const ToolCallEvent = z.object({
   ...base,
   type: z.literal("tool_call"),
@@ -43,6 +55,8 @@ export const ToolResultEvent = z.object({
   callId: z.string(),
   output: z.unknown(),
   isError: z.boolean().default(false),
+  /** For shell commands, the command's exit code when the agent reports it. */
+  exitCode: z.number().int().optional(),
 });
 
 export const FileDiffEvent = z.object({
@@ -233,6 +247,7 @@ export const PlanProposalEvent = z.object({
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
+  AgentReasoningEvent,
   ToolCallEvent,
   ToolResultEvent,
   FileDiffEvent,

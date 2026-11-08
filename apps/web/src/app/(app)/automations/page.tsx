@@ -17,8 +17,8 @@ export default async function AutomationsPage() {
       <div>
         <h1 className="text-3xl font-semibold">Automations</h1>
         <p className="mt-2 text-muted">
-          Run a prompt as a new cloud thread on a schedule: a nightly dependency bump, a weekly tidy-up, a morning triage. Each run is its own thread, on its
-          own branch, and a run your plan can't cover right then is skipped, not stopped.
+          Run a prompt as a new cloud thread on a schedule, or when its webhook is called: a nightly dependency bump, a weekly tidy-up, a morning triage. Each
+          run is its own thread, on its own branch, and a run your plan can't cover right then is skipped, not stopped.
         </p>
       </div>
       <AutomationsManager initial={JSON.parse(JSON.stringify(list))} />

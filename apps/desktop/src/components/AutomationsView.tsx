@@ -13,7 +13,6 @@ const PRESETS = [
   { label: "Nightly 3:00", cron: "0 3 * * *" },
   { label: "Mondays 8:00", cron: "0 8 * * 1" },
   { label: "Hourly", cron: "0 * * * *" },
-  { label: "Webhook only", cron: "" },
 ];
 
 /** Ready-made automations. Picking one fills the form; nothing runs until it's saved. */
@@ -453,7 +452,7 @@ function AutomationCard({
           {a.enabled ? (
             a.schedule && <p className="mt-1 text-[13px] text-ink">Next run {when(a.nextRunAt, a.timezone)}</p>
           ) : (
-            <p className="mt-1 text-[13px] text-ink">{a.pausedReason ? `Paused itself: ${a.pausedReason}` : "Paused by you."}</p>
+            <p className="mt-1 text-[13px] text-ink">{a.pausedReason ? `Paused automatically. ${a.pausedReason}` : "Paused by you."}</p>
           )}
         </div>
         <Button size="sm" variant="ghost" onClick={() => onEdit(a)} aria-label={`Edit ${a.name}`}>
@@ -779,9 +778,13 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
         <span className="mb-1 block text-[13.5px] font-medium">When</span>
         <SegmentedControl
           label="Common schedules"
-          value={PRESETS.find(p => p.cron === form.schedule)?.cron ?? "custom"}
-          onChange={v => set({ schedule: v === "custom" ? form.schedule || "0 9 * * *" : v })}
-          options={[...PRESETS.map(p => ({ value: p.cron, label: p.label })), { value: "custom", label: "Custom" }]}
+          value={form.schedule.trim() === "" ? "webhook" : (PRESETS.find(p => p.cron === form.schedule)?.cron ?? "custom")}
+          onChange={v => set({ schedule: v === "webhook" ? "" : v === "custom" ? form.schedule || "0 9 * * *" : v })}
+          options={[
+            ...PRESETS.map(p => ({ value: p.cron, label: p.label })),
+            { value: "custom", label: "Custom" },
+            { value: "webhook", label: "Webhook", hint: "No schedule: it runs only when its webhook is called" },
+          ]}
         />
         {form.schedule.trim() !== "" ? (
           <TextInput
@@ -855,7 +858,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           value={form.checkScript}
           onChange={e => set({ checkScript: e.target.value })}
           spellCheck={false}
-          placeholder="gh issue list --label bug --search 'created:>=$(date -d yesterday +%F)'"
+          placeholder="git log --since=yesterday --oneline"
           className="w-full rounded-lg border border-line-strong bg-paper px-3 py-2 font-mono text-[13px] text-ink outline-none placeholder:text-ink-faint focus:border-leaf"
         />
         <span className="mt-1 block text-[12.5px] text-ink-faint">

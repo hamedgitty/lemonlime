@@ -825,7 +825,7 @@ function ThreadSessionView({
               working={working}
               disabled={composerDisabled}
               tools={
-                <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[13.5px] text-ink-soft">
+                <span className="@container/tools flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[13.5px] text-ink-soft">
                   <Tip label="Attach files (or drop or paste them)">
                     <button
                       type="button"
@@ -851,7 +851,11 @@ function ThreadSessionView({
                     disabled={session.state !== "live"}
                     onChange={permission => session.setOptions({ permission })}
                   />
-                  <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[12.5px]">
+                  {/* In a narrow pane the branch gives way first, so the pickers keep their names. */}
+                  <span
+                    className="inline-flex min-w-0 shrink-[40] items-center gap-1.5 font-mono text-[12.5px] @max-[420px]/tools:hidden"
+                    title={summary.branch}
+                  >
                     <GitBranch aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />
                     <span className="truncate">{summary.branch}</span>
                   </span>

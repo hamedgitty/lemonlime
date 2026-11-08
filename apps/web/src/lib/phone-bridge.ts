@@ -76,8 +76,19 @@ export class BridgeHub<S extends BridgeSocket> {
     this.key = key;
   }
 
+  /** Each socket's frames are handled one at a time, in order (some steps wait on crypto). */
+  private readonly queues = new WeakMap<S, Promise<void>>();
+
   /** A frame from any socket. */
-  async message(s: S, data: string): Promise<void> {
+  message(s: S, data: string): Promise<void> {
+    const next = (this.queues.get(s) ?? Promise.resolve())
+      .then(() => this.handle(s, data))
+      .catch(err => console.error("[lemonlime] phone bridge: a message failed:", err));
+    this.queues.set(s, next);
+    return next;
+  }
+
+  private async handle(s: S, data: string): Promise<void> {
     const p = this.host.peer(s);
     if (!p || p.role === "closed") return;
     const max = p.role === "link" || p.role === "pending-link" ? LINK_FRAME_MAX_BYTES : PHONE_FRAME_MAX_BYTES;

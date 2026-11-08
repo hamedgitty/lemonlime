@@ -95,7 +95,7 @@ export function TokensManager({ initial }: { initial: AccessTokenInfo[] }) {
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium">{t.name}</p>
                 <p className="text-sm text-muted">
-                  Created {timeAgo(t.createdAt, now)} · {t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt, now)}` : "never used"}
+                  Created {timeAgo(t.createdAt, now)}, {t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt, now)}` : "never used"}
                 </p>
               </div>
               <button type="button" className="btn-danger h-8" onClick={() => revoke(t)}>

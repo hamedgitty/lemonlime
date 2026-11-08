@@ -37,7 +37,7 @@ describe("subagents in the sidebar", () => {
   it("counts subagents of a stopped runner as stopped", () => {
     const list = withChildren({}, "t", [child("a", "running"), child("b", "waiting"), child("c", "done")]).t!;
     expect(settled(list, true).map(c => c.state)).toEqual(["running", "waiting", "done"]);
-    expect(settled(list, false).map(c => c.state)).toEqual(["failed", "failed", "done"]);
+    expect(settled(list, false).map(c => c.state)).toEqual(["stopped", "stopped", "done"]);
   });
 
   it("lays out the grid in a steady order with a count for the rest", () => {

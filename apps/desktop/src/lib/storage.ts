@@ -256,7 +256,8 @@ const KEY_CHILDREN = "lemonlime:children";
 export const SidebarChild = z.object({
   id: z.string(),
   title: z.string(),
-  state: z.enum(["done", "running", "waiting", "failed"]),
+  /** "stopped": it was still at work when its thread's runner stopped (shown, never stored as such by the runner). */
+  state: z.enum(["done", "running", "waiting", "failed", "stopped"]),
 });
 export type SidebarChild = z.infer<typeof SidebarChild>;
 

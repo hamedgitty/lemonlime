@@ -156,7 +156,10 @@ export function PermissionPicker({
           aria-label={`Permissions: ${PERMISSION_MODES[value].label}`}
           className={cx(value === "plan" && "bg-lemon-soft text-ink hover:bg-lemon-soft")}
         >
-          {PERMISSION_MODES[value].label}
+          {/* A narrow composer (a split pane) keeps the icon; the name is in the label and tooltip. */}
+          <span className="@max-[420px]/tools:sr-only" title={PERMISSION_MODES[value].label}>
+            {PERMISSION_MODES[value].label}
+          </span>
         </PickerButton>
       }
     >

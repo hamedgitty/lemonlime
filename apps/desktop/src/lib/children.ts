@@ -1,4 +1,4 @@
-import type { ChildState, ChildWork } from "@lemonlime/protocol";
+import type { ChildWork } from "@lemonlime/protocol";
 import type { SidebarChild } from "./storage.ts";
 
 /**
@@ -11,7 +11,9 @@ export const CHILDREN_KEPT = 50;
 /** Cells in a row's progress grid before "+N". */
 export const GRID_CELLS = 12;
 
-export const CHILD_STATE_LABEL: Record<ChildState, string> = { done: "Done", running: "Running", waiting: "Waiting", failed: "Failed" };
+type SidebarState = SidebarChild["state"];
+
+export const CHILD_STATE_LABEL: Record<SidebarState, string> = { done: "Done", running: "Running", waiting: "Waiting", failed: "Failed", stopped: "Stopped" };
 
 /** Store a thread's subagents (dropping the thread once it has none). Same object back when nothing changed. */
 export function withChildren(all: Record<string, SidebarChild[]>, threadId: string, list: readonly ChildWork[]): Record<string, SidebarChild[]> {
@@ -27,24 +29,24 @@ export function withChildren(all: Record<string, SidebarChild[]>, threadId: stri
   return { ...all, [threadId]: next };
 }
 
-/** A thread whose runner isn't running can't have subagents at work: they stopped with it. */
+/** A thread whose runner isn't running can't have subagents at work: they stopped with it (not failed). */
 export function settled(list: readonly SidebarChild[], runnerUp: boolean): SidebarChild[] {
   if (runnerUp) return [...list];
-  return list.map(c => (c.state === "running" || c.state === "waiting" ? { ...c, state: "failed" as const } : c));
+  return list.map(c => (c.state === "running" || c.state === "waiting" ? { ...c, state: "stopped" as const } : c));
 }
 
 /** The grid's cells in a steady order (done, running, waiting, failed), and how many didn't fit. */
 export function gridCells(list: readonly SidebarChild[], max = GRID_CELLS): { cells: SidebarChild[]; more: number } {
-  const order: Record<ChildState, number> = { done: 0, running: 1, waiting: 2, failed: 3 };
+  const order: Record<SidebarState, number> = { done: 0, running: 1, waiting: 2, stopped: 3, failed: 4 };
   const sorted = [...list].sort((a, b) => order[a.state] - order[b.state]);
   return { cells: sorted.slice(0, max), more: Math.max(0, sorted.length - max) };
 }
 
 /** "3 subagents: 1 done, 2 running", for screen readers and the row's tooltip. */
 export function childrenSummary(list: readonly SidebarChild[]): string {
-  const counts = new Map<ChildState, number>();
+  const counts = new Map<SidebarState, number>();
   for (const c of list) counts.set(c.state, (counts.get(c.state) ?? 0) + 1);
-  const parts = (["done", "running", "waiting", "failed"] as const)
+  const parts = (["done", "running", "waiting", "stopped", "failed"] as const)
     .filter(s => counts.get(s))
     .map(s => `${counts.get(s)} ${CHILD_STATE_LABEL[s].toLowerCase()}`);
   return `${list.length} ${list.length === 1 ? "subagent" : "subagents"}: ${parts.join(", ")}`;

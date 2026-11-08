@@ -49,7 +49,7 @@ export function LimitRow({
     return () => clearTimeout(t);
   }, [sent]);
   const agent = AGENT_LABELS[hit.agent];
-  const who = hit.account ? ` on ${hit.account.label}` : "";
+  const who = hit.account ? ` on the ${hit.account.label} account` : "";
   const resets = hit.resetAt ? `It resets at ${whenText(hit.resetAt)}.` : "It didn't say when it resets.";
 
   if (!open) {

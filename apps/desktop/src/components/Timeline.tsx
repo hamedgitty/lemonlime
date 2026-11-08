@@ -825,8 +825,10 @@ function StatusRow({ to, reason, at, workedMs }: { to: ThreadStatus; reason?: st
     <div className="flex items-center gap-3 py-0.5 text-xs text-ink-faint" role="note">
       <span className="h-px flex-1 bg-line" />
       <span className="tabular-nums">
-        {workedMs !== undefined ? `Worked for ${formatDuration(workedMs)}` : (STATUS_SENTENCE[to] ?? STATUS_LABELS[to])}
-        {reason ? ` · ${reason}` : ""} · {clockTime(at)}
+        {workedMs !== undefined
+          ? `Worked for ${formatDuration(workedMs)}, finished at ${clockTime(at)}`
+          : `${STATUS_SENTENCE[to] ?? STATUS_LABELS[to]} at ${clockTime(at)}`}
+        {reason ? `: ${reason}` : ""}
       </span>
       <span className="h-px flex-1 bg-line" />
     </div>

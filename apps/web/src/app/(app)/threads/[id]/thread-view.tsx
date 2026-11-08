@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Bot, Cloud, FolderGit2, GitBranch, Laptop } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { RunnerClient, type ConnectionState } from "@lemonlime/client";
@@ -298,18 +299,25 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
           <h1 className="min-w-0 flex-1 text-2xl font-semibold leading-tight">{thread.title || "Untitled thread"}</h1>
           <StatusPill status={thread.status} />
         </div>
-        <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
-          <span>
+        <ul className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted" aria-label="About this thread">
+          <li className="inline-flex items-center gap-1.5">
+            <Bot aria-hidden className="h-3.5 w-3.5" />
             {AGENT_LABELS[thread.agent.kind] ?? thread.agent.kind}
-            {thread.agent.model ? ` · ${thread.agent.model}` : ""}
-          </span>
-          <span aria-hidden>·</span>
-          <span>{repoName(thread.repo.url)}</span>
-          <span aria-hidden>·</span>
-          <span className="font-mono text-[0.8125rem] text-ink">{thread.branch}</span>
-          <span aria-hidden>·</span>
-          <span>{isCloud ? `Cloud, ${thread.sandboxSize}` : computer ? `On ${computer.name}` : "This computer"}</span>
-        </p>
+            {thread.agent.model ? <span className="text-faint">({thread.agent.model})</span> : null}
+          </li>
+          <li className="inline-flex items-center gap-1.5">
+            <FolderGit2 aria-hidden className="h-3.5 w-3.5" />
+            {repoName(thread.repo.url)}
+          </li>
+          <li className="inline-flex items-center gap-1.5">
+            <GitBranch aria-hidden className="h-3.5 w-3.5" />
+            <span className="font-mono text-[0.8125rem] text-ink">{thread.branch}</span>
+          </li>
+          <li className="inline-flex items-center gap-1.5">
+            {isCloud ? <Cloud aria-hidden className="h-3.5 w-3.5" /> : <Laptop aria-hidden className="h-3.5 w-3.5" />}
+            {isCloud ? `Cloud, ${thread.sandboxSize}` : computer ? `On ${computer.name}` : "This computer"}
+          </li>
+        </ul>
 
         {bridged && (
           <div className="mt-4 flex flex-wrap items-center gap-2">

@@ -181,7 +181,7 @@ export function Home({
                 trigger={
                   <PickerButton icon={<Bot />} aria-label={`Agent: ${AGENT_LABELS[agent]}`}>
                     {AGENT_LABELS[agent]}
-                    {model.trim() ? <span className="font-normal text-ink-faint"> · {model.trim()}</span> : null}
+                    {model.trim() ? <span className="ml-1 font-normal text-ink-faint">({model.trim()})</span> : null}
                   </PickerButton>
                 }
               >
@@ -281,7 +281,7 @@ export function Home({
             trigger={
               <PickerButton icon={place === "local" ? <FolderPlus /> : <GitBranch />} tone={repoPath || repoUrl ? "plain" : "muted"}>
                 {projectLabel}
-                {(place === "local" ? repoPath : repoUrl.trim()) && <span className="font-normal text-ink-faint"> · {baseBranch}</span>}
+                {(place === "local" ? repoPath : repoUrl.trim()) && <span className="ml-1 font-normal text-ink-faint">from {baseBranch}</span>}
               </PickerButton>
             }
             className="w-[360px]"

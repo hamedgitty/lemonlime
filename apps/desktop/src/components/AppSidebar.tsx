@@ -7,6 +7,7 @@ import {
   BookOpen,
   CircleAlert,
   CircleCheck,
+  CircleMinus,
   CircleX,
   Hourglass,
   MailCheck,
@@ -657,9 +658,10 @@ const CELL: Record<SidebarChild["state"], string> = {
   running: "bg-lime ring-1 ring-inset ring-leaf/60",
   waiting: "border-[1.5px] border-amber bg-transparent",
   failed: "bg-danger [clip-path:polygon(50%_0,100%_50%,50%_100%,0_50%)]",
+  stopped: "bg-ink-faint/35",
 };
 
-/** One small cell per subagent: done, running, waiting or failed. */
+/** One small cell per subagent: done, running, waiting, stopped or failed. */
 function ProgressGrid({ kids }: { kids: SidebarChild[] }) {
   const { cells, more } = gridCells(kids);
   return (
@@ -676,6 +678,7 @@ function ChildMark({ state }: { state: SidebarChild["state"] }) {
   if (state === "running") return <Spinner className="size-3 shrink-0 text-leaf" />;
   if (state === "waiting") return <Hourglass aria-hidden="true" className="size-3.5 shrink-0 text-amber" />;
   if (state === "failed") return <CircleX aria-hidden="true" className="size-3.5 shrink-0 text-danger" />;
+  if (state === "stopped") return <CircleMinus aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />;
   return <CircleCheck aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />;
 }
 

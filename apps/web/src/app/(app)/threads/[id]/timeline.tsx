@@ -151,8 +151,10 @@ function Item({
         <div className="flex items-center gap-3 text-xs text-muted" role="status">
           <span className="h-px flex-1 bg-line" />
           <span>
-            {item.workedMs !== undefined ? `Worked for ${formatDuration(item.workedMs)}` : (STATUS_TEXT[item.event.to] ?? item.event.to)}
-            {item.event.reason ? `: ${item.event.reason}` : ""} · {time(item.event.at)}
+            {item.workedMs !== undefined
+              ? `Worked for ${formatDuration(item.workedMs)}, finished at ${time(item.event.at)}`
+              : `${STATUS_TEXT[item.event.to] ?? item.event.to} at ${time(item.event.at)}`}
+            {item.event.reason ? `: ${item.event.reason}` : ""}
           </span>
           <span className="h-px flex-1 bg-line" />
         </div>
@@ -283,7 +285,7 @@ function LimitItem({ item, onWait }: { item: Extract<TimelineItem, { kind: "limi
   const [sent, setSent] = useState(false);
   const e = item.event;
   const agent = AGENT_NAMES[e.agent] ?? e.agent;
-  const who = e.account ? ` on ${e.account.label}` : "";
+  const who = e.account ? ` on the ${e.account.label} account` : "";
   if (!item.open) {
     return (
       <p role="note" className="px-1 text-[13.5px] text-muted">

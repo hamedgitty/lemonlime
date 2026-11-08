@@ -22,8 +22,7 @@ import { Button, ICON_BUTTON, cx, openExternal, rowFill } from "./ui.tsx";
  * (⌘F while the browser has focus) and a new-tab page with recent addresses.
  */
 
-const FIELD =
-  "h-7 min-w-0 flex-1 rounded-lg border border-control bg-paper px-2 font-mono text-[12.5px] text-ink placeholder:text-ink-faint disabled:opacity-50";
+const FIELD = "h-7 min-w-0 flex-1 rounded-lg border border-control bg-paper px-2 font-mono text-[13px] text-ink placeholder:text-ink-faint disabled:opacity-50";
 
 function ToolButton({ label, onClick, disabled, children }: { label: string; onClick: () => void; disabled?: boolean; children: ReactNode }) {
   return (
@@ -262,7 +261,7 @@ function FindInPage({
         spellCheck={false}
         className={cx(FIELD, "font-sans text-[13px]")}
       />
-      <span aria-live="polite" className="min-w-16 px-1 text-right text-[12.5px] text-ink-faint tabular-nums">
+      <span aria-live="polite" className="min-w-16 px-1 text-right text-[13px] text-ink-faint tabular-nums">
         {query ? (count === 0 || missed ? "No matches" : count === 1 ? "1 match" : `${count} matches`) : ""}
       </span>
       <button type="button" aria-label="Previous match (Shift Enter)" disabled={!count} className={ICON_BUTTON} onClick={() => step(true)}>
@@ -339,7 +338,7 @@ export function NewTabPage({
               <button
                 type="button"
                 onClick={onFindFile}
-                className="flex h-9 items-center gap-2.5 rounded-lg border border-control bg-paper px-2.5 text-left text-[13.5px] text-ink-soft transition-colors duration-100 hover:bg-cream-deep hover:text-ink"
+                className="flex h-9 items-center gap-2.5 rounded-lg border border-control bg-paper px-2.5 text-left text-[14px] text-ink-soft transition-colors duration-100 hover:bg-cream-deep hover:text-ink"
               >
                 <FileSearch aria-hidden="true" className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1 truncate">Find a file in this project</span>
@@ -384,12 +383,12 @@ export function NewTabPage({
                     type="button"
                     onClick={() => onBrowser(r)}
                     className={cx(
-                      "flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[13.5px] text-ink transition-colors duration-100",
+                      "flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[14px] text-ink transition-colors duration-100",
                       rowFill(false),
                     )}
                   >
                     <Globe aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
-                    <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{shortAddress(r)}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{shortAddress(r)}</span>
                   </button>
                 </li>
               ))}

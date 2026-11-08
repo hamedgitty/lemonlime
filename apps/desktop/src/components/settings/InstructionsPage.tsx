@@ -58,7 +58,7 @@ function CustomTab({ ctx }: { ctx: SettingsCtx }) {
         }
         className="w-full resize-y rounded-lg border border-line-strong bg-paper px-3 py-2.5 text-[14px] leading-relaxed text-ink placeholder:text-ink-faint focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-leaf"
       />
-      <p className="text-[12.5px] text-ink-faint tabular-nums">
+      <p className="text-[13px] text-ink-faint tabular-nums">
         {text.length.toLocaleString()} of {MAX.toLocaleString()} characters. Applies to threads started after you change it.
       </p>
     </Section>

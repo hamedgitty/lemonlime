@@ -26,11 +26,11 @@ export function DiffView({ path, change, diff, truncated }: { path: string; chan
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
         aria-controls={bodyId}
-        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-cream/60 focus-visible:-outline-offset-2"
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-cream-deep focus-visible:-outline-offset-2"
       >
         <ChevronRight aria-hidden="true" className={cx("size-4 shrink-0 text-ink-faint transition-transform duration-150", open && "rotate-90")} />
         <FileDiff aria-hidden="true" className="size-4 shrink-0 text-leaf" />
-        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink">{path}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">{path}</span>
         <span className={cx("rounded-md px-1.5 py-0.5 text-xs font-medium", CHANGE_STYLE[change])}>{CHANGE_LABEL[change]}</span>
         <span className="text-xs tabular-nums">
           <span className="text-diff-add-strong">+{parsed.additions}</span> <span className="text-diff-del-strong">−{parsed.deletions}</span>

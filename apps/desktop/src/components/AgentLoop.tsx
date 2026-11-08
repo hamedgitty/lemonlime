@@ -199,10 +199,10 @@ export function ContextMeter({
       }
     >
       <p className="text-[14px] font-medium text-ink">Context window</p>
-      <p className="mt-1 text-[13.5px] text-ink-soft tabular-nums">
+      <p className="mt-1 text-[14px] text-ink-soft tabular-nums">
         {number.format(usage.used)} of {number.format(usage.window)} tokens used ({percent}%)
       </p>
-      <p className="mt-2 text-[13.5px] text-ink-soft">
+      <p className="mt-2 text-[14px] text-ink-soft">
         {canCompact
           ? "When it fills up, the agent compacts the conversation on its own. Compacting now keeps a summary and frees room."
           : "When it fills up, the agent makes room on its own."}
@@ -251,7 +251,7 @@ export function TodoCard({ items }: { items: TodoItem[] }) {
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen(o => !o)}
-        className="flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[13.5px] hover:bg-cream/60 focus-visible:-outline-offset-2"
+        className="flex h-10 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[14px] hover:bg-cream-deep focus-visible:-outline-offset-2"
       >
         <ListTodo aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
         <span className="shrink-0 font-medium text-ink tabular-nums">
@@ -263,7 +263,7 @@ export function TodoCard({ items }: { items: TodoItem[] }) {
       {open && (
         <ul id={bodyId} className="scroll-thin max-h-[220px] overflow-y-auto border-t border-line px-3 py-2">
           {sorted.map(t => (
-            <li key={t.i} className="flex items-start gap-2.5 py-1 text-[13.5px]">
+            <li key={t.i} className="flex items-start gap-2.5 py-1 text-[14px]">
               {t.status === "completed" ? (
                 <SquareCheck aria-label="Done" className="mt-0.5 size-4 shrink-0 text-leaf" />
               ) : t.status === "in_progress" ? (
@@ -368,9 +368,9 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
     <label
       key={index}
       className={cx(
-        "flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 text-[13.5px]",
+        "flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2 text-[14px]",
         "has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-leaf",
-        checked ? "border-leaf bg-lime-soft/60" : "border-line hover:bg-cream/60",
+        checked ? "border-leaf bg-lime-soft/60" : "border-line hover:bg-cream-deep",
       )}
     >
       <input
@@ -401,12 +401,12 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
   );
 
   return (
-    <ComposerCard label="The agent's question" className="border-[#f0d95c]">
+    <ComposerCard label="The agent's question" className="border-lemon-line">
       <form ref={formRef} onSubmit={next} onKeyDown={onKeyDown} className="px-4 pt-3 pb-3">
-        <div className="flex items-center gap-2 text-[13.5px]">
+        <div className="flex items-center gap-2 text-[14px]">
           <MessageCircleQuestionMark aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
           <span className="font-medium text-ink">{questions.length > 1 ? "The agent has some questions" : "The agent has a question"}</span>
-          {q.header && <span className="rounded-md bg-cream-deep px-1.5 py-0.5 text-[12.5px] text-ink-soft">{q.header}</span>}
+          {q.header && <span className="rounded-md bg-cream-deep px-1.5 py-0.5 text-[13px] text-ink-soft">{q.header}</span>}
           <span className="flex-1" />
           {questions.length > 1 && (
             <span className="text-ink-faint tabular-nums">
@@ -415,7 +415,7 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
           )}
         </div>
         <fieldset className="mt-2.5" disabled={sent}>
-          <legend className="mb-2 text-[14.5px] text-ink [overflow-wrap:anywhere]">{q.question}</legend>
+          <legend className="mb-2 text-[15px] text-ink [overflow-wrap:anywhere]">{q.question}</legend>
           {multi && <p className="-mt-1 mb-2 text-[13px] text-ink-faint">Pick any that apply.</p>}
           <div role={multi ? "group" : "radiogroup"} aria-label={q.question} className="flex flex-col gap-1.5">
             {q.options.map((o, i) => optionRow(i, o.label, o.description, picked[step]!.includes(o.label)))}
@@ -429,7 +429,7 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
                 onChange={e => setOther(o => set(o, step, e.target.value))}
                 placeholder="Type your answer"
                 aria-label="Your answer"
-                className={cx(inputClass, "h-9 py-1.5 text-[13.5px]")}
+                className={cx(inputClass, "h-9 py-1.5 text-[14px]")}
               />
             )}
           </div>
@@ -459,7 +459,7 @@ export function PlanCard({ plan, open, onImplement }: { plan: string; open: bool
   const [sent, setSent] = useState(false);
   return (
     <div className="rounded-2xl border border-line bg-paper" role="group" aria-label="The agent's plan">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-[13.5px]">
+      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-[14px]">
         <ClipboardList aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
         <span className="font-medium text-ink">Plan</span>
         {open && <span className="text-ink-faint">Waiting for your go-ahead</span>}
@@ -484,7 +484,7 @@ export function PlanCard({ plan, open, onImplement }: { plan: string; open: bool
               Implement plan
             </Button>
           </Tip>
-          <span className="text-[13.5px] text-ink-soft">Or reply to change it.</span>
+          <span className="text-[14px] text-ink-soft">Or reply to change it.</span>
         </div>
       )}
     </div>
@@ -511,7 +511,7 @@ export function QuestionRecord({
   by?: string | undefined;
 }) {
   return (
-    <div className="flex items-start gap-2.5 px-1 text-[13.5px] text-ink-soft" role="note">
+    <div className="flex items-start gap-2.5 px-1 text-[14px] text-ink-soft" role="note">
       <MessageCircleQuestionMark aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
       <div className="min-w-0 [overflow-wrap:anywhere]">
         {state === "waiting" ? (

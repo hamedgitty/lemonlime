@@ -777,7 +777,7 @@ function ThreadSessionView({
                 </h1>
               )}
               <span
-                className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex @max-[640px]/head:hidden"
+                className="hidden min-w-0 items-center gap-1.5 truncate text-[14px] text-ink-faint md:inline-flex @max-[640px]/head:hidden"
                 title={summary.repo}
               >
                 {machine ? (
@@ -794,7 +794,7 @@ function ThreadSessionView({
             {!online ? (
               <span
                 role="status"
-                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-cream-deep px-2.5 text-[12.5px] font-medium text-ink-soft"
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-cream-deep px-2.5 text-[13px] font-medium text-ink-soft"
               >
                 <span aria-hidden="true" className="size-1.5 rounded-full bg-control" />
                 Offline
@@ -817,7 +817,7 @@ function ThreadSessionView({
                     setCopiedUpdate(true);
                     setTimeout(() => setCopiedUpdate(false), 2000);
                   }}
-                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#f0d95c] bg-lemon-soft px-2.5 text-[12.5px] font-medium text-ink hover:bg-lemon"
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-lemon-line bg-lemon-soft px-2.5 text-[13px] font-medium text-ink hover:bg-lemon"
                 >
                   <ArrowUpCircle aria-hidden="true" className="size-3.5" />
                   {copiedUpdate ? "Copied update command" : `Update ${AGENT_LABELS[summary.agent.kind]}`}
@@ -829,7 +829,7 @@ function ThreadSessionView({
         )}
 
         {denial && (
-          <div className="flex items-center gap-3 border-b border-[#f0d95c] bg-lemon-soft px-6 py-2.5 text-[13.5px] text-ink" role="alert">
+          <div className="flex items-center gap-3 border-b border-lemon-line bg-lemon-soft px-6 py-2.5 text-[14px] text-ink" role="alert">
             <p className="min-w-0 flex-1">{denial.reason}</p>
             {denial.actionUrl && (
               <Button size="sm" variant="secondary" onClick={() => void openExternal(denial.actionUrl!)}>
@@ -841,13 +841,13 @@ function ThreadSessionView({
         )}
 
         {moving && (
-          <div role="status" className="flex items-center gap-3 border-b border-line bg-lemon-soft px-6 py-2.5 text-[13.5px] text-ink">
+          <div role="status" className="flex items-center gap-3 border-b border-line bg-lemon-soft px-6 py-2.5 text-[14px] text-ink">
             <Spinner />
             <p className="min-w-0 flex-1">{moving}</p>
           </div>
         )}
         {errorText && (
-          <div className="flex items-center gap-3 border-b border-danger/20 bg-danger-soft px-6 py-2.5 text-[13.5px]" role="alert">
+          <div className="flex items-center gap-3 border-b border-danger/20 bg-danger-soft px-6 py-2.5 text-[14px]" role="alert">
             <p className="min-w-0 flex-1 text-ink">{errorText}</p>
             {(session.state === "error" || session.state === "offline") && (
               <Button size="sm" variant="secondary" onClick={session.restart}>
@@ -990,7 +990,7 @@ function ThreadSessionView({
               working={working}
               disabled={composerDisabled}
               tools={
-                <span className="@container/tools flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[13.5px] text-ink-soft">
+                <span className="@container/tools flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[14px] text-ink-soft">
                   <Tip label="Attach files (or drop or paste them)">
                     <button
                       type="button"
@@ -1017,10 +1017,7 @@ function ThreadSessionView({
                     onChange={permission => session.setOptions({ permission })}
                   />
                   {/* In a narrow pane the branch gives way first, so the pickers keep their names. */}
-                  <span
-                    className="inline-flex min-w-0 shrink-[40] items-center gap-1.5 font-mono text-[12.5px] @max-[420px]/tools:hidden"
-                    title={summary.branch}
-                  >
+                  <span className="inline-flex min-w-0 shrink-[40] items-center gap-1.5 font-mono text-[13px] @max-[420px]/tools:hidden" title={summary.branch}>
                     <GitBranch aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />
                     <span className="truncate">{summary.branch}</span>
                   </span>
@@ -1141,7 +1138,7 @@ function EmptyThread({
   let heading = "Tell the agent what to work on";
   let body = (
     <>
-      Everything it changes lands on <span className="font-mono text-[12.5px] text-ink">{branch}</span>, so your other branches stay as they are.
+      Everything it changes lands on <span className="font-mono text-[13px] text-ink">{branch}</span>, so your other branches stay as they are.
     </>
   );
   if (state === "starting") {
@@ -1160,7 +1157,7 @@ function EmptyThread({
         <GitBranch aria-hidden="true" className="size-5 text-leaf" />
       </div>
       <h2 className="text-lg font-semibold text-ink">{heading}</h2>
-      <p className="mt-1.5 text-[13.5px] text-ink-soft">{body}</p>
+      <p className="mt-1.5 text-[14px] text-ink-soft">{body}</p>
     </div>
   );
 }

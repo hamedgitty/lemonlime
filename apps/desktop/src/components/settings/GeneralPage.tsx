@@ -105,7 +105,7 @@ function GeneralTab({ ctx }: { ctx: SettingsCtx }) {
           />
         </Row>
         {!inDesktopShell() && (
-          <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[13.5px]">
+          <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[14px]">
             You're viewing LemonLime in a browser. Threads on this computer only run inside the desktop app.
           </p>
         )}
@@ -173,7 +173,7 @@ function NotificationsTab({ ctx }: { ctx: SettingsCtx }) {
           Send a test notification
         </Button>
         <SavedNote show={sent} text="Sent" />
-        {permission === "denied" && <p className="text-[13.5px] text-ink-soft">Allow LemonLime in your system's notification settings, then try again.</p>}
+        {permission === "denied" && <p className="text-[14px] text-ink-soft">Allow LemonLime in your system's notification settings, then try again.</p>}
       </div>
     </Section>
   );
@@ -275,7 +275,7 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
           />
         </Row>
         {on && state === "unavailable" && (
-          <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[13.5px]">
+          <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[14px]">
             Your dashboard's server doesn't have phone access set up yet. Whoever runs it can turn it on.
           </p>
         )}
@@ -286,7 +286,7 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
             <QrCode text={dashboard} label={`QR code for ${dashboard}`} />
             <div className="min-w-0 flex-1">
               <p className="text-[14px] font-medium text-ink">On your phone</p>
-              <p className="mt-1 text-[13.5px] text-ink-soft">
+              <p className="mt-1 text-[14px] text-ink-soft">
                 Point your phone's camera at the code, or open <span className="break-all text-ink">{dashboard}</span> in its browser, then sign in with the
                 same account. This computer's threads are listed on the home page.
               </p>
@@ -306,7 +306,7 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
       </Section>
       {on && (
         <Section title="What your phone can do">
-          <p className="text-[13.5px] text-ink-soft">
+          <p className="text-[14px] text-ink-soft">
             Your phone can follow a thread, send messages, answer questions and approve or decline what the agent asks to do. It can't open a terminal, browse
             or download files, use this computer's apps, sign the agent in, or give the agent full access. Those stay here.
           </p>
@@ -344,7 +344,7 @@ function MicrophoneRow({ value, onChange }: { value: string; onChange: (id: stri
       {(unnamed || mics?.length === 0) && (
         <div className="flex flex-wrap items-center gap-3 border-t border-line pt-4">
           {mics?.length === 0 ? (
-            <p className="text-[13.5px] text-ink-soft">No microphone found.</p>
+            <p className="text-[14px] text-ink-soft">No microphone found.</p>
           ) : (
             <Button
               onClick={() => {

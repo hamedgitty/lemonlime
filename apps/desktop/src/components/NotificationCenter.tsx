@@ -46,7 +46,7 @@ export function NotificationCenter({
           {unread > 0 && (
             <span
               aria-hidden="true"
-              className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-lime px-1 text-[10.5px] font-semibold text-ink tabular-nums"
+              className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-lime px-1 text-[12px] font-semibold text-ink tabular-nums"
             >
               {unread > 9 ? "9+" : unread}
             </span>
@@ -55,7 +55,7 @@ export function NotificationCenter({
       }
     >
       <div className="flex items-center gap-2 border-b border-line px-3 py-2">
-        <p className="flex-1 text-[13.5px] font-semibold">Notifications</p>
+        <p className="flex-1 text-[14px] font-semibold">Notifications</p>
         <button
           type="button"
           disabled={!unread}
@@ -66,7 +66,7 @@ export function NotificationCenter({
         </button>
       </div>
       {inbox.items.length === 0 ? (
-        <p className="px-3 py-6 text-center text-[13.5px] text-ink-soft">Nothing yet. When an agent finishes, needs you or fails, it shows up here.</p>
+        <p className="px-3 py-6 text-center text-[14px] text-ink-soft">Nothing yet. When an agent finishes, needs you or fails, it shows up here.</p>
       ) : (
         <ul className="scroll-thin max-h-[420px] overflow-y-auto p-1">
           {inbox.items.map(item => {
@@ -77,10 +77,10 @@ export function NotificationCenter({
                 <Icon aria-hidden="true" className={cx("mt-0.5 size-4 shrink-0", k.className)} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline gap-2">
-                    <span className={cx("min-w-0 flex-1 truncate text-[13.5px]", !item.read && "font-semibold")}>{item.title || "Untitled thread"}</span>
+                    <span className={cx("min-w-0 flex-1 truncate text-[14px]", !item.read && "font-semibold")}>{item.title || "Untitled thread"}</span>
                     <span className="shrink-0 text-[12px] text-ink-faint tabular-nums">{relativeTime(item.at)}</span>
                   </span>
-                  <span className="block truncate text-[12.5px] text-ink-soft">
+                  <span className="block truncate text-[13px] text-ink-soft">
                     {k.label}
                     {item.detail ? `: ${item.detail}` : ""}
                   </span>

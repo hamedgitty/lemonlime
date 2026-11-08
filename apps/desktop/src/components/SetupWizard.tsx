@@ -71,14 +71,14 @@ export function SetupWizard(p: SetupWizardProps) {
                   <span
                     aria-hidden="true"
                     className={cx(
-                      "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[12.5px] font-semibold",
+                      "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold",
                       isDone ? "bg-lime text-ink" : step === s.id ? "bg-ink text-cream" : "border border-line-strong text-ink-soft",
                     )}
                   >
                     {isDone ? <Check className="size-3.5" /> : i + 1}
                   </span>
                   <span className="min-w-0">
-                    <span className="block text-[14.5px] font-medium">{s.title}</span>
+                    <span className="block text-[15px] font-medium">{s.title}</span>
                     {status(s.id) && <span className="block truncate text-[13px] text-ink-soft">{status(s.id)}</span>}
                   </span>
                 </button>
@@ -92,7 +92,7 @@ export function SetupWizard(p: SetupWizardProps) {
 
       <main className="relative flex min-w-0 flex-1 flex-col">
         <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center justify-end px-5">
-          <button type="button" onClick={p.onFinish} className="inline-flex items-center gap-1.5 text-[13.5px] text-ink-soft hover:text-ink">
+          <button type="button" onClick={p.onFinish} className="inline-flex items-center gap-1.5 text-[14px] text-ink-soft hover:text-ink">
             Skip setup
             <X aria-hidden="true" className="size-4" />
           </button>
@@ -226,16 +226,16 @@ function AgentStep({ agents, refreshAgents, prefs, onPrefs, onNext, ready }: Set
                   </Button>
                 )}
                 {a?.installed && a.signedIn !== false && (
-                  <span className="inline-flex h-6 items-center gap-1 rounded-full bg-lime-soft px-2.5 text-[12.5px] font-medium text-leaf-deep">
+                  <span className="inline-flex h-6 items-center gap-1 rounded-full bg-lime-soft px-2.5 text-[13px] font-medium text-leaf-deep">
                     <Check aria-hidden="true" className="size-3.5" />
                     Ready
                   </span>
                 )}
               </div>
               {a?.installed && a.signedIn === false && (
-                <div className="mt-3 flex items-center gap-2 rounded-lg bg-cream px-3 py-2 text-[13.5px]">
+                <div className="mt-3 flex items-center gap-2 rounded-lg bg-cream px-3 py-2 text-[14px]">
                   <span className="flex-1">
-                    In a terminal, run <code className="font-mono text-[12.5px]">{t.signIn}</code>, then check again.
+                    In a terminal, run <code className="font-mono text-[13px]">{t.signIn}</code>, then check again.
                   </span>
                   <Button
                     size="sm"
@@ -259,7 +259,7 @@ function AgentStep({ agents, refreshAgents, prefs, onPrefs, onNext, ready }: Set
         })}
       </ul>
       {error && (
-        <p role="alert" className="mt-3 text-[13.5px] whitespace-pre-wrap text-danger">
+        <p role="alert" className="mt-3 text-[14px] whitespace-pre-wrap text-danger">
           {error}
         </p>
       )}
@@ -267,7 +267,7 @@ function AgentStep({ agents, refreshAgents, prefs, onPrefs, onNext, ready }: Set
         <Button variant="primary" onClick={onNext}>
           {ready ? "Continue" : "Continue anyway"}
         </Button>
-        <span className="text-[13.5px] text-ink-soft">Other ACP agents can be added in Settings → Agents.</span>
+        <span className="text-[14px] text-ink-soft">Other ACP agents can be added in Settings → Agents.</span>
       </div>
     </>
   );

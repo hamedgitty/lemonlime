@@ -183,14 +183,14 @@ function PreviewFrame({
 
   if (error) {
     return (
-      <p role="alert" className="m-3 text-[13.5px] text-danger">
+      <p role="alert" className="m-3 text-[14px] text-danger">
         {error}
       </p>
     );
   }
   if (!local) {
     return (
-      <p role="status" className="m-3 text-[13.5px] text-ink-soft">
+      <p role="status" className="m-3 text-[14px] text-ink-soft">
         Opening {preview.name}…
       </p>
     );

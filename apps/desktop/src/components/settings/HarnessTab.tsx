@@ -89,7 +89,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
       <div className="flex items-end gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="font-sans text-[15px] font-semibold tracking-normal">Harness</h3>
-          <p className="mt-0.5 text-[13.5px] text-ink-soft">
+          <p className="mt-0.5 text-[14px] text-ink-soft">
             Your agents: versions, sign-in, updates and the default. Drag to set the order of the model picker's tabs.
           </p>
         </div>
@@ -103,7 +103,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
         <table className="w-full table-fixed border-collapse text-[14px]">
           <caption className="sr-only">Agents on this computer</caption>
           <thead>
-            <tr className="border-b border-line text-left text-[12.5px] font-medium text-ink-faint">
+            <tr className="border-b border-line text-left text-[13px] font-medium text-ink-faint">
               <th scope="col" className="w-7">
                 <span className="sr-only">Order</span>
               </th>
@@ -133,7 +133,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
           <tbody>
             {installed.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-4 text-center text-[13.5px] text-ink-soft">
+                <td colSpan={7} className="py-4 text-center text-[14px] text-ink-soft">
                   {ctx.agents === null ? "Looking for agents…" : "No agents installed yet. Install one below."}
                 </td>
               </tr>
@@ -231,7 +231,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
           {notInstalled.length > 0 && (
             <tbody>
               <tr>
-                <th colSpan={7} scope="rowgroup" className="pt-4 pb-1 pl-1 text-left text-[12.5px] font-medium text-ink-faint">
+                <th colSpan={7} scope="rowgroup" className="pt-4 pb-1 pl-1 text-left text-[13px] font-medium text-ink-faint">
                   Not installed
                 </th>
               </tr>
@@ -276,7 +276,7 @@ export function HarnessTab({ ctx, onTab }: { ctx: SettingsCtx; onTab: (req: Agen
       <div className="mt-2">
         <ErrorText>{error}</ErrorText>
       </div>
-      <p className="mt-3 text-[13.5px] text-ink-soft">
+      <p className="mt-3 text-[14px] text-ink-soft">
         Installing and updating use npm, which comes with Node.js. LemonLime is tested with{" "}
         {installed
           .concat(notInstalled)
@@ -304,9 +304,7 @@ function AgentCell({ row }: { row: HarnessRow }) {
         <span className="min-w-[5ch] shrink truncate font-medium text-ink" title={AGENT_LABELS[row.kind]}>
           {AGENT_LABELS[row.kind]}
         </span>
-        {row.version && (
-          <span className="min-w-0 shrink-[2] truncate text-[12.5px] text-ink-faint tabular-nums @max-[600px]/harness:hidden">{row.version}</span>
-        )}
+        {row.version && <span className="min-w-0 shrink-[2] truncate text-[13px] text-ink-faint tabular-nums @max-[600px]/harness:hidden">{row.version}</span>}
         {(row.isDefault || row.hidden) && (
           <span className="flex shrink-0 gap-1.5 @max-[540px]/harness:hidden">
             {row.isDefault && <Pill tone="good">Default</Pill>}
@@ -391,7 +389,7 @@ function SignInCommand({ kind, unknown = false }: { kind: HarnessRow["kind"]; un
         )
       }
     >
-      <p className="text-[13.5px] text-ink-soft">
+      <p className="text-[14px] text-ink-soft">
         {unknown
           ? `${AGENT_LABELS[kind]} is installed. LemonLime can't tell whether it's signed in; it may work without (OpenCode's free models do). To sign in, run this in a terminal:`
           : "Run this in a terminal:"}

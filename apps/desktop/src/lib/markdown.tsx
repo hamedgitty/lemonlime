@@ -264,7 +264,7 @@ export function CopyButton({ text, label = "Copy", className, showLabel = false 
           timer.current = setTimeout(() => setCopied(false), 1500);
         });
       }}
-      className={`inline-flex h-7 items-center gap-1 rounded-md border border-line bg-paper px-1.5 text-[12.5px] text-ink-soft hover:text-ink ${className ?? ""}`}
+      className={`inline-flex h-7 items-center gap-1 rounded-md border border-line bg-paper px-1.5 text-[13px] text-ink-soft hover:text-ink ${className ?? ""}`}
     >
       {copied ? <Check aria-hidden="true" className="size-3.5 text-leaf" /> : <Copy aria-hidden="true" className="size-3.5" />}
       {showLabel && <span>{copied ? "Copied" : "Copy"}</span>}

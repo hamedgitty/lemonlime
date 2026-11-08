@@ -354,7 +354,7 @@ export const Composer = forwardRef<
           )}
         />
         {offered && (
-          <span id={hintId} className="pointer-events-none absolute top-3.5 right-3 inline-flex items-center gap-1 text-[12.5px] text-ink-faint">
+          <span id={hintId} className="pointer-events-none absolute top-3.5 right-3 inline-flex items-center gap-1 text-[13px] text-ink-faint">
             <span className="sr-only">Suggested reply: {offered}.</span>
             <Kbd>Tab</Kbd>
             <span aria-hidden="true">to use</span>
@@ -484,13 +484,13 @@ function DictationBar({ interim, onStop }: { interim: string; onStop: () => void
       ) : (
         <Mic aria-hidden="true" className="size-4 shrink-0 text-leaf" />
       )}
-      <p role="status" className="min-w-0 flex-1 truncate text-[13.5px] text-ink-soft">
+      <p role="status" className="min-w-0 flex-1 truncate text-[14px] text-ink-soft">
         {interim || "Listening…"}
       </p>
       <button
         type="button"
         onClick={onStop}
-        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[13.5px] font-medium text-ink hover:bg-cream-hover"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[14px] font-medium text-ink hover:bg-cream-hover"
       >
         <Square aria-hidden="true" className="size-3 fill-current" />
         Stop
@@ -542,10 +542,10 @@ function SuggestionMenu({
         : "No matching commands. The agent lists its own after its first reply.";
   return (
     <div className="absolute z-40 overflow-hidden rounded-[10px] border border-line bg-paper text-[14px] text-ink shadow-pop" style={style}>
-      <p className="border-b border-line px-3 py-1.5 text-[12.5px] font-medium text-ink-faint">{kind === "file" ? "Files" : "Commands"}</p>
+      <p className="border-b border-line px-3 py-1.5 text-[13px] font-medium text-ink-faint">{kind === "file" ? "Files" : "Commands"}</p>
       <div ref={listRef} id={id} role="listbox" aria-label={kind === "file" ? "Files" : "Commands"} className="scroll-thin max-h-[280px] overflow-y-auto p-1">
         {options.length === 0 ? (
-          <p className="px-2.5 py-2 text-[13.5px] text-ink-soft">{empty}</p>
+          <p className="px-2.5 py-2 text-[14px] text-ink-soft">{empty}</p>
         ) : (
           options.map((o, i) => {
             const selected = i === active;
@@ -579,9 +579,9 @@ function CommandRow({ command, match }: { command: AgentCommand; match: FuzzyMat
       <span className="shrink-0 font-mono text-[13px]">
         /<Highlighted text={command.name} positions={match.positions} />
       </span>
-      {command.hint && <span className="shrink-0 font-mono text-[12.5px] text-ink-faint">{command.hint}</span>}
+      {command.hint && <span className="shrink-0 font-mono text-[13px] text-ink-faint">{command.hint}</span>}
       <span className="min-w-0 flex-1 truncate text-[13px] text-ink-soft">{command.description}</span>
-      {tag && <span className="shrink-0 text-[12.5px] text-ink-faint">{tag}</span>}
+      {tag && <span className="shrink-0 text-[13px] text-ink-faint">{tag}</span>}
     </>
   );
 }

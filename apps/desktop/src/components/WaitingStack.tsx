@@ -35,12 +35,12 @@ export function ApprovalCard({ item, onApprove, more }: { item: ApprovalItem; on
       aria-label="The agent is asking for permission"
       className="relative mb-2 overflow-hidden rounded-xl border border-line bg-paper py-3 pr-3 pl-4 shadow-panel before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-lemon-2"
     >
-      <div className="flex items-center gap-2 text-[13.5px]">
+      <div className="flex items-center gap-2 text-[14px]">
         <ShieldQuestionMark aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
         <p className="min-w-0 flex-1 font-medium text-ink">{isCommand ? "The agent wants to run this command" : `The agent wants to use ${item.tool}`}</p>
         {more > 0 && <span className="shrink-0 text-[13px] text-ink-faint tabular-nums">{more} more waiting</span>}
       </div>
-      <pre className="scroll-thin mt-2 max-h-32 overflow-auto rounded-lg bg-cream px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
+      <pre className="scroll-thin mt-2 max-h-32 overflow-auto rounded-lg bg-cream px-3 py-2 font-mono text-[13px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
         {item.summary}
       </pre>
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
@@ -70,7 +70,7 @@ function StackCard({ label, icon, title, summary, children }: { label: string; i
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen(o => !o)}
-        className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[13.5px] hover:bg-cream/60 focus-visible:-outline-offset-2"
+        className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[14px] hover:bg-cream-deep focus-visible:-outline-offset-2"
       >
         <span className="inline-flex size-4 shrink-0 items-center justify-center text-ink-soft">{icon}</span>
         <span className="shrink-0 font-medium text-ink">{title}</span>
@@ -152,7 +152,7 @@ function QueuedRow({ q, onEdit }: { q: QueuedMessage; onEdit: EditQueuedFn }) {
             }
           }}
           rows={Math.min(6, Math.max(2, draft.split("\n").length))}
-          className="w-full resize-none rounded-md bg-transparent px-2 py-1 text-[13.5px] text-ink outline-none"
+          className="w-full resize-none rounded-md bg-transparent px-2 py-1 text-[14px] text-ink outline-none"
         />
         <div className="flex justify-end gap-1.5">
           <Button
@@ -172,8 +172,8 @@ function QueuedRow({ q, onEdit }: { q: QueuedMessage; onEdit: EditQueuedFn }) {
       </div>
     );
   return (
-    <div className="group/queued flex h-8 items-center gap-2.5 rounded-lg px-2 text-[13.5px]">
-      <span className="w-8 shrink-0 text-[12.5px] text-ink-faint tabular-nums">{q.count > 1 ? ordinal(q.index + 1) : ""}</span>
+    <div className="group/queued flex h-8 items-center gap-2.5 rounded-lg px-2 text-[14px]">
+      <span className="w-8 shrink-0 text-[13px] text-ink-faint tabular-nums">{q.count > 1 ? ordinal(q.index + 1) : ""}</span>
       <span className="min-w-0 flex-1 truncate text-ink" title={q.text}>
         {q.text}
       </span>
@@ -181,7 +181,7 @@ function QueuedRow({ q, onEdit }: { q: QueuedMessage; onEdit: EditQueuedFn }) {
         <button
           type="button"
           onClick={() => onEdit(id, { action: "send_now" })}
-          className="inline-flex h-6 items-center rounded-md px-2 text-[12.5px] font-medium text-ink-soft hover:bg-cream-deep hover:text-ink"
+          className="inline-flex h-6 items-center rounded-md px-2 text-[13px] font-medium text-ink-soft hover:bg-cream-deep hover:text-ink"
         >
           Send now
         </button>
@@ -191,7 +191,7 @@ function QueuedRow({ q, onEdit }: { q: QueuedMessage; onEdit: EditQueuedFn }) {
             setDraft(q.text);
             setEditing(true);
           }}
-          className="inline-flex h-6 items-center rounded-md px-2 text-[12.5px] font-medium text-ink-soft hover:bg-cream-deep hover:text-ink"
+          className="inline-flex h-6 items-center rounded-md px-2 text-[13px] font-medium text-ink-soft hover:bg-cream-deep hover:text-ink"
         >
           Edit
         </button>
@@ -228,7 +228,7 @@ export function EditingCard({ draft, onReplace, onCancel }: { draft: EditDraft; 
   return (
     <section
       aria-label="Editing a message"
-      className="mb-2 flex h-10 items-center gap-2.5 rounded-xl border border-line bg-paper px-3 text-[13.5px] shadow-panel"
+      className="mb-2 flex h-10 items-center gap-2.5 rounded-xl border border-line bg-paper px-3 text-[14px] shadow-panel"
     >
       <Pencil aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
       <span className="shrink-0 font-medium text-ink">Editing your message</span>

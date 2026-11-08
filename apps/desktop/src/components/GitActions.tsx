@@ -211,7 +211,7 @@ export function GitActionsButton({ git, mode }: { git: GitState; mode: "local" |
               {mode === "local" && s && s.gh !== "ready" && !pr && (
                 <>
                   <MenuSeparator />
-                  <p className="px-2.5 py-1.5 text-[12.5px] leading-snug text-ink-faint">
+                  <p className="px-2.5 py-1.5 text-[13px] leading-snug text-ink-faint">
                     {s.gh === "signed_out"
                       ? "Sign the GitHub CLI in (gh auth login) to open pull requests from here. Until then GitHub opens in your browser."
                       : "Without the GitHub CLI, GitHub opens in your browser to finish the pull request."}
@@ -235,7 +235,7 @@ export function GitStrip({ git, onOpenChanges }: { git: GitState; onOpenChanges:
   const pr = git.pullRequest;
   if (!s && !pr) return null;
   const chip =
-    "inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-paper px-2.5 text-[12.5px] font-medium text-ink-soft hover:border-line-strong hover:text-ink";
+    "inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-paper px-2.5 text-[13px] font-medium text-ink-soft hover:border-line-strong hover:text-ink";
   return (
     <div className="mb-2 flex flex-wrap items-center gap-1.5">
       {s && (s.uncommittedFiles > 0 || s.committedFiles > 0) && (
@@ -281,7 +281,7 @@ export function PullRequestPill({ pr }: { pr: PullRequestView }) {
       onClick={() => void openExternal(pr.url)}
       title={pr.url}
       className={cx(
-        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-medium whitespace-nowrap hover:brightness-[0.98]",
+        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-medium whitespace-nowrap hover:brightness-[0.98]",
         style?.cls ?? "border-line bg-paper text-ink-soft",
       )}
     >

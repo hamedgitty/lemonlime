@@ -544,7 +544,7 @@ export function AppSidebar(p: AppSidebarProps) {
               type="button"
               onClick={() => p.onSettings("agents")}
               aria-label="Agent updates"
-              className="mr-1 inline-flex h-[26px] items-center gap-1.5 rounded-full border border-line bg-cream px-2 text-[12.5px] font-medium text-ink-soft hover:border-line-strong"
+              className="mr-1 inline-flex h-[26px] items-center gap-1.5 rounded-full border border-line bg-cream px-2 text-[13px] font-medium text-ink-soft hover:border-line-strong"
             >
               <Download aria-hidden="true" className="size-3.5 text-leaf" />
               {p.agentUpdates.length}
@@ -563,7 +563,7 @@ export function AppSidebar(p: AppSidebarProps) {
           <button
             type="button"
             onClick={() => p.onSettings("account")}
-            className="inline-flex h-[26px] items-center gap-1.5 rounded-full border border-line bg-cream px-2.5 text-[12.5px] font-medium text-ink-soft hover:border-line-strong"
+            className="inline-flex h-[26px] items-center gap-1.5 rounded-full border border-line bg-cream px-2.5 text-[13px] font-medium text-ink-soft hover:border-line-strong"
           >
             <span aria-hidden="true" className={cx("size-1.5 rounded-full", p.cloudConfigured ? (p.cloudError ? "bg-danger" : "bg-lime-2") : "bg-control")} />
             {p.cloudConfigured ? "Cloud" : "Local only"}
@@ -953,7 +953,7 @@ function ProgressGrid({ kids }: { kids: SidebarChild[] }) {
       {cells.map(c => (
         <span key={c.id} role="img" aria-label={`${c.title}: ${CHILD_STATE_LABEL[c.state]}`} className={cx("size-[7px] rounded-[2px]", CELL[c.state])} />
       ))}
-      {more > 0 && <span className="text-[11px] leading-none text-ink-faint tabular-nums">+{more}</span>}
+      {more > 0 && <span className="text-[12px] leading-none text-ink-faint tabular-nums">+{more}</span>}
     </span>
   );
 }
@@ -1015,7 +1015,7 @@ function CustomizeNav({ prefs, onPrefs, onDone }: { prefs: UiPrefs; onPrefs: (p:
     <div className="rounded-lg border border-line bg-cream/60 p-1">
       <div className="flex h-8 items-center px-2">
         <span className="flex-1 text-[13px] text-ink-soft">Drag to reorder</span>
-        <button type="button" onClick={onDone} className="text-[13.5px] font-semibold text-ink hover:text-leaf">
+        <button type="button" onClick={onDone} className="text-[14px] font-semibold text-ink hover:text-leaf">
           Done
         </button>
       </div>
@@ -1066,7 +1066,7 @@ function CustomizeNav({ prefs, onPrefs, onDone }: { prefs: UiPrefs; onPrefs: (p:
           );
         })}
       </ul>
-      <p className="px-2 pt-1 pb-1.5 text-[12.5px] text-ink-faint">
+      <p className="px-2 pt-1 pb-1.5 text-[13px] text-ink-faint">
         Search is always on <Kbd>⌘ K</Kbd>
       </p>
     </div>

@@ -236,7 +236,7 @@ export function PaneHeader({
     >
       {glyph}
       <h2
-        className={cx("ml-1 min-w-0 flex-1 truncate font-sans text-[13.5px] font-semibold tracking-normal", active ? "text-ink" : "text-ink-soft")}
+        className={cx("ml-1 min-w-0 flex-1 truncate font-sans text-[14px] font-semibold tracking-normal", active ? "text-ink" : "text-ink-soft")}
         title={title}
       >
         {title}

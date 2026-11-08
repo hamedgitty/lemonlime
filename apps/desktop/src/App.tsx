@@ -1751,7 +1751,7 @@ export function App() {
                   usage.level === "blocked"
                     ? "border-danger/25 bg-danger-soft"
                     : usage.level === "warning"
-                      ? "border-[#f0d95c] bg-lemon-soft"
+                      ? "border-lemon-line bg-lemon-soft"
                       : "border-line bg-cream-deep",
                 )}
               >

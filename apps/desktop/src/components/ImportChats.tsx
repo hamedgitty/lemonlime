@@ -174,7 +174,7 @@ export function ImportChats({
                 />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[14px]">{s.title || "Untitled chat"}</span>
-                  <span className="block truncate text-[12.5px] text-ink-soft">
+                  <span className="block truncate text-[13px] text-ink-soft">
                     {HISTORY_AGENT_NAMES[s.agent]}, {s.cwd ? repoName(s.cwd) : "no folder"}, {s.messageCount}
                     {s.partial ? "+" : ""} messages, {relativeTime(s.updatedAt)}
                   </span>
@@ -190,7 +190,7 @@ export function ImportChats({
           {busy && <Spinner />}
           Import {picked.length} {picked.length === 1 ? "chat" : "chats"}
         </Button>
-        {byAgent.length > 1 && <span className="text-[13.5px] text-ink-soft">{byAgent.map(x => `${x.n} ${HISTORY_AGENT_NAMES[x.a]}`).join(", ")}</span>}
+        {byAgent.length > 1 && <span className="text-[14px] text-ink-soft">{byAgent.map(x => `${x.n} ${HISTORY_AGENT_NAMES[x.a]}`).join(", ")}</span>}
         {onDone && (
           <Button variant="ghost" onClick={onDone}>
             {result ? "Continue" : "Start empty"}
@@ -198,7 +198,7 @@ export function ImportChats({
         )}
       </div>
       {result && (
-        <p role="status" className="text-[13.5px] text-leaf">
+        <p role="status" className="text-[14px] text-leaf">
           Imported {result.imported} {result.imported === 1 ? "chat" : "chats"}. They're in the sidebar, ready to carry on.
           {result.skipped.length > 0 && (
             <span className="block text-ink-soft">
@@ -208,17 +208,17 @@ export function ImportChats({
         </p>
       )}
       {error && (
-        <p role="alert" className="text-[13.5px] text-danger">
+        <p role="alert" className="text-[14px] text-danger">
           {error}
         </p>
       )}
-      <p className="text-[12.5px] text-ink-faint">
+      <p className="text-[13px] text-ink-faint">
         Your agents' own history is only read, never changed. Each chat becomes a thread on this computer, on a fresh branch.
       </p>
 
       {folders.length > 0 && (
         <section>
-          <h3 className="mb-2 font-sans text-[13.5px] font-semibold tracking-normal text-ink-soft">Or add a recent folder</h3>
+          <h3 className="mb-2 font-sans text-[14px] font-semibold tracking-normal text-ink-soft">Or add a recent folder</h3>
           <ul className="flex flex-col gap-1.5">
             {folders.map(f => (
               <li key={f.path} className="flex items-center gap-3 rounded-lg border border-line bg-paper px-3 py-2">
@@ -251,7 +251,7 @@ export function AgentScans({ runnerPath }: { runnerPath: string }) {
   if (!inDesktopShell()) return <p className="text-[14px] text-ink-soft">Scans work in the desktop app.</p>;
   if (error)
     return (
-      <p role="alert" className="text-[13.5px] text-danger">
+      <p role="alert" className="text-[14px] text-danger">
         {error}
       </p>
     );
@@ -279,7 +279,7 @@ export function AgentScans({ runnerPath }: { runnerPath: string }) {
               </div>
               {info?.found && <Heatmap perDay={info.perDay} />}
               {info?.found && info.folders.length > 0 && (
-                <p className="mt-2 truncate text-[12.5px] text-ink-soft">
+                <p className="mt-2 truncate text-[13px] text-ink-soft">
                   Most used:{" "}
                   {[...info.folders]
                     .sort((x, y) => y.sessions - x.sessions)

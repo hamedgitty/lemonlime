@@ -789,7 +789,7 @@ function ApprovalRecord({ item }: { item: Extract<TimelineItem, { kind: "approva
 
 function NoticeRow({ message }: { message: string }) {
   return (
-    <div className="flex gap-2.5 rounded-xl border border-line bg-cream-deep/60 px-4 py-2.5 text-[13.5px] text-ink-soft" role="status">
+    <div className="flex gap-2.5 rounded-xl border border-line bg-cream-deep/60 px-4 py-2.5 text-[14px] text-ink-soft" role="status">
       <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
       <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
     </div>
@@ -1047,7 +1047,7 @@ function ErrorRow({ message, code, fatal }: { message: string; code?: string | u
       <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-danger" />
       <div className="min-w-0">
         <p className="font-medium text-danger">{fatal ? "The thread stopped because of an error" : "Something went wrong"}</p>
-        <p className="mt-0.5 text-[13.5px] whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
+        <p className="mt-0.5 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
         {code && <p className="mt-1 font-mono text-xs text-ink-soft">{code}</p>}
       </div>
     </div>

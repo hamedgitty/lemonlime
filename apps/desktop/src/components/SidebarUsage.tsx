@@ -42,7 +42,7 @@ export function SidebarUsageCard({ cloud, agents, onOpenAccounts }: { cloud?: Cl
           type="button"
           onClick={onOpenAccounts}
           aria-label="Plan usage. Open agent accounts"
-          className="flex w-full flex-col gap-2 rounded-xl px-3 py-2.5 text-left transition-colors duration-100 hover:bg-cream/60"
+          className="flex w-full flex-col gap-2 rounded-xl px-3 py-2.5 text-left transition-colors duration-100 hover:bg-cream-deep"
         >
           {agents.map(row => (
             <div key={row.agent} className="flex min-w-0 flex-col gap-1">

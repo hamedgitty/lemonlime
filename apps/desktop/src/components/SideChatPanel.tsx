@@ -57,7 +57,7 @@ export function SideChatPanel({ side, connected }: { side: ThreadSession["side"]
   return (
     <div role="tabpanel" aria-label="Side chat" className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-11 items-center gap-1 border-b border-line px-3 py-1.5">
-        <p className="min-w-0 flex-1 truncate text-[13.5px] text-ink-soft">{chat ? chat.title : "Ask about this thread without interrupting it."}</p>
+        <p className="min-w-0 flex-1 truncate text-[14px] text-ink-soft">{chat ? chat.title : "Ask about this thread without interrupting it."}</p>
         {chat && (
           <>
             <Tip label={chat.pinned ? "Unpin: discard when closed" : "Pin: keep this chat"} side="bottom">
@@ -111,7 +111,7 @@ export function SideChatPanel({ side, connected }: { side: ThreadSession["side"]
           </p>
           {pinned.length > 0 && (
             <>
-              <p className="mt-5 mb-1.5 text-[12.5px] font-medium text-ink-faint">Pinned</p>
+              <p className="mt-5 mb-1.5 text-[13px] font-medium text-ink-faint">Pinned</p>
               <ul className="flex flex-col gap-px">
                 {pinned.map(c => (
                   <li key={c.id}>

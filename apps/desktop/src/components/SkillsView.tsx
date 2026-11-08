@@ -168,7 +168,7 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
           <p
             role={error ? "alert" : "status"}
             className={cx(
-              "flex items-start gap-2 rounded-lg border px-3 py-2 text-[13.5px] text-ink",
+              "flex items-start gap-2 rounded-lg border px-3 py-2 text-[14px] text-ink",
               error ? "border-danger/20 bg-danger-soft" : "border-line bg-lime-soft",
             )}
           >
@@ -228,7 +228,7 @@ function SearchBox({ value, onChange, label }: { value: string; onChange: (v: st
         onChange={e => onChange(e.target.value)}
         placeholder={label}
         aria-label={label}
-        className="h-8 w-full pl-8 text-[13.5px]"
+        className="h-8 w-full pl-8 text-[14px]"
       />
     </label>
   );
@@ -371,7 +371,7 @@ function SkillPreview({ skill, onFork, onRemove }: { skill: Item; onFork: () => 
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-[22px] font-semibold text-balance break-words">{skill.name}</h2>
-          <p className="mt-0.5 text-[13.5px] text-pretty text-ink-soft">{SOURCE_NOTES[skill.source]}</p>
+          <p className="mt-0.5 text-[14px] text-pretty text-ink-soft">{SOURCE_NOTES[skill.source]}</p>
         </div>
         <div className="flex shrink-0 gap-2">
           {detail && (
@@ -394,14 +394,14 @@ function SkillPreview({ skill, onFork, onRemove }: { skill: Item; onFork: () => 
         </div>
       </div>
       {detail && <p className="mt-2 truncate font-mono text-[12px] text-ink-faint">{detail.path}</p>}
-      {error && <p className="mt-4 text-[13.5px] text-danger">{error}</p>}
+      {error && <p className="mt-4 text-[14px] text-danger">{error}</p>}
       {!detail && !error && (
         <div className="mt-6">
           <SkeletonText label="Loading the skill" />
         </div>
       )}
       {fm && fm.fields.length > 0 && (
-        <dl className="mt-5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-xl border border-line bg-paper px-4 py-3 text-[13.5px]">
+        <dl className="mt-5 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 rounded-xl border border-line bg-paper px-4 py-3 text-[14px]">
           {fm.fields.map(([k, v]) => (
             <div key={k} className="contents">
               <dt className="text-ink-faint">{k}</dt>
@@ -418,7 +418,7 @@ function SkillPreview({ skill, onFork, onRemove }: { skill: Item; onFork: () => 
       {detail && detail.files.length > 0 && (
         <section className="mt-8">
           <h3 className="font-sans text-[14px] font-semibold tracking-normal">Also in this skill</h3>
-          <ul className="mt-2 flex flex-col gap-1 font-mono text-[12.5px] text-ink-soft">
+          <ul className="mt-2 flex flex-col gap-1 font-mono text-[13px] text-ink-soft">
             {detail.files.map(f => (
               <li key={f}>{f}</li>
             ))}
@@ -570,7 +570,7 @@ function CatalogPreview({
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-[22px] font-semibold text-balance break-words">{skill.name}</h2>
-          <p className="mt-0.5 text-[13.5px] text-ink-soft">
+          <p className="mt-0.5 text-[14px] text-ink-soft">
             {others > 0 ? `SKILL.md and ${others} more ${others === 1 ? "file" : "files"}, ${sizeLabel(skill.size)}` : `One file, ${sizeLabel(skill.size)}`}
             {skill.license && <span className="text-ink-faint">. Licence: {skill.license}</span>}
           </p>
@@ -598,17 +598,17 @@ function CatalogPreview({
         </div>
       </div>
       {busy && (
-        <p role="status" className="mt-3 text-[13.5px] text-ink-soft tabular-nums">
+        <p role="status" className="mt-3 text-[14px] text-ink-soft tabular-nums">
           Downloading {busy.done} of {busy.total} {busy.total === 1 ? "file" : "files"}…
         </p>
       )}
-      {!shell && <p className="mt-3 text-[13.5px] text-ink-faint">Skills install in the LemonLime desktop app.</p>}
+      {!shell && <p className="mt-3 text-[14px] text-ink-faint">Skills install in the LemonLime desktop app.</p>}
       {installError && (
-        <p role="alert" className="mt-3 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px] text-ink">
+        <p role="alert" className="mt-3 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[14px] text-ink">
           {installError}
         </p>
       )}
-      {skill.description && <p className="mt-5 text-[14.5px] text-pretty text-ink">{skill.description}</p>}
+      {skill.description && <p className="mt-5 text-[15px] text-pretty text-ink">{skill.description}</p>}
       <div className="mt-6">
         {error ? (
           <RetryCard title="Its SKILL.md didn't load" detail={error} onRetry={() => setAttempt(a => a + 1)} />

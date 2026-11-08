@@ -197,7 +197,7 @@ function BranchPrefix({ settings, onSave }: { settings: Settings; onSave: (s: Se
         spellCheck={false}
         aria-invalid={!valid}
       />
-      {!valid && <span className="text-[12.5px] text-danger">Letters, numbers, dots, dashes and slashes only.</span>}
+      {!valid && <span className="text-[13px] text-danger">Letters, numbers, dots, dashes and slashes only.</span>}
     </div>
   );
 }
@@ -213,7 +213,7 @@ function GuardTab({ ctx }: { ctx: SettingsCtx }) {
         onChange={commandGuard => onSave({ ...settings, commandGuard })}
       />
       {!settings.commandGuard && (
-        <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[13.5px]">Agents on this computer can now run these commands without being stopped.</p>
+        <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[14px]">Agents on this computer can now run these commands without being stopped.</p>
       )}
     </Section>
   );

@@ -40,7 +40,7 @@ export function UpdatesPage({ ctx }: { ctx: SettingsCtx }) {
     <>
       <Section title="LemonLime" description="LemonLime checks for new versions when it starts and installs them when you say so. Every update is signed.">
         <Row label="Version" description="The version of this app.">
-          <span className="font-mono text-[13.5px]">{import.meta.env.VITE_APP_VERSION ?? "0.1.0"}</span>
+          <span className="font-mono text-[14px]">{import.meta.env.VITE_APP_VERSION ?? "0.1.0"}</span>
         </Row>
         <Row
           label="Updates"

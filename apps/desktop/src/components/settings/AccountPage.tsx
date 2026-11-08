@@ -164,7 +164,7 @@ function AccountTab({ ctx }: { ctx: SettingsCtx }) {
           </Button>
           <SavedNote show={saved} />
           {test && (
-            <p role="status" className={test.ok ? "text-[13.5px] text-leaf" : "text-[13.5px] text-danger"}>
+            <p role="status" className={test.ok ? "text-[14px] text-leaf" : "text-[14px] text-danger"}>
               {test.message}
               {test.actionUrl && (
                 <>
@@ -361,7 +361,7 @@ function ActivityTab({ ctx }: { ctx: SettingsCtx }) {
         ) : (
           <p className="text-[14px] text-ink-soft">No threads in this period yet.</p>
         )}
-        {stats.busiest && <p className="text-[13.5px] text-ink-soft">You start the most threads on {stats.busiest}.</p>}
+        {stats.busiest && <p className="text-[14px] text-ink-soft">You start the most threads on {stats.busiest}.</p>}
       </Section>
     </>
   );

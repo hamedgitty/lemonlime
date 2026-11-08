@@ -64,7 +64,7 @@ function Thumb({ id, name, load, onOpen }: { id: string; name: string; load: Loa
     return (
       <span
         title={`${name} isn't available any more`}
-        className="flex size-20 flex-col items-center justify-center gap-1 rounded-lg border border-line bg-paper/70 px-1.5 text-center text-[11.5px] text-ink-soft"
+        className="flex size-20 flex-col items-center justify-center gap-1 rounded-lg border border-line bg-paper/70 px-1.5 text-center text-[12px] text-ink-soft"
       >
         <ImageOff aria-hidden="true" className="size-4 text-ink-faint" />
         <span className="w-full truncate">{name}</span>

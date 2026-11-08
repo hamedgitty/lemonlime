@@ -85,10 +85,10 @@ export function FileView({
   return (
     <div role="tabpanel" aria-label={path} className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line px-3">
-        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink-soft [direction:rtl] text-left" title={path}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink-soft [direction:rtl] text-left" title={path}>
           <bdi>{path}</bdi>
         </span>
-        {loaded.state === "ready" && <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums">{formatBytes(loaded.size)}</span>}
+        {loaded.state === "ready" && <span className="shrink-0 text-[13px] text-ink-faint tabular-nums">{formatBytes(loaded.size)}</span>}
         <Tip label="Mention in the message">
           <button
             type="button"
@@ -170,7 +170,7 @@ function CodeText({ text, path }: { text: string; path: string }) {
   }, [shown]);
   return (
     <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-paper">
-      <div className="flex min-w-max font-mono text-[12.5px] leading-[1.6]">
+      <div className="flex min-w-max font-mono text-[13px] leading-[1.6]">
         <pre aria-hidden="true" className="sticky left-0 shrink-0 border-r border-line bg-cream px-2.5 py-2 text-right text-ink-faint tabular-nums select-none">
           {lines}
         </pre>

@@ -17,7 +17,7 @@ export function GetStarted({ facts, onStep, onDismiss }: { facts: GetStartedFact
   return (
     <section aria-labelledby="get-started" className="mt-10 rounded-xl border border-line bg-paper px-4 pt-3.5 pb-2">
       <div className="flex items-center gap-2">
-        <h2 id="get-started" className="font-sans text-[14.5px] font-semibold tracking-normal">
+        <h2 id="get-started" className="font-sans text-[15px] font-semibold tracking-normal">
           Get started
         </h2>
         <span className="text-[13px] text-ink-soft tabular-nums">
@@ -47,7 +47,7 @@ export function GetStarted({ facts, onStep, onDismiss }: { facts: GetStartedFact
               <span className="sr-only">{i.done ? ", done" : ", not done yet"}</span>
             </span>
             {!i.done && (
-              <button type="button" onClick={() => onStep(i.id)} className="shrink-0 text-[13.5px] font-medium text-leaf hover:text-leaf-deep">
+              <button type="button" onClick={() => onStep(i.id)} className="shrink-0 text-[14px] font-medium text-leaf hover:text-leaf-deep">
                 {ACTION[i.id]}
               </button>
             )}

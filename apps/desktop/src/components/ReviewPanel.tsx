@@ -169,7 +169,7 @@ export function ReviewPanel({
           trigger={
             <button
               type="button"
-              className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-line bg-paper px-2.5 text-[13.5px] font-medium text-ink hover:bg-cream data-[popup-open]:bg-cream"
+              className="inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-line bg-paper px-2.5 text-[14px] font-medium text-ink hover:bg-cream data-[popup-open]:bg-cream"
             >
               {scope.scope === "commit" ? <GitCommitHorizontal aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" /> : null}
               <span className="truncate">{scopeLabel}</span>
@@ -198,7 +198,7 @@ export function ReviewPanel({
                   value: c.sha,
                   label: (
                     <span className="flex min-w-0 items-baseline gap-2">
-                      <span className="shrink-0 font-mono text-[12.5px] text-ink-faint">{c.shortSha}</span>
+                      <span className="shrink-0 font-mono text-[13px] text-ink-faint">{c.shortSha}</span>
                       <span className="truncate">{c.subject}</span>
                     </span>
                   ),
@@ -251,7 +251,7 @@ export function ReviewPanel({
       )}
 
       {!data ? (
-        <div className="flex flex-1 items-center justify-center text-[13.5px] text-ink-soft">{loading ? <Spinner /> : null}</div>
+        <div className="flex flex-1 items-center justify-center text-[14px] text-ink-soft">{loading ? <Spinner /> : null}</div>
       ) : files.length === 0 ? (
         <p className="m-3 rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
           {scope.scope === "uncommitted" ? "Everything is committed." : "No changes here yet."}
@@ -323,7 +323,7 @@ function StatusBadge({ status }: { status: ReviewFile["status"] }) {
   return (
     <span
       title={STATUS_LABEL[status]}
-      className={cx("inline-flex size-5 shrink-0 items-center justify-center rounded-[5px] font-mono text-[11.5px] font-semibold", STATUS_STYLE[status])}
+      className={cx("inline-flex size-5 shrink-0 items-center justify-center rounded-[5px] font-mono text-[12px] font-semibold", STATUS_STYLE[status])}
     >
       <span aria-hidden="true">{STATUS_LETTER[status]}</span>
       <span className="sr-only">{STATUS_LABEL[status]}</span>
@@ -335,7 +335,7 @@ function StatusBadge({ status }: { status: ReviewFile["status"] }) {
 export function PathLabel({ path, className }: { path: string; className?: string }) {
   const { dir, name } = splitPath(path);
   return (
-    <span className={cx("flex min-w-0 flex-1 items-baseline font-mono text-[12.5px]", className)}>
+    <span className={cx("flex min-w-0 flex-1 items-baseline font-mono text-[13px]", className)}>
       {dir && <span className="min-w-0 shrink truncate text-ink-faint">{dir}</span>}
       <span className="max-w-full min-w-[3ch] shrink-0 truncate text-ink">{name}</span>
     </span>
@@ -343,9 +343,9 @@ export function PathLabel({ path, className }: { path: string; className?: strin
 }
 
 function Counts({ additions, deletions, binary }: { additions: number; deletions: number; binary?: boolean }) {
-  if (binary) return <span className="shrink-0 text-[12.5px] text-ink-faint">Binary</span>;
+  if (binary) return <span className="shrink-0 text-[13px] text-ink-faint">Binary</span>;
   return (
-    <span className="shrink-0 text-[12.5px] tabular-nums">
+    <span className="shrink-0 text-[13px] tabular-nums">
       <span className="text-diff-add-strong">
         <span aria-hidden="true">+</span>
         <span className="sr-only">added </span>
@@ -415,7 +415,7 @@ function FileDiffCard({
           type="button"
           onClick={onToggle}
           aria-expanded={open}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left hover:bg-cream/60"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left hover:bg-cream-deep"
         >
           <ChevronRight aria-hidden="true" className={cx("size-4 shrink-0 text-ink-faint", open && "rotate-90")} />
           <StatusBadge status={file.status} />
@@ -439,7 +439,7 @@ function FileDiffCard({
         )}
       </div>
       {open && picked && pickedLabel && (
-        <div className="sticky top-[45px] z-10 flex items-center gap-2 border-b border-[#f0d95c] bg-lemon-soft px-3 py-1.5 text-[13px] text-ink">
+        <div className="sticky top-[45px] z-10 flex items-center gap-2 border-b border-lemon-line bg-lemon-soft px-3 py-1.5 text-[13px] text-ink">
           <span className="min-w-0 flex-1 truncate">{pickedLabel} picked. Shift-click a line number to pick more.</span>
           <Button
             size="sm"
@@ -510,7 +510,7 @@ function GapRow({ hunks, index, layout, hunk, onMore }: { hunks: DiffHunk[]; ind
   return (
     <tr className="bg-cream-deep/70 text-ink-faint">
       <td colSpan={layout === "unified" ? 4 : 6} className="px-2 py-0.5">
-        <span className="flex items-center gap-2 font-sans text-[12.5px]">
+        <span className="flex items-center gap-2 font-sans text-[13px]">
           {hidden > 0 ? (
             <button
               type="button"

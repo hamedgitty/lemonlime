@@ -59,7 +59,7 @@ export function MessageRail({ toc, scrollRef, onJump }: { toc: Toc; scrollRef: R
                       onJump(e.key);
                     }}
                     className={cx(
-                      "flex w-full items-baseline gap-3 rounded-[8px] px-2.5 py-1.5 text-left text-[13.5px] hover:bg-cream-deep",
+                      "flex w-full items-baseline gap-3 rounded-[8px] px-2.5 py-1.5 text-left text-[14px] hover:bg-cream-deep",
                       e.key === active && "font-medium",
                     )}
                   >

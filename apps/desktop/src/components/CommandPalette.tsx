@@ -169,7 +169,7 @@ export function CommandPalette({
             {flat.length === 0 && <p className="px-3 py-6 text-center text-[14px] text-ink-soft">Nothing matches “{query.replace(/^\s*>/, "").trim()}”.</p>}
             {groups.map(g => (
               <div key={g.section} role="group" aria-labelledby={`${listId}-${g.section}`} className="pb-1">
-                <p id={`${listId}-${g.section}`} className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 text-[12.5px] font-medium text-ink-faint">
+                <p id={`${listId}-${g.section}`} className="flex items-center gap-1.5 px-2.5 pt-2 pb-1 text-[13px] font-medium text-ink-faint">
                   {g.section === "recent" && <History aria-hidden="true" className="size-3.5" />}
                   {SECTION_LABEL[g.section]}
                 </p>
@@ -206,7 +206,7 @@ export function CommandPalette({
               </div>
             ))}
           </div>
-          <div className="flex shrink-0 items-center gap-4 border-t border-line px-4 py-2 text-[12.5px] text-ink-soft">
+          <div className="flex shrink-0 items-center gap-4 border-t border-line px-4 py-2 text-[13px] text-ink-soft">
             <span className="inline-flex items-center gap-1.5">
               <Kbd>↑</Kbd>
               <Kbd>↓</Kbd>

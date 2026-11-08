@@ -60,7 +60,7 @@ export function CloudPage({ ctx }: { ctx: SettingsCtx }) {
     <>
       <div className="mb-4 flex items-center gap-2">
         <Pill tone="good">Synced with the dashboard</Pill>
-        <span className="text-[13.5px] text-ink-soft">These settings belong to the workspace, so teammates share them.</span>
+        <span className="text-[14px] text-ink-soft">These settings belong to the workspace, so teammates share them.</span>
         <span className="flex-1" />
         <SavedNote show={saved} />
       </div>
@@ -76,7 +76,7 @@ export function CloudPage({ ctx }: { ctx: SettingsCtx }) {
       />
       <ErrorText>{error}</ErrorText>
       {ws?.canEdit === false && (
-        <p className="mb-4 rounded-lg bg-lemon-soft px-3 py-2 text-[13.5px]">
+        <p className="mb-4 rounded-lg bg-lemon-soft px-3 py-2 text-[14px]">
           Only the workspace's owner can change these. You can see what new sandboxes start with.
         </p>
       )}
@@ -219,11 +219,7 @@ function KeysTab({ ctx }: { ctx: SettingsCtx }) {
       {list === null && <p className="text-[14px] text-ink-soft">Loading…</p>}
       {list?.length === 0 && <p className="text-[14px] text-ink-soft">None yet.</p>}
       {list?.map(s => (
-        <Row
-          key={s.name}
-          label={<span className="font-mono text-[13.5px]">{s.name}</span>}
-          description={`Changed ${new Date(s.updatedAt).toLocaleDateString()}`}
-        >
+        <Row key={s.name} label={<span className="font-mono text-[14px]">{s.name}</span>} description={`Changed ${new Date(s.updatedAt).toLocaleDateString()}`}>
           <IconButton label={`Delete ${s.name}`} onClick={() => void remove(s.name)}>
             <Trash2 aria-hidden="true" className="size-4" />
           </IconButton>
@@ -296,7 +292,7 @@ function SkillsTab({ ctx, ws, onSynced }: { ctx: SettingsCtx; ws: WorkspaceCloud
         <ToggleRow key={s.name} label={s.name} description={s.description || undefined} checked={picked.has(s.name)} onChange={v => toggle(s.name, v)} />
       ))}
       {ws.skills.some(s => !mine?.some(m => m.name === s.name)) && (
-        <p className="text-[13.5px] text-ink-soft">
+        <p className="text-[14px] text-ink-soft">
           Also in the cloud, from another computer:{" "}
           {ws.skills
             .filter(s => !mine?.some(m => m.name === s.name))

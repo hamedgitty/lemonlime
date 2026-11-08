@@ -198,7 +198,7 @@ export function AutomationsView({
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[800px] px-6 pt-6 pb-16">
           {error && (
-            <p role="alert" className="mb-4 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px]">
+            <p role="alert" className="mb-4 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[14px]">
               {error}
             </p>
           )}
@@ -520,19 +520,19 @@ function WebhookPanel({ a, cloudApi, onChanged }: { a: AutomationInfo; cloudApi:
     });
   return (
     <div className="mt-3 rounded-lg border border-line bg-cream px-3.5 py-3">
-      <p className="text-[13.5px] text-ink-soft">
+      <p className="text-[14px] text-ink-soft">
         A POST to this URL starts a run. Any JSON body (up to {WEBHOOK_BODY_MAX_BYTES / 1024} KB) is passed to the agent as context, marked as untrusted input.
       </p>
       {url ? (
         <>
           <div className="mt-2.5 flex items-center gap-2">
-            <TextInput readOnly value={url} aria-label="Webhook URL" className="font-mono text-[12.5px]" onFocus={e => e.currentTarget.select()} />
+            <TextInput readOnly value={url} aria-label="Webhook URL" className="font-mono text-[13px]" onFocus={e => e.currentTarget.select()} />
             <CopyButton text={url} label="Copy webhook URL" showLabel className="h-9 shrink-0 px-2.5" />
           </div>
-          <p className="mt-1.5 text-[12.5px] text-ink-soft">Copy it now: it won't be shown again. Anyone with it can start this automation.</p>
+          <p className="mt-1.5 text-[13px] text-ink-soft">Copy it now: it won't be shown again. Anyone with it can start this automation.</p>
         </>
       ) : a.hasWebhook ? (
-        <p className="mt-2 text-[13.5px]">The webhook is on. Its URL was shown when it was made; make a new one if you've lost it.</p>
+        <p className="mt-2 text-[14px]">The webhook is on. Its URL was shown when it was made; make a new one if you've lost it.</p>
       ) : null}
       {error && (
         <p role="alert" className="mt-2 text-[13px] text-danger">
@@ -665,11 +665,11 @@ function Review({
               )}
             />
             <div className="min-w-0 flex-1">
-              <p className="text-[14.5px] font-medium">{a.name}</p>
+              <p className="text-[15px] font-medium">{a.name}</p>
               <p className="text-[13px] text-ink-soft">
                 {(r.outcome ?? r.status) === "failed" ? "Failed" : "Ran"} {relativeTime(r.ranAt)} on {repoName(a.repo.url)}
               </p>
-              {(r.summary || r.detail) && <p className="mt-1 line-clamp-3 text-[13.5px]">{r.summary ?? r.detail}</p>}
+              {(r.summary || r.detail) && <p className="mt-1 line-clamp-3 text-[14px]">{r.summary ?? r.detail}</p>}
             </div>
             {r.threadId && (
               <Button size="sm" variant="ghost" onClick={() => onOpenThread(r.threadId!)}>
@@ -699,10 +699,10 @@ function Templates({ onUse, disabled }: { onUse: (t: (typeof TEMPLATES)[number])
           <ul className="grid gap-2.5 sm:grid-cols-2">
             {TEMPLATES.filter(t => t.group === g).map(t => (
               <li key={t.name} className="flex flex-col rounded-xl border border-line bg-paper p-4">
-                <p className="text-[14.5px] font-medium">{t.name}</p>
+                <p className="text-[15px] font-medium">{t.name}</p>
                 <p className="mt-1 line-clamp-3 flex-1 text-[13px] text-ink-soft">{t.prompt}</p>
                 <div className="mt-3 flex items-center gap-2">
-                  <span className="flex-1 text-[12.5px] text-ink-faint">{describeCron(t.schedule)}</span>
+                  <span className="flex-1 text-[13px] text-ink-faint">{describeCron(t.schedule)}</span>
                   <Button size="sm" disabled={disabled} onClick={() => onUse(t)}>
                     Use
                   </Button>
@@ -761,11 +761,11 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
     <form onSubmit={e => void submit(e)} className="mb-8 flex flex-col gap-4 rounded-2xl border border-line-strong bg-paper p-5 shadow-panel">
       <h2 className="font-sans text-[16px] font-semibold tracking-normal">{isNew ? "New automation" : `Edit ${initial.name}`}</h2>
       <label className="block">
-        <span className="mb-1 block text-[13.5px] font-medium">Name</span>
+        <span className="mb-1 block text-[14px] font-medium">Name</span>
         <TextInput required maxLength={120} value={form.name} onChange={e => set({ name: e.target.value })} placeholder="Nightly dependency bump" />
       </label>
       <div>
-        <span className="mb-1 block text-[13.5px] font-medium">When</span>
+        <span className="mb-1 block text-[14px] font-medium">When</span>
         <SegmentedControl
           label="Common schedules"
           value={form.schedule.trim() === "" ? "webhook" : (PRESETS.find(p => p.cron === form.schedule)?.cron ?? "custom")}
@@ -785,13 +785,13 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
             aria-invalid={preview.ok ? undefined : true}
           />
         ) : null}
-        <p className={cx("mt-1 text-[12.5px]", preview.ok ? "text-ink-faint" : "text-danger")}>
+        <p className={cx("mt-1 text-[13px]", preview.ok ? "text-ink-faint" : "text-danger")}>
           {preview.text} {preview.ok && form.schedule.trim() && `(${zone})`}
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
-          <span className="mb-1 block text-[13.5px] font-medium">Agent</span>
+          <span className="mb-1 block text-[14px] font-medium">Agent</span>
           <SegmentedControl
             label="Agent"
             value={form.agent}
@@ -800,7 +800,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           />
         </div>
         <div>
-          <span className="mb-1 block text-[13.5px] font-medium">Sandbox</span>
+          <span className="mb-1 block text-[14px] font-medium">Sandbox</span>
           <SegmentedControl
             label="Sandbox size"
             value={form.size}
@@ -814,7 +814,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
       </div>
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
         <label className="block">
-          <span className="mb-1 block text-[13.5px] font-medium">Repository</span>
+          <span className="mb-1 block text-[14px] font-medium">Repository</span>
           <TextInput
             required
             className="font-mono text-[13px]"
@@ -824,12 +824,12 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           />
         </label>
         <label className="block">
-          <span className="mb-1 block text-[13.5px] font-medium">Branch</span>
+          <span className="mb-1 block text-[14px] font-medium">Branch</span>
           <TextInput required className="font-mono text-[13px]" value={form.baseBranch} onChange={e => set({ baseBranch: e.target.value })} />
         </label>
       </div>
       <label className="block">
-        <span className="mb-1 block text-[13.5px] font-medium">What the agent should do</span>
+        <span className="mb-1 block text-[14px] font-medium">What the agent should do</span>
         <textarea
           required
           rows={5}
@@ -841,7 +841,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
         />
       </label>
       <label className="block">
-        <span className="mb-1 block text-[13.5px] font-medium">Check first (optional)</span>
+        <span className="mb-1 block text-[14px] font-medium">Check first (optional)</span>
         <textarea
           rows={2}
           maxLength={10_000}
@@ -851,12 +851,12 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           placeholder="git log --since=yesterday --oneline"
           className="w-full rounded-lg border border-line-strong bg-paper px-3 py-2 font-mono text-[13px] text-ink outline-none placeholder:text-ink-faint focus:border-leaf"
         />
-        <span className="mt-1 block text-[12.5px] text-ink-faint">
+        <span className="mt-1 block text-[13px] text-ink-faint">
           A shell command run in the sandbox before the agent starts. If it prints nothing or fails, the run is skipped; what it prints is given to the agent.
         </span>
       </label>
       {error && (
-        <p role="alert" className="text-[13.5px] text-danger">
+        <p role="alert" className="text-[14px] text-danger">
           {error}
         </p>
       )}

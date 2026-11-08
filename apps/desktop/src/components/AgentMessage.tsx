@@ -36,7 +36,7 @@ export function AgentMessage({
         <LogoMark size={22} />
       </div>
       <div className="min-w-0 flex-1">
-        <div data-agent-message data-message-key={messageKey} className="text-[14.5px] leading-relaxed text-ink">
+        <div data-agent-message data-message-key={messageKey} className="text-[15px] leading-relaxed text-ink">
           <StreamingMarkdown text={text} onLink={openLink} />
           {streaming && <span aria-hidden="true" className="mt-1 inline-block h-4 w-[3px] animate-pulse-soft rounded-sm bg-leaf" />}
         </div>
@@ -83,7 +83,7 @@ export function ActionButton({ label, icon, onClick, children }: { label: string
       title={label}
       aria-label={label}
       onClick={onClick}
-      className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[12.5px] text-ink-soft hover:bg-cream-deep hover:text-ink"
+      className="inline-flex h-7 items-center gap-1 rounded-md px-1.5 text-[13px] text-ink-soft hover:bg-cream-deep hover:text-ink"
     >
       {icon}
       <span>{children}</span>

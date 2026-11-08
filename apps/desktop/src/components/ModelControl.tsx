@@ -369,13 +369,13 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
 
       <div id={panelId} role="tabpanel" aria-label={AGENT_LABELS[viewing]} className="flex flex-col">
         {list.state === "loading" ? (
-          <div className="flex items-center justify-center gap-2 px-3 py-10 text-[13.5px] text-ink-soft" role="status">
+          <div className="flex items-center justify-center gap-2 px-3 py-10 text-[14px] text-ink-soft" role="status">
             <Spinner /> Loading {AGENT_LABELS[viewing]}'s models…
           </div>
         ) : list.state === "error" ? (
           <div className="flex flex-col items-center gap-3 px-4 py-8 text-center" role="alert">
             <AgentIcon kind={viewing} className="size-8 text-ink-faint" />
-            <p className="text-[13.5px] text-ink-soft" title={list.message}>
+            <p className="text-[14px] text-ink-soft" title={list.message}>
               Couldn't load models for {AGENT_LABELS[viewing]}.
             </p>
             <Tip label="Try again">
@@ -390,7 +390,7 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
             </Tip>
           </div>
         ) : fixed ? (
-          <p className="px-3 py-6 text-center text-[13.5px] text-ink-soft">This agent picks its model when the thread starts; it can't change here.</p>
+          <p className="px-3 py-6 text-center text-[14px] text-ink-soft">This agent picks its model when the thread starts; it can't change here.</p>
         ) : all.length === 0 ? (
           <EmptyList agent={viewing} onClose={p.onClose} />
         ) : (
@@ -426,7 +426,7 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
               aria-label={viewing === "acp" ? "ACP agents" : "Models"}
               className="scroll-thin max-h-[300px] overflow-y-auto px-1 pb-1"
             >
-              {found.length === 0 && <p className="px-2.5 py-2 text-[13.5px] text-ink-soft">No model matches “{typed}”.</p>}
+              {found.length === 0 && <p className="px-2.5 py-2 text-[14px] text-ink-soft">No model matches “{typed}”.</p>}
               {shown.map((m, i) => (
                 <ModelRow
                   key={m.id}
@@ -455,7 +455,7 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
             <Toggle label="Fast mode: faster answers that use more of your plan" checked={p.fast} onChange={on => p.onFast?.(on)} />
           </div>
         )}
-        {p.note && <p className="border-t border-line px-3 py-2 text-[12.5px] text-ink-faint">{p.note}</p>}
+        {p.note && <p className="border-t border-line px-3 py-2 text-[13px] text-ink-faint">{p.note}</p>}
       </div>
     </div>
   );
@@ -488,7 +488,7 @@ function ModelRow({
       className={cx("flex h-8 cursor-default items-center gap-2 rounded-[7px] px-2.5 text-[14px] text-ink select-none", active && "bg-cream-deep")}
     >
       <span className="min-w-0 truncate">{model.label}</span>
-      {model.context && <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums">{model.context}</span>}
+      {model.context && <span className="shrink-0 text-[13px] text-ink-faint tabular-nums">{model.context}</span>}
       <span className="flex-1" />
       {selected && <Check aria-hidden="true" className="size-4 shrink-0 text-leaf" />}
     </div>
@@ -509,7 +509,7 @@ function OlderModels({ models, chosen, onPick }: { models: AgentModel[]; chosen:
           <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5 text-ink-faint">
             <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          {chosen && models.some(m => m.id === chosen) && <span className="ml-auto text-[12.5px] text-ink-faint">{modelLabel(models, chosen)}</span>}
+          {chosen && models.some(m => m.id === chosen) && <span className="ml-auto text-[13px] text-ink-faint">{modelLabel(models, chosen)}</span>}
         </button>
       }
     >
@@ -522,7 +522,7 @@ function OlderModels({ models, chosen, onPick }: { models: AgentModel[]; chosen:
           label: (
             <span className="inline-flex items-center gap-2">
               {m.label}
-              {m.context && <span className="text-[12.5px] text-ink-faint">{m.context}</span>}
+              {m.context && <span className="text-[13px] text-ink-faint">{m.context}</span>}
             </span>
           ),
         }))}
@@ -537,7 +537,7 @@ function EmptyList({ agent, onClose }: { agent: AgentKind; onClose: () => void }
   return (
     <div className="flex flex-col items-center gap-3 px-4 py-7 text-center">
       <AgentIcon kind={agent} className="size-8 text-ink-faint" />
-      <p className="text-[13.5px] text-ink-soft">{text}</p>
+      <p className="text-[14px] text-ink-soft">{text}</p>
       {agent === "acp" && (
         <button
           type="button"
@@ -545,7 +545,7 @@ function EmptyList({ agent, onClose }: { agent: AgentKind; onClose: () => void }
             onClose();
             openAgentsSettings({ tab: "acp" });
           }}
-          className="text-[13.5px] font-semibold text-leaf hover:text-leaf-deep"
+          className="text-[14px] font-semibold text-leaf hover:text-leaf-deep"
         >
           Add an ACP agent
         </button>

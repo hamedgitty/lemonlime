@@ -54,7 +54,7 @@ export function LimitRow({
 
   if (!open) {
     return (
-      <div className="flex items-start gap-2.5 px-1 text-[13.5px] text-ink-soft" role="note">
+      <div className="flex items-start gap-2.5 px-1 text-[14px] text-ink-soft" role="note">
         <Gauge aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
         <p className="min-w-0 [overflow-wrap:anywhere]">
           {agent} hit its usage limit{who}. {resets}
@@ -71,11 +71,11 @@ export function LimitRow({
   const disabled = !actions || sent !== null;
   const canSwitch = Boolean(actions?.canSwitchAccount && hasAccounts(hit.agent));
   return (
-    <div className="animate-rise rounded-2xl border border-[#f0d95c] bg-lemon-soft/70 px-4 py-3.5" role="group" aria-label={`${agent} hit its usage limit`}>
+    <div className="animate-rise rounded-2xl border border-lemon-line bg-lemon-soft/70 px-4 py-3.5" role="group" aria-label={`${agent} hit its usage limit`}>
       <p className="font-medium text-ink">
         {agent} hit its usage limit{who}
       </p>
-      <p className="mt-1 text-[13.5px] text-ink-soft">
+      <p className="mt-1 text-[14px] text-ink-soft">
         {resets}{" "}
         {waiting ? (
           <span className="inline-flex items-center gap-1">
@@ -144,7 +144,7 @@ export function SwitchRow({ event, others }: { event: EventOf<"agent_switch">; o
     ? `${event.auto ? "Switched by itself" : "Switched"} to ${to.account ? `your ${to.account.label} account` : "another account"}${event.carried === "session" ? ", in the same conversation." : ", with a summary of the thread so far."}`
     : `Carried on with ${AGENT_LABELS[to.agent]}${model ? ` (${model})` : ""}, starting from a summary of what ${AGENT_LABELS[from.agent]} did.`;
   return (
-    <div className="flex flex-col gap-2 px-1 text-[13.5px] text-ink-soft" role="note">
+    <div className="flex flex-col gap-2 px-1 text-[14px] text-ink-soft" role="note">
       <div className="flex items-start gap-2.5">
         <ArrowRightLeft aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
         <p className="min-w-0 [overflow-wrap:anywhere]">{text}</p>

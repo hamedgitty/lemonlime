@@ -208,7 +208,7 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
           <p
             role={error ? "alert" : "status"}
             className={cx(
-              "flex items-start gap-2 rounded-lg border px-3 py-2 text-[13.5px] text-ink",
+              "flex items-start gap-2 rounded-lg border px-3 py-2 text-[14px] text-ink",
               error ? "border-danger/20 bg-danger-soft" : "border-line bg-lime-soft",
             )}
           >
@@ -338,14 +338,7 @@ function SearchBox({ value, onChange, label }: { value: string; onChange: (v: st
   return (
     <label className="relative block min-w-0 flex-1">
       <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-ink-faint" />
-      <TextInput
-        type="search"
-        value={value}
-        onChange={e => onChange(e.target.value)}
-        placeholder={label}
-        aria-label={label}
-        className="h-8 pl-8 text-[13.5px]"
-      />
+      <TextInput type="search" value={value} onChange={e => onChange(e.target.value)} placeholder={label} aria-label={label} className="h-8 pl-8 text-[14px]" />
     </label>
   );
 }
@@ -565,20 +558,20 @@ function CatalogPane({
         <PluginTile name={p.title} size="lg" />
         <div className="min-w-0 flex-1">
           <h2 className="font-display text-[22px] font-semibold tracking-[-0.015em] text-balance break-words">{p.title}</h2>
-          <p className="mt-0.5 text-[13.5px] text-ink-soft">
+          <p className="mt-0.5 text-[14px] text-ink-soft">
             {p.author && `By ${p.author}. `}
             <span className="text-ink-faint">{categoryLabel(p.category)}</span>
           </p>
         </div>
         {mine && (
-          <label className="flex shrink-0 items-center gap-2 pt-1 text-[13.5px] text-ink-soft">
+          <label className="flex shrink-0 items-center gap-2 pt-1 text-[14px] text-ink-soft">
             {mine.enabled ? "On" : "Off"}
             <Toggle checked={mine.enabled} onChange={v => onToggle(mine, v)} label={`Use ${mine.name} in new threads`} />
           </label>
         )}
       </div>
 
-      {p.description && <p className="-mt-2 text-[14.5px] text-pretty text-ink">{p.description}</p>}
+      {p.description && <p className="-mt-2 text-[15px] text-pretty text-ink">{p.description}</p>}
 
       <div className="flex flex-wrap items-center gap-2">
         {mine ? (
@@ -606,11 +599,11 @@ function CatalogPane({
         )}
       </div>
       {!p.installable && (
-        <p className="-mt-3 text-[13.5px] text-ink-soft">This one is set up by running a program on your computer, which LemonLime doesn't do.</p>
+        <p className="-mt-3 text-[14px] text-ink-soft">This one is set up by running a program on your computer, which LemonLime doesn't do.</p>
       )}
-      {!shell && <p className="-mt-3 text-[13.5px] text-ink-faint">Plugins install in the LemonLime desktop app.</p>}
+      {!shell && <p className="-mt-3 text-[14px] text-ink-faint">Plugins install in the LemonLime desktop app.</p>}
       {actionError && (
-        <p role="alert" className="-mt-3 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px] text-ink">
+        <p role="alert" className="-mt-3 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[14px] text-ink">
           {actionError}
         </p>
       )}
@@ -620,7 +613,7 @@ function CatalogPane({
           What it adds
         </h3>
         {detailError ? (
-          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-paper px-4 py-3 text-[13.5px]">
+          <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-line bg-paper px-4 py-3 text-[14px]">
             <span className="min-w-0 flex-1 text-ink-soft">Its files couldn't be looked at just now. {detailError}</span>
             {p.where.kind === "github" && (
               <Button size="sm" onClick={() => setAttempt(a => a + 1)}>
@@ -638,7 +631,7 @@ function CatalogPane({
               {p.lspServers.length > 0 && <Gives title="Language servers" items={p.lspServers} mono />}
             </div>
             {c?.hooks && (
-              <div className="mt-3 rounded-xl border border-line bg-cream px-4 py-3 text-[13.5px]">
+              <div className="mt-3 rounded-xl border border-line bg-cream px-4 py-3 text-[14px]">
                 <p className="font-medium text-ink">Hooks: not applied</p>
                 <p className="mt-0.5 text-ink-faint">It defines hooks. LemonLime doesn't run plugin hooks, because they run commands on every tool call.</p>
               </div>
@@ -762,7 +755,7 @@ function PluginRow({
         <span className="min-w-0 flex-1">
           <span className="flex items-baseline gap-2">
             <span className="truncate text-[14px] font-medium text-ink">{p.name}</span>
-            {p.version && <span className="shrink-0 text-[12.5px] tabular-nums text-ink-faint">{p.version}</span>}
+            {p.version && <span className="shrink-0 text-[13px] tabular-nums text-ink-faint">{p.version}</span>}
           </span>
           <span className="line-clamp-2 text-[13px] text-ink-faint">
             {p.problem ? "Can't be read. Open it to see why." : p.description || contentsSummary(p.contents)}
@@ -800,12 +793,12 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onIns
       <div>
         <h2 className="font-sans text-[18px] font-semibold tracking-normal">Install from a Git URL</h2>
         <p className="mt-1 text-[14px] text-ink-soft">
-          A repository with a <code className="font-mono text-[12.5px] text-ink">.claude-plugin/plugin.json</code>, or a marketplace that lists several plugins.
+          A repository with a <code className="font-mono text-[13px] text-ink">.claude-plugin/plugin.json</code>, or a marketplace that lists several plugins.
           For a marketplace, name the plugin you want, or leave it empty to install every plugin it keeps in its own folders.
         </p>
       </div>
       <label className="block">
-        <span className="mb-1 block text-[13.5px] font-medium">Repository</span>
+        <span className="mb-1 block text-[14px] font-medium">Repository</span>
         <TextInput
           autoFocus
           required
@@ -817,19 +810,19 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onIns
         />
       </label>
       <label className="block">
-        <span className="mb-1 flex items-baseline gap-2 text-[13.5px] font-medium">
+        <span className="mb-1 flex items-baseline gap-2 text-[14px] font-medium">
           Branch or tag <span className="font-normal text-ink-faint">Optional</span>
         </span>
         <TextInput className="font-mono text-[13px]" placeholder="main" value={ref} onChange={e => setRef(e.target.value)} />
       </label>
       <label className="block">
-        <span className="mb-1 flex items-baseline gap-2 text-[13.5px] font-medium">
+        <span className="mb-1 flex items-baseline gap-2 text-[14px] font-medium">
           Plugin <span className="font-normal text-ink-faint">Optional, for a marketplace</span>
         </span>
         <TextInput className="font-mono text-[13px]" placeholder="code-review" value={plugin} onChange={e => setPlugin(e.target.value)} />
       </label>
       {error && (
-        <p role="alert" className="text-[13.5px] text-danger">
+        <p role="alert" className="text-[14px] text-danger">
           {error}
         </p>
       )}
@@ -887,7 +880,7 @@ function EmptyState({
             )}
           </div>
         ) : (
-          <p className="mt-3 text-[13.5px] text-ink-faint">Plugins are managed in the LemonLime desktop app.</p>
+          <p className="mt-3 text-[14px] text-ink-faint">Plugins are managed in the LemonLime desktop app.</p>
         )}
       </div>
     </div>
@@ -969,14 +962,14 @@ function PluginDetailPane({
           <h2 className="font-display text-[22px] font-semibold tracking-[-0.015em] break-words">{p.name}</h2>
           {p.description && <p className="mt-1 text-[14px] text-ink-soft">{p.description}</p>}
         </div>
-        <label className="flex shrink-0 items-center gap-2 pt-1 text-[13.5px] text-ink-soft">
+        <label className="flex shrink-0 items-center gap-2 pt-1 text-[14px] text-ink-soft">
           {p.enabled ? "On" : "Off"}
           <Toggle checked={p.enabled} onChange={onToggle} label={`Use ${p.name} in new threads`} />
         </label>
       </div>
 
       {p.problem && (
-        <p role="alert" className="rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[13.5px]">
+        <p role="alert" className="rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[14px]">
           This plugin can't be read, so threads skip it: {p.problem}
         </p>
       )}
@@ -988,7 +981,7 @@ function PluginDetailPane({
         </Meta>
         <Meta label="Version">
           <span className="tabular-nums">{p.version ?? "Not given"}</span>
-          {p.commit && <span className="ml-2 font-mono text-[12.5px] text-ink-faint">{p.commit.slice(0, 7)}</span>}
+          {p.commit && <span className="ml-2 font-mono text-[13px] text-ink-faint">{p.commit.slice(0, 7)}</span>}
         </Meta>
         {p.author && <Meta label="Author">{p.author}</Meta>}
         {p.license && <Meta label="Licence">{p.license}</Meta>}
@@ -1029,7 +1022,7 @@ function PluginDetailPane({
         <h3 id="plugin-gives" className="font-sans text-[16px] font-semibold tracking-normal">
           What you get
         </h3>
-        <p className="mt-1 text-[13.5px] text-ink-faint">
+        <p className="mt-1 text-[14px] text-ink-faint">
           Skills reach every agent. Commands and subagents reach Claude Code, MCP servers reach Claude Code and Codex. New threads pick up changes.
         </p>
         <div className="mt-3 grid gap-3 @lg:grid-cols-2">
@@ -1039,7 +1032,7 @@ function PluginDetailPane({
           <Gives title="MCP servers" items={c.mcpServers} mono />
         </div>
         {c.hooks.length > 0 && (
-          <div className="mt-3 rounded-xl border border-line bg-cream px-4 py-3 text-[13.5px]">
+          <div className="mt-3 rounded-xl border border-line bg-cream px-4 py-3 text-[14px]">
             <p className="font-medium text-ink">Hooks: not applied</p>
             <p className="mt-0.5 text-ink-faint">
               It defines hooks for {c.hooks.join(", ")}. LemonLime doesn't run plugin hooks, because they run commands on every tool call and can approve tools
@@ -1078,7 +1071,7 @@ function Gives({ title, items, mono }: { title: string; items: string[]; mono?: 
         <span className="text-[13px] font-normal tabular-nums text-ink-faint">{items.length}</span>
       </p>
       {items.length ? (
-        <ul className={cx("mt-1.5 flex flex-col gap-0.5 text-[13px] text-ink-soft", mono && "font-mono text-[12.5px]")}>
+        <ul className={cx("mt-1.5 flex flex-col gap-0.5 text-[13px] text-ink-soft", mono && "font-mono text-[13px]")}>
           {items.slice(0, 12).map((i, n) => (
             <li key={`${n}-${i}`} className="truncate" title={i}>
               {i}

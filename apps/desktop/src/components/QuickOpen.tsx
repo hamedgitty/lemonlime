@@ -139,7 +139,7 @@ export function QuickOpen({
                     <span className="shrink-0 font-medium">
                       <Highlighted text={name} positions={r.positions} offset={slash + 1} />
                     </span>
-                    <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-ink-faint">
+                    <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink-faint">
                       <Highlighted text={dir} positions={r.positions.filter(p => p < slash)} />
                     </span>
                   </div>
@@ -147,7 +147,7 @@ export function QuickOpen({
               })
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-4 border-t border-line px-4 py-2 text-[12.5px] text-ink-soft">
+          <div className="flex shrink-0 items-center gap-4 border-t border-line px-4 py-2 text-[13px] text-ink-soft">
             <span className="inline-flex items-center gap-1.5">
               <Kbd>↑</Kbd>
               <Kbd>↓</Kbd>

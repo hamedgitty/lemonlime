@@ -96,7 +96,7 @@ export function MenuItem({
     <BaseMenu.Item className={cx(ITEM, danger && "text-danger [&_svg]:!text-danger")} onClick={onSelect} disabled={disabled}>
       {icon}
       <span className="min-w-0 flex-1 truncate">{children}</span>
-      {hint && <span className="text-[12.5px] text-ink-faint">{hint}</span>}
+      {hint && <span className="text-[13px] text-ink-faint">{hint}</span>}
     </BaseMenu.Item>
   );
 }
@@ -108,7 +108,7 @@ export function MenuSeparator() {
 export function MenuLabel({ children }: { children: ReactNode }) {
   // A plain heading: Base UI's GroupLabel throws outside a Group.
   return (
-    <div role="presentation" className="px-2.5 pt-1.5 pb-1 text-[12.5px] font-medium text-ink-faint">
+    <div role="presentation" className="px-2.5 pt-1.5 pb-1 text-[13px] font-medium text-ink-faint">
       {children}
     </div>
   );
@@ -170,7 +170,7 @@ export function Tip({ label, children, side = "top" }: { label: ReactNode; child
       <BaseTooltip.Trigger render={children} />
       <BaseTooltip.Portal>
         <BaseTooltip.Positioner side={side} sideOffset={8} className="z-50">
-          <BaseTooltip.Popup className="rounded-[7px] bg-lime px-2.5 py-1 text-[13.5px] font-medium text-ink shadow-[0_4px_14px_rgb(23_32_14/0.14)] transition-opacity duration-100 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0">
+          <BaseTooltip.Popup className="rounded-[7px] bg-lime px-2.5 py-1 text-[14px] font-medium text-ink shadow-[0_4px_14px_rgb(23_32_14/0.14)] transition-opacity duration-100 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0">
             {label}
           </BaseTooltip.Popup>
         </BaseTooltip.Positioner>

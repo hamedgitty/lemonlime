@@ -132,7 +132,7 @@ export function RetryCard({ title, detail, onRetry, busy }: { title: string; det
   return (
     <div role="alert" className="mx-auto flex max-w-[420px] flex-col items-center gap-2 rounded-2xl border border-line bg-paper px-6 py-8 text-center">
       <p className="text-[15px] font-medium text-ink">{title}</p>
-      {detail && <p className="text-[13.5px] text-ink-soft">{detail}</p>}
+      {detail && <p className="text-[14px] text-ink-soft">{detail}</p>}
       <Button size="sm" className="mt-2" onClick={onRetry} disabled={busy}>
         {busy && <Spinner />}
         Try again

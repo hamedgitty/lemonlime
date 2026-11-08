@@ -171,7 +171,7 @@ export function ThreadPanel({
         onClick={() => select(id)}
         className={cx(
           "inline-flex h-[30px] max-w-[180px] min-w-0 items-center gap-1.5 rounded-lg px-2 text-[14px] font-medium",
-          on ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60 hover:text-ink",
+          on ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep hover:text-ink",
         )}
       >
         {icon}
@@ -421,7 +421,7 @@ function ChangesList({ events }: { events: Session["events"] }) {
             <button
               type="button"
               onClick={() => setOpen(null)}
-              className="mb-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[13.5px] text-ink-soft hover:bg-cream-deep"
+              className="mb-2 inline-flex h-8 items-center gap-1.5 rounded-lg px-2 text-[14px] text-ink-soft hover:bg-cream-deep"
             >
               ← All files
             </button>
@@ -440,8 +440,8 @@ function ChangesList({ events }: { events: Session["events"] }) {
                     className={cx("size-1.5 shrink-0 rounded-full", f.change === "added" ? "bg-lime-2" : f.change === "deleted" ? "bg-danger" : "bg-lemon-2")}
                     aria-hidden="true"
                   />
-                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{f.path}</span>
-                  <span className="shrink-0 text-[12.5px] text-ink-faint">{f.change}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{f.path}</span>
+                  <span className="shrink-0 text-[13px] text-ink-faint">{f.change}</span>
                 </button>
               </li>
             ))}

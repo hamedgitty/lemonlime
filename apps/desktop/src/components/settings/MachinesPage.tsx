@@ -89,7 +89,7 @@ export function MachinesPage({ ctx }: { ctx: SettingsCtx }) {
             <code className={code}>pnpm --filter @lemonlime/runner build:sea</code>.
           </li>
         </ul>
-        <p className="text-[13.5px] text-pretty text-ink-soft">
+        <p className="text-[14px] text-pretty text-ink-soft">
           Threads there work in their own git worktree, like threads on this computer. Opening a folder in your editor and computer access only work for threads
           on this computer.
         </p>
@@ -120,7 +120,7 @@ function MachineRow({
       <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
         <div className="min-w-0 flex-1 basis-[240px]">
           <p className="truncate text-[15px] text-ink">{machine.name}</p>
-          <p className="mt-0.5 truncate text-[13.5px] text-ink-soft">
+          <p className="mt-0.5 truncate text-[14px] text-ink-soft">
             <code className={code}>{machine.host}</code>
             {machine.runnerPath ? (
               <>
@@ -145,7 +145,7 @@ function MachineRow({
         </div>
       </div>
       {check && check !== "checking" && (
-        <p role="status" className="flex items-start gap-2 text-[13.5px] text-pretty whitespace-pre-line text-ink">
+        <p role="status" className="flex items-start gap-2 text-[14px] text-pretty whitespace-pre-line text-ink">
           {check.ok ? (
             <CircleCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
           ) : (

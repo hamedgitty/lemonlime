@@ -414,7 +414,7 @@ export function Home({
             {machine ? (
               <div className="space-y-3 p-3">
                 <label className="block">
-                  <span className="mb-1 block text-[13.5px] font-medium">Project folder on {machine.name}</span>
+                  <span className="mb-1 block text-[14px] font-medium">Project folder on {machine.name}</span>
                   <TextInput
                     value={remotePath}
                     onChange={e => setRemotePath(e.target.value)}
@@ -423,7 +423,7 @@ export function Home({
                     spellCheck={false}
                     autoFocus
                   />
-                  <span className="mt-1 block text-[12.5px] text-ink-faint">
+                  <span className="mt-1 block text-[13px] text-ink-faint">
                     A git repository already on that machine. Folders there can't be browsed from here, so type its path.
                   </span>
                 </label>
@@ -443,7 +443,7 @@ export function Home({
                         )}
                       >
                         <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{p}</span>
+                        <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{p}</span>
                       </button>
                     ))}
                   </div>
@@ -454,7 +454,7 @@ export function Home({
               <div className="p-1">
                 {prefs.recentProjects.length > 0 && (
                   <>
-                    <p className="px-2.5 pt-1.5 pb-1 text-[12.5px] font-medium text-ink-faint">Recent projects</p>
+                    <p className="px-2.5 pt-1.5 pb-1 text-[13px] font-medium text-ink-faint">Recent projects</p>
                     {prefs.recentProjects.map(p => (
                       <button
                         key={p}
@@ -494,7 +494,7 @@ export function Home({
             ) : (
               <div className="space-y-3 p-3">
                 <label className="block">
-                  <span className="mb-1 block text-[13.5px] font-medium">Repository</span>
+                  <span className="mb-1 block text-[14px] font-medium">Repository</span>
                   <TextInput
                     value={repoUrl}
                     onChange={e => setRepoUrl(e.target.value)}
@@ -505,7 +505,7 @@ export function Home({
                 </label>
                 <BranchField value={baseBranch} onChange={setBaseBranch} />
                 <div>
-                  <span className="mb-1 block text-[13.5px] font-medium">Sandbox size</span>
+                  <span className="mb-1 block text-[14px] font-medium">Sandbox size</span>
                   <SegmentedControl
                     label="Sandbox size"
                     value={sandboxSize}
@@ -598,7 +598,7 @@ export function Home({
             role="alert"
             className={cx(
               "mt-4 flex items-center gap-3 rounded-lg border px-3.5 py-2.5 text-[14px]",
-              denial ? "border-[#f0d95c] bg-lemon-soft" : "border-danger/25 bg-danger-soft text-danger",
+              denial ? "border-lemon-line bg-lemon-soft" : "border-danger/25 bg-danger-soft text-danger",
             )}
           >
             <p className="min-w-0 flex-1">{denial?.reason ?? error}</p>
@@ -656,7 +656,7 @@ export function Home({
 function BranchField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[13.5px] font-medium">Start from branch</span>
+      <span className="mb-1 block text-[14px] font-medium">Start from branch</span>
       <TextInput value={value} onChange={e => onChange(e.target.value)} placeholder="main" className="font-mono text-[13px]" spellCheck={false} />
     </label>
   );

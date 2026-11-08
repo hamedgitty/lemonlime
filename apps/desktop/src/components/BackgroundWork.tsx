@@ -45,7 +45,7 @@ export function BackgroundWorkCard({
           label="Command in the background"
           meta={since(c.startedAt, now)}
         >
-          <span className={cx("truncate text-ink", !c.description && "font-mono text-[12.5px]")} title={c.command}>
+          <span className={cx("truncate text-ink", !c.description && "font-mono text-[13px]")} title={c.command}>
             {c.description ?? c.command}
           </span>
         </Row>
@@ -66,7 +66,7 @@ export function BackgroundWorkCard({
         aria-expanded={open}
         aria-controls={bodyId}
         onClick={() => setOpen(o => !o)}
-        className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[13.5px] hover:bg-cream/60 focus-visible:-outline-offset-2"
+        className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[14px] hover:bg-cream-deep focus-visible:-outline-offset-2"
       >
         <ListTree aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
         <span className="shrink-0 font-medium text-ink">In the background</span>
@@ -99,11 +99,11 @@ export function BackgroundWorkCard({
 
 function Row({ icon, label, meta, children, actions }: { icon: ReactNode; label: string; meta?: string; children: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-[13.5px]">
+    <div className="flex h-8 items-center gap-2.5 rounded-lg px-2 text-[14px]">
       <span className="inline-flex size-4 shrink-0 items-center justify-center">{icon}</span>
       <span className="sr-only">{label}: </span>
       <span className="flex min-w-0 flex-1">{children}</span>
-      {meta && <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums">{meta}</span>}
+      {meta && <span className="shrink-0 text-[13px] text-ink-faint tabular-nums">{meta}</span>}
       {actions}
     </div>
   );
@@ -134,7 +134,7 @@ function HeldRow({ held, onSend, onCancel }: { held: HeldMessage; onSend: () => 
           <button
             type="button"
             onClick={onSend}
-            className="inline-flex h-6 items-center rounded-md px-2 text-[12.5px] font-medium text-ink-soft hover:bg-cream-deep hover:text-ink"
+            className="inline-flex h-6 items-center rounded-md px-2 text-[13px] font-medium text-ink-soft hover:bg-cream-deep hover:text-ink"
           >
             Send now
           </button>

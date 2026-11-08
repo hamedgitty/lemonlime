@@ -26,7 +26,7 @@ export function Section({
         <div className="flex items-end gap-3">
           <div className="min-w-0 flex-1">
             {title && <h3 className="font-sans text-[15px] font-semibold tracking-normal">{title}</h3>}
-            {description && <p className="mt-0.5 text-[13.5px] text-ink-soft">{description}</p>}
+            {description && <p className="mt-0.5 text-[14px] text-ink-soft">{description}</p>}
           </div>
           {aside}
         </div>
@@ -60,7 +60,7 @@ export function Row({
         ) : (
           <p className="text-[15px] text-ink">{label}</p>
         )}
-        {description && <div className="mt-0.5 text-[13.5px] text-ink-soft">{description}</div>}
+        {description && <div className="mt-0.5 text-[14px] text-ink-soft">{description}</div>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
     </div>
@@ -151,7 +151,7 @@ export function Select<T extends string>({
 
 export function SavedNote({ show, text = "Saved" }: { show: boolean; text?: string }) {
   return show ? (
-    <span role="status" className="inline-flex items-center gap-1.5 text-[13.5px] text-leaf">
+    <span role="status" className="inline-flex items-center gap-1.5 text-[14px] text-leaf">
       <Check aria-hidden="true" className="size-4" />
       {text}
     </span>
@@ -214,7 +214,7 @@ export function Pill({ children, tone = "plain" }: { children: ReactNode; tone?:
   return (
     <span
       className={cx(
-        "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] font-medium whitespace-nowrap",
+        "inline-flex h-6 items-center gap-1.5 rounded-full px-2.5 text-[13px] font-medium whitespace-nowrap",
         tone === "good" && "bg-lime-soft text-leaf-deep",
         tone === "warn" && "bg-lemon-soft text-ink",
         tone === "bad" && "bg-danger-soft text-danger",
@@ -228,10 +228,10 @@ export function Pill({ children, tone = "plain" }: { children: ReactNode; tone?:
 
 export function ErrorText({ children }: { children: ReactNode }) {
   return children ? (
-    <p role="alert" className="text-[13.5px] text-danger">
+    <p role="alert" className="text-[14px] text-danger">
       {children}
     </p>
   ) : null;
 }
 
-export const code = "font-mono text-[12.5px] text-ink";
+export const code = "font-mono text-[13px] text-ink";

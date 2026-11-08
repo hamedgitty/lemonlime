@@ -119,7 +119,7 @@ export function AccountsTab({ initialAgent }: { initialAgent?: AgentKind | undef
       <div className="flex items-end gap-3">
         <div className="min-w-0 flex-1">
           <h3 className="font-sans text-[15px] font-semibold tracking-normal">Accounts</h3>
-          <p className="mt-0.5 text-[13.5px] text-ink-soft">
+          <p className="mt-0.5 text-[14px] text-ink-soft">
             Several of your own accounts per agent, each signed in on its own. New threads use the one in use; a thread that hits a usage limit can switch to
             another.
           </p>
@@ -177,10 +177,10 @@ export function AccountsTab({ initialAgent }: { initialAgent?: AgentKind | undef
               <p className="truncate text-[15px] font-semibold text-ink" title={a.email ?? a.label}>
                 {a.email ?? a.label}
               </p>
-              {a.email && !a.builtIn && a.label !== a.email && <p className="truncate text-[13.5px] text-ink-soft">{a.label}</p>}
-              <p className={cx("mt-1 text-[13.5px]", a.isDefault ? "text-leaf" : "text-ink-soft")}>{a.isDefault ? "In use on this computer" : describe(a)}</p>
-              {a.isDefault && a.signedIn !== true && <p className="text-[13.5px] text-ink-soft">{describe(a)}</p>}
-              {a.plan && a.signedIn && <p className="text-[13.5px] text-ink-soft">{a.plan} plan</p>}
+              {a.email && !a.builtIn && a.label !== a.email && <p className="truncate text-[14px] text-ink-soft">{a.label}</p>}
+              <p className={cx("mt-1 text-[14px]", a.isDefault ? "text-leaf" : "text-ink-soft")}>{a.isDefault ? "In use on this computer" : describe(a)}</p>
+              {a.isDefault && a.signedIn !== true && <p className="text-[14px] text-ink-soft">{describe(a)}</p>}
+              {a.plan && a.signedIn && <p className="text-[14px] text-ink-soft">{a.plan} plan</p>}
             </div>
             {a.usage && <UsageBars agent={agent} usage={a.usage} />}
             <div className="mt-auto flex flex-wrap items-center gap-2">
@@ -231,7 +231,7 @@ export function AccountsTab({ initialAgent }: { initialAgent?: AgentKind | undef
           </li>
         ))}
       </ul>
-      {list && <p className="mt-3 text-[13.5px] text-ink-soft">New threads on this computer use the account in use.</p>}
+      {list && <p className="mt-3 text-[14px] text-ink-soft">New threads on this computer use the account in use.</p>}
       <div className="mt-2">
         <ErrorText>{error}</ErrorText>
       </div>
@@ -349,7 +349,7 @@ function UsageBars({ agent, usage }: { agent: AccountAgent; usage: NonNullable<A
           </div>
         );
       })}
-      {agent === "claude-code" && seen && <p className="text-[12.5px] text-ink-faint">As of the last turn, {seen}</p>}
+      {agent === "claude-code" && seen && <p className="text-[13px] text-ink-faint">As of the last turn, {seen}</p>}
     </div>
   );
 }

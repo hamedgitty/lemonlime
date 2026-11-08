@@ -86,7 +86,7 @@ function ProjectsTab({ ctx }: { ctx: SettingsCtx }) {
           }
           description={
             <>
-              <span className="font-mono text-[12.5px]">{path}</span>
+              <span className="font-mono text-[13px]">{path}</span>
               {counts.get(path) ? `, ${counts.get(path)} ${counts.get(path) === 1 ? "thread" : "threads"}` : ""}
             </>
           }
@@ -106,7 +106,7 @@ function ProjectsTab({ ctx }: { ctx: SettingsCtx }) {
         </Row>
       ))}
       <ErrorText>{error}</ErrorText>
-      {list.length > 0 && <p className="text-[12.5px] text-ink-faint">Removing a project only takes it off this list. Its folder and threads stay.</p>}
+      {list.length > 0 && <p className="text-[13px] text-ink-faint">Removing a project only takes it off this list. Its folder and threads stay.</p>}
     </Section>
   );
 }

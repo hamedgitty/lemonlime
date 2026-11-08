@@ -43,11 +43,16 @@ export function decide(level: ComputerLevel, r: ComputerRequest): "allow" | "ask
   return "allow";
 }
 
-/** Answer one request: check the setting, ask if needed, then do it. */
+/**
+ * Answer one request. In the desktop app the native side has the final say: it checks the
+ * thread's level again and asks in its own dialog at "ask first", so code in this window
+ * can't grant itself access. Here the level only refuses early.
+ */
 export async function answerComputerRequest(
   level: ComputerLevel,
   r: ComputerRequest,
   ask: (question: string) => Promise<boolean>,
+  threadId = "",
 ): Promise<{ ok: boolean; output: string }> {
   const verdict = decide(level, r);
   if (verdict === "refuse") {
@@ -57,18 +62,35 @@ export async function answerComputerRequest(
         level === "off" ? "The user hasn't given this thread access to their computer." : "Not allowed: this thread can only read files and list folders.",
     };
   }
-  if (verdict === "ask" && !(await ask(`A cloud agent wants to:\n\n${describeRequest(r)}\n\nAllow it once?`)))
-    return { ok: false, output: "The user said no." };
-  if (!isTauri()) return { ok: false, output: "Only the desktop app can do this." };
+  if (!isTauri()) {
+    if (verdict === "ask" && !(await ask(`A cloud agent wants to:\n\n${describeRequest(r)}\n\nAllow it once?`)))
+      return { ok: false, output: "The user said no." };
+    return { ok: false, output: "Only the desktop app can do this." };
+  }
   try {
     const output =
       r.op === "read_file"
-        ? await invoke<string>("computer_read_file", { path: r.path })
+        ? await invoke<string>("computer_read_file", { threadId, path: r.path })
         : r.op === "list_dir"
-          ? await invoke<string>("computer_list_dir", { path: r.path })
-          : await invoke<string>("computer_run_command", { command: r.command, cwd: r.cwd ?? null });
+          ? await invoke<string>("computer_list_dir", { threadId, path: r.path })
+          : await invoke<string>("computer_run_command", { threadId, command: r.command, cwd: r.cwd ?? null });
     return { ok: true, output };
   } catch (err) {
     return { ok: false, output: String(err) };
   }
+}
+
+/** Every cloud thread's level, as the desktop app's native side keeps them. */
+export async function loadComputerAccess(): Promise<Record<string, ComputerLevel> | null> {
+  if (!isTauri()) return null;
+  return invoke<Record<string, ComputerLevel>>("computer_access_levels").catch(() => null);
+}
+
+/**
+ * Change a thread's level. Raising it is confirmed by the person in a native dialog; the
+ * level in force afterwards comes back (unchanged if they said no).
+ */
+export async function setComputerAccess(threadId: string, level: ComputerLevel): Promise<ComputerLevel> {
+  if (!isTauri()) return level;
+  return invoke<ComputerLevel>("computer_set_access", { threadId, level });
 }

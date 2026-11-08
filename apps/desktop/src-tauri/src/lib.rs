@@ -40,6 +40,7 @@ pub fn run() {
         .manage(previews::Tunnels::default())
         .manage(system::Awake::default())
         .manage(host_terminal::HostTerminals::default())
+        .manage(computer::ComputerAccess::default())
         .invoke_handler(tauri::generate_handler![
             runner::start_local_runner,
             runner::stop_local_runner,
@@ -49,6 +50,8 @@ pub fn run() {
             repo::inspect_repo,
             secrets::secret_get,
             secrets::secret_set,
+            computer::computer_access_levels,
+            computer::computer_set_access,
             computer::computer_read_file,
             computer::computer_list_dir,
             computer::computer_run_command,

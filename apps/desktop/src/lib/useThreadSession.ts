@@ -242,7 +242,9 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
           ? {
               onComputerRequest: (requestId: string, request: ComputerRequest) => {
                 const level = callbacksRef.current.computerLevel?.() ?? "off";
-                void answerComputerRequest(level, request, confirmAction).then(r => client?.computerResult(requestId, r.ok, r.output));
+                const t = targetRef.current;
+                const id = t.mode === "local" ? t.meta.id : t.thread.id;
+                void answerComputerRequest(level, request, confirmAction, id).then(r => client?.computerResult(requestId, r.ok, r.output));
               },
             }
           : {}),

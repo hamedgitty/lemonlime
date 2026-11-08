@@ -196,6 +196,12 @@ look-alikes can't hide anything) or **Full**. Paths must be absolute and are nev
 followed through symbolic links; reads stop at 1 MB, commands at 60 seconds and 256 KB of
 output. With no desktop app open, the agent is told the computer can't be reached.
 
+The desktop app's native side, not its window, keeps each thread's setting (in
+`~/.lemonlime/computer-access.json`) and checks it on every request; raising a thread's
+setting and each **Ask first** request are confirmed in a native dialog. A command runs in
+its own process group, which is stopped when it ends or times out, so nothing it started is
+left running.
+
 ## Moving a thread (teleport)
 
 A thread can move between this computer and the cloud as one conversation. The desktop

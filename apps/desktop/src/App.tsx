@@ -53,6 +53,7 @@ import {
   type Settings,
   type UiPrefs,
 } from "./lib/storage.ts";
+import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 
 type Selection = { mode: "local" | "cloud"; id: string };
@@ -179,6 +180,12 @@ export function App() {
       return next;
     });
   }, []);
+
+  // What each cloud thread may do on this computer is kept by the app's native side; show
+  // what it holds (a level set in an older version has to be granted again there).
+  useEffect(() => {
+    void loadComputerAccess().then(levels => levels && onPrefs({ computerAccess: levels }));
+  }, [onPrefs]);
 
   // ── Theme ────────────────────────────────────────────────
   useEffect(() => {
@@ -1083,7 +1090,9 @@ export function App() {
                   computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
                   onComputerLevel={level => {
                     if (selectedEntry.mode !== "cloud") return;
-                    onPrefs({ computerAccess: { ...prefs.computerAccess, [selectedEntry.thread.id]: level } });
+                    const id = selectedEntry.thread.id;
+                    // The native side keeps the level, and asks before raising it.
+                    void setComputerAccess(id, level).then(now => onPrefs({ computerAccess: { ...prefs.computerAccess, [id]: now } }));
                   }}
                 />
               ) : (

@@ -59,7 +59,9 @@ describe("DockerProvider", () => {
     expect(run.join(" ")).not.toContain("LEMONLIME_THREAD_SECRET=s");
     expect(run).toEqual(expect.arrayContaining(["-e", "LEMONLIME_THREAD_SECRET", "--init"]));
     // The value reaches docker through its environment instead.
-    const env = readFileSync(d.bin.replace(/docker$/, "env.jsonl"), "utf8").trim().split("\n")[0]!;
+    const env = readFileSync(d.bin.replace(/docker$/, "env.jsonl"), "utf8")
+      .trim()
+      .split("\n")[0]!;
     expect(JSON.parse(env)).toEqual({ secret: "s" });
   });
 

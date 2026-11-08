@@ -67,7 +67,11 @@ describe("the agent key", () => {
     const { port } = await boot();
     const key = await deriveAgentKey(SECRET);
     const offer = (t: string) =>
-      fetch(`http://127.0.0.1:${port}/previews`, { method: "POST", headers: { authorization: `Bearer ${t}` }, body: JSON.stringify({ port: 5173, name: "web" }) });
+      fetch(`http://127.0.0.1:${port}/previews`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${t}` },
+        body: JSON.stringify({ port: 5173, name: "web" }),
+      });
     expect((await offer(await token(key, "runner"))).status).toBe(200);
     expect((await offer(await token(SECRET, "runner"))).status).toBe(401);
     const list = (t: string) => fetch(`http://127.0.0.1:${port}/subagents`, { headers: { authorization: `Bearer ${t}` } });

@@ -52,7 +52,8 @@ async function boot() {
     () => runner.close(),
     () => server.close(),
   );
-  const sign = async (scope: "client" | "runner") => signToken({ threadId: thread.id, scope, exp: Math.floor(Date.now() / 1000) + 60 }, scope === "runner" ? await deriveAgentKey(SECRET) : SECRET);
+  const sign = async (scope: "client" | "runner") =>
+    signToken({ threadId: thread.id, scope, exp: Math.floor(Date.now() / 1000) + 60 }, scope === "runner" ? await deriveAgentKey(SECRET) : SECRET);
   return { runner, port: server.port, sign };
 }
 

@@ -65,6 +65,24 @@ const TERMINAL_FRAME_BYTES = 256 * 1024;
 const TERMINAL_CHUNK_CHARS = 64 * 1024;
 /** A terminal client this far behind for this long is dropped; it reconnects and resumes. */
 const TERMINAL_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+/**
+ * A thread client this far behind is disconnected rather than buffered without limit; it
+ * reconnects and resumes from the last event it got, so nothing is lost.
+ */
+const THREAD_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+/** Replaying history pauses whenever this much is waiting to go out, until the socket drains. */
+const REPLAY_HIGH_WATER_BYTES = 1024 * 1024;
+
+/** Resolves once the socket has sent most of what's queued, or has closed. */
+function drained(ws: WebSocket): Promise<void> {
+  return new Promise(resolve => {
+    const check = () => {
+      if (ws.readyState !== ws.OPEN || ws.bufferedAmount < REPLAY_HIGH_WATER_BYTES / 4) resolve();
+      else setTimeout(check, 20);
+    };
+    check();
+  });
+}
 const TERMINAL_SLOW_MS = 10_000;
 
 /** HTTP health endpoint + the thread's WebSocket. */
@@ -141,7 +159,12 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
 
 function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions): void {
   const send = (m: ServerMessage) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
+    if (ws.readyState !== ws.OPEN) return;
+    if (ws.bufferedAmount > THREAD_MAX_BUFFERED_BYTES) {
+      ws.close(4408, "too slow");
+      return;
+    }
+    ws.send(JSON.stringify(m));
   };
   let unsubscribe: (() => void) | null = null;
   let authed = false;
@@ -185,7 +208,12 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         if (replaying) buffered.push(m);
         else send(m);
       });
-      for (const event of runner.store.since(msg.resumeFrom)) send({ type: "event", event });
+      for (const event of runner.store.since(msg.resumeFrom)) {
+        send({ type: "event", event });
+        // A long history goes out in steps, not all at once into memory.
+        if (ws.bufferedAmount > REPLAY_HIGH_WATER_BYTES) await drained(ws);
+        if (ws.readyState !== ws.OPEN) return;
+      }
       replaying = false;
       for (const m of buffered) send(m);
       send({ type: "caught_up", latestSeq: runner.store.latestSeq });
@@ -488,7 +516,9 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
     if (req.method === "GET") {
       const asClient = token && !auth?.ok ? await verifyCapped(token, opts.threadSecret) : null;
-      const ok = (auth?.ok && auth.claims.threadId === runner.thread.id) || (asClient?.ok && asClient.claims.scope === "client" && asClient.claims.threadId === runner.thread.id);
+      const ok =
+        (auth?.ok && auth.claims.threadId === runner.thread.id) ||
+        (asClient?.ok && asClient.claims.scope === "client" && asClient.claims.threadId === runner.thread.id);
       return ok ? reply(res, 200, { previews: runner.previews }) : reply(res, 401, { error: "unauthorized" });
     }
     if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });

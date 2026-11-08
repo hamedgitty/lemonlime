@@ -11,7 +11,8 @@ afterEach(async () => {
 });
 
 // Runner-scope requests here come from the agent's own git helper, signed with the agent key.
-const token = async (scope: "runner" | "relay" | "client", threadId = THREAD) => signToken({ threadId, scope, exp: Math.floor(Date.now() / 1000) + 60 }, scope === "runner" ? await deriveAgentKey(SECRET) : SECRET);
+const token = async (scope: "runner" | "relay" | "client", threadId = THREAD) =>
+  signToken({ threadId, scope, exp: Math.floor(Date.now() / 1000) + 60 }, scope === "runner" ? await deriveAgentKey(SECRET) : SECRET);
 
 async function serve(relay: Relay | undefined) {
   const idle: AgentAdapter = { kind: "codex", createSession: () => ({ runTurn: async () => {}, saveState: () => ({}), dispose: async () => {} }) };

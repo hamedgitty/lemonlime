@@ -100,9 +100,9 @@ describe("subagents", () => {
     const tooDeep = await runSubagentTool("spawn_subagent", { request_id: "gg1", task: "deeper" }, { ...env, LEMONLIME_SUBAGENT_ID: grandId });
     expect(textOf(tooDeep)).toMatch(/2 levels deep/);
     expect(await runSubagentTool("message_subagent", { id: ids[1]!, text: "hi" }, childEnv)).toMatchObject({ isError: true });
-    expect(
-      await runSubagentTool("spawn_subagent", { request_id: "x", task: "y" }, { ...env, LEMONLIME_AGENT_KEY: "wrong-secret-0123456789" }),
-    ).toMatchObject({ isError: true });
+    expect(await runSubagentTool("spawn_subagent", { request_id: "x", task: "y" }, { ...env, LEMONLIME_AGENT_KEY: "wrong-secret-0123456789" })).toMatchObject({
+      isError: true,
+    });
     release();
   });
 });

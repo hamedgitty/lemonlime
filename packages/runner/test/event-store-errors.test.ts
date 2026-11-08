@@ -18,7 +18,10 @@ describe("event store when the disk fails", () => {
 
     rmSync(file, { recursive: true });
     store.append({ type: "agent_message", text: "three" });
-    const saved = readFileSync(file, "utf8").trim().split("\n").map(l => (JSON.parse(l) as { seq: number }).seq);
+    const saved = readFileSync(file, "utf8")
+      .trim()
+      .split("\n")
+      .map(l => (JSON.parse(l) as { seq: number }).seq);
     expect(saved).toEqual([1, 2, 3]);
     // Only this user can read it.
     expect(statSync(file).mode & 0o077).toBe(0);

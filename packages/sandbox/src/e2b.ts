@@ -72,7 +72,8 @@ export class E2BProvider implements SandboxProvider {
     });
     const id = sandbox.sandboxID;
     try {
-      if (!sandbox.envdAccessToken) throw new Error("E2B didn't return an access token for the sandbox, so it isn't locked down; not starting the runner there");
+      if (!sandbox.envdAccessToken)
+        throw new Error("E2B didn't return an access token for the sandbox, so it isn't locked down; not starting the runner there");
       if (compareVersions(sandbox.envdVersion, "0.1.0") < 0) {
         throw new Error(`E2B template "${this.opts.templates[o.size]}" is too old (envd ${sandbox.envdVersion}); rebuild it`);
       }

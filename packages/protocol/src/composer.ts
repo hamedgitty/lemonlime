@@ -38,3 +38,11 @@ export type FilesResponse = z.infer<typeof FilesResponse>;
 
 /** The most files the runner lists in one answer. */
 export const FILES_LIMIT_MAX = 200;
+
+/**
+ * `GET /file?path=<relative path>` (client token): one file from the thread's working
+ * folder, as raw bytes with a content type, for the app's file tabs. The path must stay
+ * inside the working folder (symlinks are followed and checked too); `..`, absolute paths,
+ * `.git` and the runner's own `.lemonlime` folder are refused. Bigger files get 413.
+ */
+export const FILE_READ_MAX_BYTES = 20 * 1024 * 1024;

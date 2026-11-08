@@ -10,6 +10,7 @@ import { HttpError } from "../src/lib/errors.ts";
 import {
   createThread,
   deleteThread,
+  renameThread,
   getThreadRowForUser,
   listThreads,
   pauseThread,
@@ -108,6 +109,11 @@ describe("threads, scoped to a workspace", () => {
     expect(await httpStatus(listThreads(ctx, bob.userId, alice.workspaceId))).toBe(403);
     expect(await httpStatus(getThreadRowForUser(ctx, bob.userId, created.thread.id))).toBe(404);
     expect(await httpStatus(deleteThread(ctx, bob.userId, created.thread.id))).toBe(404);
+
+    // Renaming: members only, and the name is tidied.
+    expect(await httpStatus(renameThread(ctx, bob.userId, created.thread.id, "Mine now"))).toBe(404);
+    expect(await httpStatus(renameThread(ctx, alice.userId, created.thread.id, "   "))).toBe(400);
+    expect((await renameThread(ctx, alice.userId, created.thread.id, "  Fix the\n flaky test  ")).thread.title).toBe("Fix the flaky test");
 
     const closed = await deleteThread(ctx, alice.userId, created.thread.id);
     expect(closed.thread.status).toBe("stopped");

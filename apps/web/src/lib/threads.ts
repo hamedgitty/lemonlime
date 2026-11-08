@@ -386,6 +386,14 @@ export async function resumeThread(ctx: AppContext, userId: string, id: string):
   return threadResponse(ctx, updated, userId);
 }
 
+/** Give the thread a new title (members of its workspace only). */
+export async function renameThread(ctx: AppContext, userId: string, id: string, title: string): Promise<ThreadResponse> {
+  const row = await getThreadRowForUser(ctx, userId, id);
+  const clean = title.replace(/\s+/g, " ").trim().slice(0, 200);
+  if (!clean) throw new HttpError(400, "Give the thread a name.");
+  return threadResponse(ctx, await updateRow(ctx, row.id, { title: clean }), userId);
+}
+
 export async function deleteThread(ctx: AppContext, userId: string, id: string): Promise<ThreadResponse> {
   const row = await getThreadRowForUser(ctx, userId, id);
   if (row.mode !== "cloud") {

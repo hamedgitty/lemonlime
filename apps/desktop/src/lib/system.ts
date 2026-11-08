@@ -117,13 +117,12 @@ export async function exportSkills(names: string[]): Promise<{ name: string; fil
   return invoke("export_skills", { names });
 }
 
-/** Asks where to save, then writes the text there. False if the person cancelled. */
+/**
+ * Asks where to save (a native dialog the app shows itself), then writes the text there.
+ * False if the person cancelled.
+ */
 export async function saveTextFile(defaultName: string, content: string, filter: { name: string; extensions: string[] }): Promise<boolean> {
-  const { save } = await import("@tauri-apps/plugin-dialog");
-  const path = await save({ defaultPath: defaultName, filters: [filter] });
-  if (!path) return false;
-  await invoke("save_text_file", { path, content });
-  return true;
+  return invoke<boolean>("save_text_file", { defaultName, content, filterName: filter.name, extensions: filter.extensions });
 }
 
 /**

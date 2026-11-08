@@ -429,22 +429,35 @@ pub fn open_in_editor(editor: String, path: String) -> Result<(), String> {
     c.spawn().map(|_| ()).map_err(|err| format!("Couldn't open {}: {err}", e.name))
 }
 
-/// Writes an export the person chose a place for in the save dialog. Only text exports,
-/// never over an existing folder.
+/// Asks where to save an export in a native save dialog, then writes the text there. The
+/// place always comes from the person, never from the web view, so a script that got into
+/// the window can't use this to write a file of its choosing (say, an agent's settings file
+/// with hooks that run code). Only text exports, never over a folder. False if cancelled.
 #[tauri::command]
-pub fn save_text_file(path: String, content: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
+pub async fn save_text_file(app: tauri::AppHandle, default_name: String, content: String, filter_name: String, extensions: Vec<String>) -> Result<bool, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let allowed = ["md", "json", "txt"];
+    let exts: Vec<String> = extensions.into_iter().map(|e| e.to_ascii_lowercase()).filter(|e| allowed.contains(&e.as_str())).collect();
+    if exts.is_empty() {
+        return Err("Exports are saved as .md, .json or .txt files.".into());
+    }
+    if content.len() > 200 * 1024 * 1024 {
+        return Err("That export is too big.".into());
+    }
+    let name: String = default_name.chars().filter(|c| !matches!(c, '/' | '\\' | '\0')).take(120).collect();
+    let ext_refs: Vec<&str> = exts.iter().map(String::as_str).collect();
+    let picked = app.dialog().file().set_file_name(&name).add_filter(&filter_name, &ext_refs).blocking_save_file();
+    let Some(picked) = picked else { return Ok(false) };
+    let target = picked.into_path().map_err(|e| e.to_string())?;
     let ext = target.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    if !target.is_absolute() || !["md", "json", "txt"].contains(&ext.as_str()) {
+    if !exts.contains(&ext) {
         return Err("Exports are saved as .md, .json or .txt files.".into());
     }
     if target.is_dir() {
         return Err("That's a folder.".into());
     }
-    if content.len() > 200 * 1024 * 1024 {
-        return Err("That export is too big.".into());
-    }
-    std::fs::write(&target, content).map_err(|e| format!("Couldn't save it: {e}"))
+    std::fs::write(&target, content).map_err(|e| format!("Couldn't save it: {e}"))?;
+    Ok(true)
 }
 
 #[cfg(test)]

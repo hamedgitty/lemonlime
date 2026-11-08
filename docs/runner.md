@@ -31,7 +31,39 @@ lemonlime-runner cleanup --thread <id> --source-repo <path>
   --data-dir <path>        Where history is stored (default: <workdir>/.lemonlime, or
                            ~/.lemonlime/threads/<thread> with --source-repo)
   --control-plane <url>    Send heartbeats to this control plane
+  --instructions-file <path>   Your own instructions, added to every turn (at most 32 KB)
+  --strip-coauthors        Remove Co-authored-by trailers from the agent's commits
+  --branch-prefix <prefix> Name the thread's branch <prefix><thread> (default: agent/)
+  --retry-max-wait <min>   Retry turns that hit a busy provider or a usage limit (0: off)
+  --disable-skills <names> Leave these bundled skills out (comma-separated)
+  --no-command-guard       Turn the command guard off
 ```
+
+`lemonlime-runner --help` lists every option and environment variable. Cloud sandboxes
+get the same settings through `LEMONLIME_INSTRUCTIONS`, `LEMONLIME_STRIP_COAUTHORS=1`,
+`LEMONLIME_RETRY_MAX_WAIT` and `LEMONLIME_USER_SKILLS_<n>` (see "Workspace cloud
+settings" in [self-hosting.md](self-hosting.md)).
+
+### Your instructions
+
+`--instructions-file` (or `LEMONLIME_INSTRUCTIONS`) adds your own instructions to every
+turn: Claude Code gets them with `--append-system-prompt`, Codex as
+`developer_instructions`, and OpenCode and other ACP agents, which have no system prompt,
+at the start of each new conversation. Subagents and side chats get them too. More than
+32 KB is cut short.
+
+### Co-author trailers
+
+With `--strip-coauthors`, commits the agent makes in the thread lose their
+`Co-authored-by:` lines. The runner points the agent's git at a hooks folder of its own
+(through `GIT_CONFIG_PARAMETERS`, so nothing in the repository changes); each hook there
+runs the repository's own hook of the same name first, so project checks still run.
+
+### Branch names
+
+`--branch-prefix ai/` names a new thread's branch `ai/<thread>`. A thread keeps the branch
+it started on (saved in its data folder), so changing the prefix never moves existing
+threads. Cloud threads always use `agent/`.
 
 ### Local threads and worktrees
 
@@ -178,13 +210,27 @@ off" for the user once the limit lifts, or straight away when they sign in again
 a reset time it tries again after 30 minutes. It does this at most 3 times a day per
 thread, and not at all once the user writes something themselves.
 
+### Automatic retry
+
+`--retry-max-wait <minutes>` goes further: when a turn fails because the AI provider is
+overloaded (529, 503, "overloaded", ...) or a usage limit is hit, the runner records a
+`retry_scheduled` notice with `untilAt` and runs the same message again then, without a
+new user message. It waits until the time the agent gave, or 30 s, 1, 2, 4, 8 and then
+15 minutes when it didn't say, and never longer than the max wait in all for one message
+(at most 12 tries). A limit that lifts after the max wait isn't retried
+(`retry_given_up`). Sending a message or stopping the agent cancels the wait
+(`retry_cancelled`). A waiting retry is saved, so it survives a runner restart; it needs
+no client connected. With retry on, it replaces the "Continue where you left off" above.
+
 ## Safety guards
 
 - **Commands.** With Claude Code, a pre-tool hook (`lemonlime-runner command-guard`) blocks
   the few commands that wreck a computer rather than a project: deleting `/`, system
   folders or the home folder, formatting or erasing disks, writing straight to disk
   devices, and fork bombs. The agent is told why and asked to leave it to you.
-  `--no-command-guard` turns it off for a thread. Other agents don't offer a hook yet.
+  OpenCode and other ACP agents get the same check when they ask permission to run a
+  command: a dangerous one is refused at every autonomy level (`command_blocked` notice).
+  `--no-command-guard` turns it off for a thread. Codex has no hook for it yet.
 - **Disk.** Below 15% free in the thread's folder (at most 10 GB) you get a warning; below
   5% (at most 2 GB) the agent is paused and new messages wait; at 8% (at most 4 GB) it
   carries on. If the disk is still full 30 seconds
@@ -207,7 +253,8 @@ its agent looks: `.claude/skills` for Claude Code, `.agents/skills` for Codex, O
 and other ACP agents. They cover git hygiene, running tests first, opening a pull
 request, and when to stop and ask. The copies are listed in the repository's local
 `.git/info/exclude`, so they are never committed. Add your own with `--skills <dir>`
-(each skill is a folder with a `SKILL.md`), or leave ours out with `--no-bundled-skills`.
+(each skill is a folder with a `SKILL.md`), or leave ours out with `--no-bundled-skills`
+(all of them) or `--disable-skills lemonlime-open-pr,lemonlime-previews` (some).
 Skills in `~/.lemonlime/skills` (or `$LEMONLIME_HOME/skills`) are always copied too; the
 desktop app's **Settings → Skills** adds and removes them there.
 

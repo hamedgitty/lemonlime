@@ -254,6 +254,34 @@ describe("branch prefixes", () => {
   });
 });
 
+describe("the sandbox's setup script", () => {
+  it("is shown in the thread once, with its exit code and output", async () => {
+    const log = join(temp(), "setup.log");
+    writeFileSync(log, "exit 2\nnpm ERR! not found\n");
+    const dataDir = temp();
+    const make = () =>
+      new ThreadRunner({
+        thread: thread("setup-log-1"),
+        workdir: temp(),
+        dataDir,
+        adapter: adapterFor("claude-code"),
+        session: { autonomy: "full" },
+        git: false,
+        bundledSkills: false,
+        setupLog: log,
+      });
+    const first = make();
+    await first.init();
+    const notice = first.store.since(0).find(e => e.type === "notice" && e.code.startsWith("setup_script"));
+    expect(notice).toMatchObject({ code: "setup_script_failed", message: expect.stringMatching(/exit code 2[\s\S]*npm ERR! not found/) });
+    await first.close();
+    const second = make(); // the runner restarted: not shown again
+    await second.init();
+    expect(second.store.since(0).filter(e => e.type === "notice" && e.code.startsWith("setup_script"))).toHaveLength(1);
+    await second.close();
+  });
+});
+
 describe("skills", () => {
   it("can leave bundled skills out", async () => {
     const bundled = temp();

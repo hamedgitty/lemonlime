@@ -10,6 +10,43 @@ export interface RunnerLaunch {
   port: number;
   /** Environment for the runner (token secret, control plane URL, ...). */
   env: Record<string, string>;
+  /**
+   * A shell script to run once in a new sandbox before the runner starts (installing
+   * tools, say). It runs in the sandbox's starting folder, before the repository is
+   * cloned, for at most 15 minutes. Its exit code and output are saved for the runner,
+   * which shows them in the thread. Never run again in the same sandbox.
+   */
+  setupScript?: string;
+}
+
+/** Longest a setup script may run, in seconds. */
+export const SETUP_TIMEOUT_SECONDS = 900;
+
+const quote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The shell command a provider runs to start the runner: `runner.command`, after the
+ * setup script when there is one. The script's result goes to ~/.lemonlime/setup.log
+ * ("exit <code>", then the last 64 KB of output), which also marks it as done, and the
+ * runner is told where it is through LEMONLIME_SETUP_LOG.
+ */
+export function launchCommand(runner: RunnerLaunch): string {
+  if (!runner.setupScript?.trim()) return runner.command;
+  const script = [
+    'd="${HOME:-/tmp}/.lemonlime"',
+    'if [ ! -e "$d/setup.log" ]; then',
+    '  mkdir -p "$d"',
+    `  printf '%s\\n' ${quote(runner.setupScript)} > "$d/setup.sh"`,
+    `  if command -v timeout >/dev/null 2>&1; then timeout ${SETUP_TIMEOUT_SECONDS} sh "$d/setup.sh" > "$d/setup.out" 2>&1 < /dev/null; else sh "$d/setup.sh" > "$d/setup.out" 2>&1 < /dev/null; fi`,
+    "  code=$?",
+    '  { echo "exit $code"; tail -c 65536 "$d/setup.out"; } > "$d/setup.log.tmp"',
+    '  mv "$d/setup.log.tmp" "$d/setup.log"',
+    '  rm -f "$d/setup.out"',
+    "fi",
+    'export LEMONLIME_SETUP_LOG="$d/setup.log"',
+    `exec ${runner.command}`,
+  ].join("\n");
+  return `sh -c ${quote(script)}`;
 }
 
 export interface CreateSandboxOptions {

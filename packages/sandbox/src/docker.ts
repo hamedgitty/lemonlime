@@ -1,5 +1,5 @@
 import { SANDBOX_RESOURCES } from "@lemonlime/protocol";
-import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider, SandboxState } from "./types.ts";
+import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
 
 type Run = (file: string, args: string[], opts: { maxBuffer: number }) => Promise<{ stdout: string; stderr: string }>;
 let runner: Promise<Run> | undefined;
@@ -93,7 +93,7 @@ export class DockerProvider implements SandboxProvider {
       this.opts.image,
       "sh",
       "-c",
-      o.runner.command,
+      launchCommand(o.runner),
     ];
     const id = await this.exec(args);
     return this.info(id, o.runner.port);

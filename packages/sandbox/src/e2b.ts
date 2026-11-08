@@ -1,6 +1,6 @@
 import type { SandboxSize } from "@lemonlime/protocol";
 import { defaultFetch, isStatus, requestJson, trimSlash, type FetchLike } from "./http.ts";
-import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider, SandboxState } from "./types.ts";
+import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
 
 export interface E2BProviderOptions {
   apiKey: string;
@@ -72,7 +72,7 @@ export class E2BProvider implements SandboxProvider {
       if (compareVersions(sandbox.envdVersion, "0.1.0") < 0) {
         throw new Error(`E2B template "${this.opts.templates[o.size]}" is too old (envd ${sandbox.envdVersion}); rebuild it`);
       }
-      await this.startCommand(sandbox, o.runner.command, o.runner.env);
+      await this.startCommand(sandbox, launchCommand(o.runner), o.runner.env);
     } catch (err) {
       // The caller never learns this id, so clean up rather than leave it running.
       await this.destroy(id).catch(() => undefined);

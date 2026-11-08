@@ -20,6 +20,25 @@ export const Settings = z.object({
   accessToken: z.string().default(""),
   /** Which of the account's workspaces cloud threads live in. Empty means the personal one. */
   cloudWorkspaceId: z.string().default(""),
+  /** Added to every agent turn on this computer, for every agent. */
+  instructions: z.string().max(32_000).default(""),
+  /** Remove "Co-authored-by" lines agents add to their commits. */
+  stripCoauthors: z.boolean().default(true),
+  /** Branch names for new local threads start with this. */
+  branchPrefix: z.string().default("agent/"),
+  /** When a provider is overloaded or a usage limit is hit, wait up to this long and try again (0 = don't). */
+  retryMaxWaitMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(24 * 60)
+    .default(360),
+  /** Bundled skills left out of new threads, by name. */
+  disabledSkills: z.array(z.string()).default([]),
+  /** Block commands that would wipe your home folder or disk, delete hosted repos, and the like. */
+  commandGuard: z.boolean().default(true),
+  /** ACP agents saved for the agent picker. */
+  acpAgents: z.array(z.object({ id: z.string(), name: z.string(), command: z.string() })).default([]),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -121,7 +140,7 @@ export function forgetEvents(threadId: string): void {
 
 const KEY_UI = "lemonlime:ui";
 
-export const NAV_ITEMS = ["new", "search", "automations"] as const;
+export const NAV_ITEMS = ["new", "search", "skills", "plugins", "automations"] as const;
 export type NavItem = (typeof NAV_ITEMS)[number];
 
 export const UiPrefs = z.object({
@@ -148,6 +167,38 @@ export const UiPrefs = z.object({
   lastAgent: z.enum(["claude-code", "codex", "opencode", "acp"]).default("claude-code"),
   lastPlace: z.enum(["local", "cloud"]).default("local"),
   rightPanel: z.boolean().default(false),
+  /** Light, dark, or follow the system. */
+  theme: z.enum(["light", "dark", "system"]).default("light"),
+  /** Open a thread as soon as it's created. */
+  navigateOnCreate: z.boolean().default(true),
+  /** What Enter does while the agent is working: queue the message for after the turn, or steer (stop and send now). */
+  followUp: z.enum(["queue", "steer"]).default("queue"),
+  /** Where new threads start: the last place used, this computer, or the cloud. */
+  defaultPlace: z.enum(["last", "local", "cloud"]).default("last"),
+  /** Offer the highest reasoning levels in the picker. */
+  showMaxReasoning: z.boolean().default(false),
+  /** Fold each finished turn into one line in the timeline. */
+  collapseFinished: z.boolean().default(false),
+  /** Show each thread's agent icon in the sidebar. */
+  agentIcons: z.boolean().default(false),
+  notifications: z
+    .object({
+      enabled: z.boolean().default(true),
+      finished: z.boolean().default(true),
+      failed: z.boolean().default(true),
+      needsInput: z.boolean().default(true),
+      /** Also when the thread is open and the window is in front. */
+      whenFocused: z.boolean().default(false),
+    })
+    .default({ enabled: true, finished: true, failed: true, needsInput: true, whenFocused: false }),
+  /** Keep the computer awake while an agent on it is working. */
+  keepAwake: z.boolean().default(true),
+  /** Keep the screen on as well. */
+  keepDisplayOn: z.boolean().default(false),
+  /** Editor folders open in (an id from list_editors); empty = the system's file manager. */
+  editor: z.string().default(""),
+  /** Shortcuts the user changed, by id ("" turns one off). */
+  shortcuts: z.record(z.string(), z.string()).default({}),
 });
 export type UiPrefs = z.infer<typeof UiPrefs>;
 

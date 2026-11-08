@@ -95,7 +95,10 @@ export class CloudApi {
     return ((await this.request("POST", "/api/automations", input)) as { automation: AutomationInfo }).automation;
   }
 
-  async updateAutomation(id: string, patch: Partial<Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name">>): Promise<AutomationInfo> {
+  async updateAutomation(
+    id: string,
+    patch: Partial<Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name" | "agent" | "repo" | "sandboxSize">>,
+  ): Promise<AutomationInfo> {
     return ((await this.request("PATCH", `/api/automations/${encodeURIComponent(id)}`, patch)) as { automation: AutomationInfo }).automation;
   }
 
@@ -140,6 +143,59 @@ export class CloudApi {
     };
   }
 
+  /** GitHub accounts connected to the workspace (null when this server has no GitHub App). */
+  async githubInstallations(): Promise<{ id: string; accountLogin: string }[] | null> {
+    const body = (await this.request("GET", "/api/github/installations")) as {
+      configured?: boolean;
+      installations?: { id: string; accountLogin: string }[];
+    } | null;
+    if (body?.configured === false) return null;
+    return Array.isArray(body?.installations) ? body.installations : [];
+  }
+
+  async unlinkGithub(id: string): Promise<void> {
+    await this.request("DELETE", `/api/github/installations/${encodeURIComponent(id)}`);
+  }
+
+  /** The workspace's secrets: names only, never values. */
+  async listSecrets(): Promise<{ name: string; updatedAt: string }[]> {
+    const body = (await this.request("GET", "/api/secrets")) as { secrets?: { name: string; updatedAt: string }[] } | null;
+    return Array.isArray(body?.secrets) ? body.secrets : [];
+  }
+
+  async setSecret(name: string, value: string): Promise<void> {
+    await this.request("PUT", "/api/secrets", { name, value });
+  }
+
+  async deleteSecret(name: string): Promise<void> {
+    await this.request("DELETE", `/api/secrets/${encodeURIComponent(name)}`);
+  }
+
+  /** Settings every cloud sandbox in the workspace starts with. */
+  async workspaceSettings(): Promise<WorkspaceCloudSettings> {
+    const body = (await this.request("GET", "/api/workspace/settings")) as { settings?: Partial<WorkspaceCloudSettings> } | null;
+    return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings };
+  }
+
+  async saveWorkspaceSettings(patch: Partial<Omit<WorkspaceCloudSettings, "skills">>): Promise<WorkspaceCloudSettings> {
+    const body = (await this.request("PUT", "/api/workspace/settings", patch)) as { settings?: Partial<WorkspaceCloudSettings> } | null;
+    return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings };
+  }
+
+  /** Replace the skills cloud sandboxes get. */
+  async saveWorkspaceSkills(skills: { name: string; files: Record<string, string> }[]): Promise<void> {
+    await this.request("PUT", "/api/workspace/skills", { skills });
+  }
+
+  /** Mark one automation run as looked at (or not). */
+  async reviewRun(automationId: string, runId: string, reviewed: boolean): Promise<void> {
+    await this.request("PATCH", `/api/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}`, { reviewed });
+  }
+
+  async reviewAllRuns(): Promise<void> {
+    await this.request("POST", "/api/automations/runs/review-all");
+  }
+
   /** Stored history after `after`; works while the sandbox is paused, without waking it. */
   async history(id: string, after: number): Promise<ThreadHistoryResponse> {
     const body = await this.request("GET", `/api/threads/${encodeURIComponent(id)}/events?after=${after}`);
@@ -154,7 +210,7 @@ export class CloudApi {
     return r.success ? r.data : null;
   }
 
-  private async request(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, body?: unknown, inWorkspace = true): Promise<unknown> {
+  private async request(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, inWorkspace = true): Promise<unknown> {
     if (!this.base) throw new CloudError("Add a control plane URL in Settings first.", 0);
     // The control plane reads ?workspace= on every route that works in one.
     const ws = inWorkspace && this.cfg.workspaceId ? `${path.includes("?") ? "&" : "?"}workspace=${encodeURIComponent(this.cfg.workspaceId)}` : "";
@@ -246,5 +302,35 @@ export interface AutomationInfo {
   prompt: string;
   enabled: boolean;
   nextRunAt: string | null;
-  recentRuns?: { id: string; status: "started" | "skipped" | "failed"; ranAt: string; threadId: string | null; detail: string | null }[];
+  recentRuns?: {
+    id: string;
+    status: "started" | "skipped" | "failed";
+    ranAt: string;
+    threadId: string | null;
+    detail: string | null;
+    /** When someone marked it as looked at. */
+    reviewedAt?: string | null;
+    /** A short summary of how the run went, when the server has one. */
+    summary?: string | null;
+  }[];
 }
+
+export interface WorkspaceCloudSettings {
+  instructions: string;
+  setupScript: string;
+  stripCoauthors: boolean;
+  retryMaxWaitMinutes: number;
+  /** Cloud threads with no activity for this many days are archived and their sandbox deleted. Null = never. */
+  autoDeleteDays: number | null;
+  /** Names of the skills synced to the cloud. */
+  skills: { name: string }[];
+}
+
+export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceCloudSettings = {
+  instructions: "",
+  setupScript: "",
+  stripCoauthors: true,
+  retryMaxWaitMinutes: 360,
+  autoDeleteDays: null,
+  skills: [],
+};

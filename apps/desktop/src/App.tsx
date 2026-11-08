@@ -4,12 +4,17 @@ import { branchForThread, newThreadId, type Thread, type ThreadStatus } from "@l
 import { AppSidebar } from "./components/AppSidebar.tsx";
 import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
+import { SetupWizard } from "./components/SetupWizard.tsx";
+import { SkillsView } from "./components/SkillsView.tsx";
+import { needsUpdate } from "./components/settings/AgentsPage.tsx";
 import { TipProvider } from "./components/primitives.tsx";
-import { SettingsSidebar, SettingsView, type SettingsPage } from "./components/SettingsView.tsx";
+import { SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
-import { repoName, titleFromPrompt } from "./lib/format.ts";
+import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
+import { matchShortcut } from "./lib/shortcuts.ts";
+import { detectAgents, localRunnerStatuses, notify, setKeepAwake, type AgentInstall } from "./lib/system.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -42,7 +47,13 @@ import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from 
 
 type Selection = { mode: "local" | "cloud"; id: string };
 /** Where the app is. Back and forward move through these. */
-type Place = { view: "home" } | { view: "thread"; selection: Selection } | { view: "settings"; page: SettingsPage } | { view: "automations" };
+type Place =
+  | { view: "home" }
+  | { view: "thread"; selection: Selection }
+  | { view: "settings"; page: SettingsPage }
+  | { view: "automations" }
+  | { view: "skills" }
+  | { view: "plugins" };
 
 const CLOUD_REFRESH_MS = 15_000;
 const RUNNER_POLL_MS = 5_000;
@@ -154,6 +165,37 @@ export function App() {
     });
   }, []);
 
+  // ── Theme ────────────────────────────────────────────────
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const dark = prefs.theme === "dark" || (prefs.theme === "system" && Boolean(media?.matches));
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
+    };
+    apply();
+    if (prefs.theme !== "system" || !media) return;
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [prefs.theme]);
+
+  // ── Agent CLIs on this computer ──────────────────────────
+  const [agents, setAgents] = useState<AgentInstall[] | null>(null);
+  const refreshAgents = useCallback(() => {
+    if (!inDesktopShell()) return setAgents([]);
+    setAgents(null);
+    void detectAgents().then(setAgents, () => setAgents([]));
+  }, []);
+  useEffect(() => {
+    refreshAgents();
+    const t = setInterval(() => void detectAgents().then(setAgents, () => undefined), 6 * 60 * 60_000);
+    return () => clearInterval(t);
+  }, [refreshAgents]);
+  const agentUpdates = useMemo(() => (agents ?? []).filter(needsUpdate).map(a => AGENT_LABELS[a.kind]), [agents]);
+
+  // ── Setup wizard and composer drafts ─────────────────────
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
+
   const cloudConfigured = isCloudConfigured(settings);
   const cloudApi = useMemo(
     () =>
@@ -166,9 +208,18 @@ export function App() {
   useEffect(() => saveLocalThreads(localThreads), [localThreads]);
 
   // ── Local runners ────────────────────────────────────────
+  // What each local runner is doing, including threads that aren't open (for notifications and keep awake).
+  const [localStatus, setLocalStatus] = useState<Record<string, ThreadStatus>>({});
   const refreshRunners = useCallback(() => {
     void listLocalRunners()
       .then(ids => setRunning(prev => (sameSet(prev, ids) ? prev : new Set(ids))))
+      .catch(() => undefined);
+    void localRunnerStatuses()
+      .then(list => {
+        const next: Record<string, ThreadStatus> = {};
+        for (const r of list) if (r.health.status) next[r.threadId] = r.health.status;
+        setLocalStatus(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+      })
       .catch(() => undefined);
   }, []);
 
@@ -220,6 +271,33 @@ export function App() {
     const t = setInterval(load, 5 * 60_000);
     return () => clearInterval(t);
   }, [cloudApi]);
+
+  // ── Keep awake while an agent here works ─────────────────
+  const anyLocalWorking = Object.values(localStatus).some(st => st === "running");
+  useEffect(() => {
+    void setKeepAwake(prefs.keepAwake && anyLocalWorking, prefs.keepDisplayOn).catch(err => console.warn("Keep awake", err));
+  }, [prefs.keepAwake, prefs.keepDisplayOn, anyLocalWorking]);
+
+  // ── Notifications: a thread finished or failed ───────────
+  const lastStatus = useRef<Record<string, ThreadStatus>>({});
+  const placeRef = useRef<Place>(place);
+  placeRef.current = place;
+  useEffect(() => {
+    const now: Record<string, { status: ThreadStatus; title: string; mode: "local" | "cloud" }> = {};
+    for (const m of localThreads) if (localStatus[m.id]) now[m.id] = { status: localStatus[m.id]!, title: m.title, mode: "local" };
+    for (const t of cloudThreads) now[t.id] = { status: t.status, title: t.title || repoName(t.repo.url), mode: "cloud" };
+    const n = prefs.notifications;
+    for (const [id, cur] of Object.entries(now)) {
+      const before = lastStatus.current[id];
+      lastStatus.current[id] = cur.status;
+      if (!n.enabled || !before || before === cur.status || prefs.archived[id]) continue;
+      const p = placeRef.current;
+      const watching = p.view === "thread" && p.selection.id === id && document.hasFocus();
+      if (watching && !n.whenFocused) continue;
+      if (before === "running" && cur.status === "idle" && n.finished) void notify(cur.title || "Thread finished", "The agent finished its turn.");
+      else if (cur.status === "failed" && n.failed) void notify(cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.");
+    }
+  }, [localThreads, localStatus, cloudThreads, prefs.notifications, prefs.archived]);
 
   // ── Local thread metadata updates from the session ───────
   const patchLocal = useCallback((id: string, patch: (m: LocalThreadMeta) => LocalThreadMeta | null) => {
@@ -323,7 +401,7 @@ export function App() {
         agent,
         repoPath: input.repoPath,
         baseBranch: input.baseBranch,
-        branch: branchForThread(id),
+        branch: localBranch(id, settings.branchPrefix),
         status: "idle",
         lastSeq: 0,
         ...(input.prompt ? { pendingPrompt: input.prompt } : {}),
@@ -331,7 +409,7 @@ export function App() {
         updatedAt: now,
       };
       setLocalThreads(list => [meta, ...list]);
-      go({ view: "thread", selection: { mode: "local", id } });
+      if (prefs.navigateOnCreate) go({ view: "thread", selection: { mode: "local", id } });
       return;
     }
 
@@ -346,7 +424,7 @@ export function App() {
         ...(input.prompt ? { prompt: input.prompt } : {}),
       });
       setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
-      go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
+      if (prefs.navigateOnCreate) go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
     } catch (err) {
       if (err instanceof CloudError && err.denial) throw new DeniedError(err.denial);
       throw err;
@@ -427,35 +505,52 @@ export function App() {
     go({ view: "thread", selection: { mode: "local", id } });
   };
 
-  // ── Keyboard shortcuts ───────────────────────────────────
+  // ── Keyboard shortcuts (Settings → Keyboard can change them) ──
+  const shortcutState = useRef({ place, summaries: [] as ThreadSummary[], prefs });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.metaKey || e.ctrlKey;
-      if (!mod || e.altKey) return;
-      const k = e.key.toLowerCase();
-      if (k === "n") {
-        e.preventDefault();
-        go({ view: "home" });
-      } else if (k === ",") {
-        e.preventDefault();
-        go({ view: "settings", page: "account" });
-      } else if (k === "k") {
-        e.preventDefault();
-        onPrefs({ sidebarCollapsed: false });
-        setSearchOpen(true);
-      } else if (k === "\\") {
-        e.preventDefault();
-        setPrefs(p => {
-          const next = { ...p, sidebarCollapsed: !p.sidebarCollapsed };
-          saveUiPrefs(next);
-          return next;
-        });
-      } else if (k === "[") {
-        e.preventDefault();
-        setHistory(h => (h.at > 0 ? { ...h, at: h.at - 1 } : h));
-      } else if (k === "]") {
-        e.preventDefault();
-        setHistory(h => (h.at < h.stack.length - 1 ? { ...h, at: h.at + 1 } : h));
+      const id = matchShortcut(e, shortcutState.current.prefs.shortcuts);
+      if (!id) return;
+      e.preventDefault();
+      const { place: here, summaries: list, prefs: pr } = shortcutState.current;
+      const open = list.filter(t => !pr.archived[t.id]);
+      const currentId = here.view === "thread" ? here.selection.id : null;
+      const at = open.findIndex(t => t.id === currentId);
+      const select = (t: ThreadSummary | undefined) => t && go({ view: "thread", selection: { mode: t.mode, id: t.id } });
+      switch (id) {
+        case "new-thread":
+          return go({ view: "home" });
+        case "settings":
+          return go({ view: "settings", page: "account" });
+        case "search":
+          onPrefs({ sidebarCollapsed: false });
+          return setSearchOpen(true);
+        case "toggle-sidebar":
+          return onPrefs({ sidebarCollapsed: !pr.sidebarCollapsed });
+        case "back":
+          return setHistory(h => (h.at > 0 ? { ...h, at: h.at - 1 } : h));
+        case "forward":
+          return setHistory(h => (h.at < h.stack.length - 1 ? { ...h, at: h.at + 1 } : h));
+        case "skills":
+          return go({ view: "skills" });
+        case "automations":
+          return go({ view: "automations" });
+        case "prev-thread":
+          return select(open[at <= 0 ? 0 : at - 1]);
+        case "next-thread":
+          return select(open[at < 0 ? 0 : Math.min(open.length - 1, at + 1)]);
+        case "last-pinned":
+          return select(open.find(t => t.id === pr.pinned[0]));
+        case "pin-thread":
+          if (currentId) onPrefs({ pinned: pr.pinned.includes(currentId) ? pr.pinned.filter(x => x !== currentId) : [currentId, ...pr.pinned] });
+          return;
+        case "archive-thread": {
+          const t = open[at];
+          if (t) void onArchiveRef.current(t, true);
+          return;
+        }
+        case "right-panel":
+          return void window.dispatchEvent(new Event("lemonlime:toggle-panel"));
       }
     };
     window.addEventListener("keydown", onKey);
@@ -471,6 +566,10 @@ export function App() {
       ]),
     [localThreads, cloudThreads, running],
   );
+
+  shortcutState.current = { place, summaries, prefs };
+  const onArchiveRef = useRef(onArchive);
+  onArchiveRef.current = onArchive;
 
   const selection = place.view === "thread" ? place.selection : null;
   const selectedEntry: ThreadEntry | null = useMemo(() => {
@@ -488,6 +587,66 @@ export function App() {
     setSettings(s);
     void saveAccessToken(s.accessToken).catch(err => console.warn("Could not save the access token to the keychain", err));
   };
+
+  const addProject = async () => {
+    const folder = await pickFolder().catch(() => null);
+    if (!folder) return;
+    try {
+      await inspectRepo(folder);
+      onPrefs({ recentProjects: [folder, ...prefs.recentProjects.filter(p => p !== folder)] });
+      go({ view: "home" });
+    } catch (err) {
+      console.warn("Not a repository", err);
+    }
+  };
+
+  const settingsCtx: SettingsCtx = {
+    settings,
+    onSave: saveAll,
+    prefs,
+    onPrefs,
+    justSignedIn: signedIn,
+    cloudApi,
+    threads: summaries,
+    localThreads,
+    onUnarchive: t => void onArchive(t, false),
+    onOpenThread: t => go({ view: "thread", selection: { mode: t.mode, id: t.id } }),
+    agents,
+    refreshAgents,
+    onSignOut: () => {
+      saveAll({ ...settings, accessToken: "", cloudWorkspaceId: "" });
+      setSignedIn(false);
+    },
+    onImported: metas => setLocalThreads(list => [...metas.filter(m => !list.some(x => x.id === m.id)), ...list]),
+    onPage: page => go({ view: "settings", page: page as SettingsPage }),
+    onOpenSetup: () => setSetupOpen(true),
+  };
+
+  const promptInComposer = (text: string) => {
+    setDraft({ text, nonce: Date.now() });
+    go({ view: "home" });
+  };
+
+  if (setupOpen || (!prefs.setupDone && summaries.length === 0)) {
+    return (
+      <TipProvider>
+        <SetupWizard
+          connected={cloudConfigured}
+          dashboardUrl={settings.controlPlaneUrl}
+          cloudApi={cloudApi}
+          prefs={prefs}
+          onPrefs={onPrefs}
+          agents={agents}
+          refreshAgents={refreshAgents}
+          macChrome={MAC_CHROME}
+          onFinish={() => {
+            onPrefs({ setupDone: true });
+            setSetupOpen(false);
+          }}
+        />
+      </TipProvider>
+    );
+  }
 
   const sidebar =
     place.view === "settings" ? (
@@ -508,6 +667,10 @@ export function App() {
         onSelect={(t: ThreadSummary) => go({ view: "thread", selection: { mode: t.mode, id: t.id } })}
         onNew={() => go({ view: "home" })}
         onAutomations={() => go({ view: "automations" })}
+        onSkills={() => go({ view: "skills" })}
+        onPlugins={() => go({ view: "plugins" })}
+        onNewProject={() => void addProject()}
+        agentUpdates={agentUpdates}
         onSettings={page => go({ view: "settings", page: (page as SettingsPage) ?? "account" })}
         onBack={back}
         onForward={forward}
@@ -584,8 +747,10 @@ export function App() {
                   go({ view: "thread", selection: { mode: "cloud", id } });
                 }}
               />
+            ) : place.view === "skills" ? (
+              <SkillsView onPrompt={promptInComposer} />
             ) : place.view === "settings" ? (
-              <SettingsView page={place.page} settings={settings} onSave={saveAll} prefs={prefs} onPrefs={onPrefs} justSignedIn={signedIn} />
+              <SettingsView page={place.page} ctx={settingsCtx} />
             ) : place.view === "thread" && selectedEntry ? (
               <ThreadView
                 key={`${selectedEntry.mode}:${selection?.id}`}
@@ -615,6 +780,8 @@ export function App() {
                 onPrefs={onPrefs}
                 onCreate={createThread}
                 onConnectCloud={() => go({ view: "settings", page: "account" })}
+                draft={draft}
+                acpAgents={settings.acpAgents}
                 {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
               />
             )}
@@ -623,6 +790,14 @@ export function App() {
       </div>
     </TipProvider>
   );
+}
+
+/** A new local thread's branch, with the prefix from Settings → Agents (agent/ by default). */
+function localBranch(id: string, prefix: string): string {
+  const base = branchForThread(id);
+  const p = prefix.trim();
+  if (!p || p === "agent/") return base;
+  return `${p.endsWith("/") ? p : `${p}/`}${base.replace(/^agent\//, "")}`;
 }
 
 function sameSet(a: Set<string>, b: string[]): boolean {

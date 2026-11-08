@@ -196,6 +196,12 @@ function ThreadSessionView({
   }, []);
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
+  // The side-panel shortcut (handled by the app) toggles it.
+  useEffect(() => {
+    const toggle = () => setPanelOpen(o => !o);
+    window.addEventListener("lemonlime:toggle-panel", toggle);
+    return () => window.removeEventListener("lemonlime:toggle-panel", toggle);
+  }, []);
   const [moving, setMoving] = useState<string | null>(null);
   const [showSignIn, setShowSignIn] = useState(false);
   // The cloud agent said it isn't signed in (and the user hasn't finished signing it in since).
@@ -674,7 +680,7 @@ function EmptyThread({ state, mode, branch, cloudStatus }: { state: SessionState
   }
   return (
     <div className="mx-auto mt-[12vh] flex max-w-md flex-col items-center text-center">
-      <div className="mb-4 flex size-12 items-center justify-center rounded-2xl border border-line bg-white shadow-panel">
+      <div className="mb-4 flex size-12 items-center justify-center rounded-2xl border border-line bg-paper shadow-panel">
         <GitBranch aria-hidden="true" className="size-5 text-leaf" />
       </div>
       <h2 className="text-lg font-semibold text-ink">{heading}</h2>
@@ -709,7 +715,7 @@ function ConnectionBadge({ state, status }: { state: SessionState; status: Threa
     <span
       className={cx(
         "inline-flex h-8 items-center gap-2 rounded-lg border px-2.5 text-[13px]",
-        state === "error" ? "border-danger/25 bg-danger-soft text-danger" : "border-line bg-white text-ink-soft",
+        state === "error" ? "border-danger/25 bg-danger-soft text-danger" : "border-line bg-paper text-ink-soft",
       )}
       role="status"
       aria-live="polite"

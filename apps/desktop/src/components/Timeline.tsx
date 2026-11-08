@@ -108,7 +108,7 @@ export function Timeline({
         <button
           type="button"
           onClick={jump}
-          className="absolute bottom-4 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line-strong bg-white px-3 py-1.5 text-[13px] font-medium text-ink shadow-pop hover:bg-cream"
+          className="absolute bottom-4 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line-strong bg-paper px-3 py-1.5 text-[13px] font-medium text-ink shadow-pop hover:bg-cream"
         >
           <ArrowDown aria-hidden="true" className="size-3.5" />
           Latest
@@ -200,7 +200,7 @@ function ApprovalCard({ item, onApprove }: { item: Extract<TimelineItem, { kind:
   return (
     <div className="animate-rise rounded-2xl border border-[#f0d95c] bg-lemon-soft/70 px-4 py-3.5" role="group" aria-label="The agent is asking for permission">
       <p className="font-medium text-ink">{isCommand ? "The agent wants to run this command" : `The agent wants to use ${item.tool}`}</p>
-      <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-line bg-white px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
+      <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-line bg-paper px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
         {item.summary}
       </pre>
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -252,7 +252,7 @@ function UserMessage({
           {files && files.length > 0 && (
             <ul aria-label="Attached files" className="mt-2 flex flex-wrap gap-1">
               {files.map(f => (
-                <li key={f} className="inline-flex h-6 max-w-[220px] items-center gap-1 rounded-md bg-white/70 px-2 text-[12.5px] text-ink-soft">
+                <li key={f} className="inline-flex h-6 max-w-[220px] items-center gap-1 rounded-md bg-paper/70 px-2 text-[12.5px] text-ink-soft">
                   <Paperclip aria-hidden="true" className="size-3 shrink-0" />
                   <span className="truncate">{f}</span>
                 </li>
@@ -465,7 +465,7 @@ function ToolCall({ name, input, result }: { name: string; input: unknown; resul
   const outputText = result ? stringifyValue(result.output) : "";
 
   return (
-    <div className={cx("rounded-xl border bg-white", result?.isError ? "border-danger/30" : "border-line")}>
+    <div className={cx("rounded-xl border bg-paper", result?.isError ? "border-danger/30" : "border-line")}>
       <button
         type="button"
         onClick={() => setOpen(o => !o)}

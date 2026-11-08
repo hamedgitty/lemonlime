@@ -122,7 +122,7 @@ export function PreviewPanel({
           title={current?.name ?? "Preview"}
           src={address}
           sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
-          className="min-h-0 w-full flex-1 bg-white"
+          className="min-h-0 w-full flex-1 bg-paper"
         />
       ) : (
         <p role="status" className="m-3 text-[13.5px] text-ink-soft">

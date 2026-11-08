@@ -8,6 +8,7 @@ mod repo;
 mod runner;
 mod secrets;
 mod skills;
+mod system;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -31,8 +32,10 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(runner::Runners::default())
         .manage(previews::Tunnels::default())
+        .manage(system::Awake::default())
         .invoke_handler(tauri::generate_handler![
             runner::start_local_runner,
             runner::stop_local_runner,
@@ -52,6 +55,16 @@ pub fn run() {
             skills::add_skill,
             skills::remove_skill,
             skills::skills_folder,
+            skills::read_skill,
+            skills::fork_skill,
+            skills::export_skills,
+            system::detect_agents,
+            system::install_agent,
+            system::set_keep_awake,
+            system::list_editors,
+            system::open_in_editor,
+            system::local_runner_statuses,
+            system::save_text_file,
             confirm_quit,
         ])
         .build(tauri::generate_context!())
@@ -69,6 +82,7 @@ pub fn run() {
             RunEvent::Exit => {
                 app.state::<runner::Runners>().stop_all();
                 app.state::<previews::Tunnels>().stop_all();
+                app.state::<system::Awake>().release();
             }
             _ => {}
         });

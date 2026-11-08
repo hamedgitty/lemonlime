@@ -91,7 +91,8 @@ export async function pickFolder(): Promise<string | null> {
 export interface SkillInfo {
   name: string;
   description: string;
-  source: "bundled" | "yours";
+  /** LemonLime's own, yours, or one an agent keeps for itself on this computer. */
+  source: "bundled" | "yours" | "claude-code" | "codex" | "opencode" | "shared";
 }
 
 /** LemonLime's own skills and the user's, as copied into every local thread. */

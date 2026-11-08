@@ -13,9 +13,9 @@ type Size = "sm" | "md";
 
 const VARIANTS: Record<Variant, string> = {
   primary: "bg-lemon text-ink border border-[#e9c900] shadow-[inset_0_-1px_0_rgb(0_0_0/0.08)] hover:bg-[#ffe84f] active:bg-[#f5d400]",
-  secondary: "bg-white text-ink border border-line-strong hover:bg-cream hover:border-ink-faint/50",
+  secondary: "bg-paper text-ink border border-line-strong hover:bg-cream hover:border-ink-faint/50",
   ghost: "text-ink-soft hover:text-ink hover:bg-ink/5 border border-transparent",
-  danger: "bg-white text-danger border border-danger/30 hover:bg-danger-soft",
+  danger: "bg-paper text-danger border border-danger/30 hover:bg-danger-soft",
 };
 
 const SIZES: Record<Size, string> = {
@@ -98,7 +98,7 @@ export function Field({
 }
 
 export const inputClass =
-  "w-full rounded-[10px] border border-control bg-white px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-[border-color,box-shadow] duration-150 focus:border-leaf focus:shadow-[0_0_0_1px_var(--color-leaf)] focus:outline-none";
+  "w-full rounded-[10px] border border-control bg-paper px-3 py-2 text-sm text-ink placeholder:text-ink-faint transition-[border-color,box-shadow] duration-150 focus:border-leaf focus:shadow-[0_0_0_1px_var(--color-leaf)] focus:outline-none";
 
 export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function TextInput({ className, ...rest }, ref) {
   return <input ref={ref} className={cx(inputClass, className)} {...rest} />;
@@ -158,7 +158,7 @@ export function SegmentedControl<T extends string>({
             title={o.hint}
             className={cx(
               "relative flex items-center justify-center gap-2 rounded-[9px] px-3 py-1.5 text-[13px] font-medium transition-colors",
-              active ? "bg-white text-ink shadow-[0_1px_2px_rgb(23_32_14/0.08)]" : "text-ink-soft hover:text-ink",
+              active ? "bg-paper text-ink shadow-[0_1px_2px_rgb(23_32_14/0.08)]" : "text-ink-soft hover:text-ink",
               o.disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
               "has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-leaf",
             )}

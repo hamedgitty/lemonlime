@@ -4,6 +4,9 @@ import {
   Archive,
   ArchiveRestore,
   ArrowDownUp,
+  BookOpen,
+  Download,
+  FolderPlus,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -17,6 +20,7 @@ import {
   PanelLeft,
   Pin,
   PinOff,
+  Puzzle,
   Search,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -41,6 +45,12 @@ export interface AppSidebarProps {
   onSelect: (t: ThreadSummary) => void;
   onNew: () => void;
   onAutomations: () => void;
+  onSkills: () => void;
+  onPlugins: () => void;
+  /** Pick a folder to start threads in. */
+  onNewProject: () => void;
+  /** Agent CLIs on this computer older than LemonLime is tested with (labels). */
+  agentUpdates?: string[];
   onSettings: (page?: string) => void;
   onBack: (() => void) | null;
   onForward: (() => void) | null;
@@ -56,6 +66,8 @@ export interface AppSidebarProps {
 const NAV: Record<NavItem, { label: string; icon: typeof SquarePen; shortcut: string }> = {
   new: { label: "New thread", icon: SquarePen, shortcut: "⌘ N" },
   search: { label: "Search threads", icon: Search, shortcut: "⌘ K" },
+  skills: { label: "Skills", icon: BookOpen, shortcut: "" },
+  plugins: { label: "Plugins", icon: Puzzle, shortcut: "" },
   automations: { label: "Automations", icon: AlarmClock, shortcut: "" },
 };
 
@@ -86,7 +98,13 @@ export function AppSidebar(p: AppSidebarProps) {
     [filtered, p.prefs],
   );
 
-  const navAction = (item: NavItem) => (item === "new" ? p.onNew() : item === "automations" ? p.onAutomations() : p.onSearchOpen(!p.searchOpen));
+  const navAction = (item: NavItem) => {
+    if (item === "new") p.onNew();
+    else if (item === "automations") p.onAutomations();
+    else if (item === "skills") p.onSkills();
+    else if (item === "plugins") p.onPlugins();
+    else p.onSearchOpen(!p.searchOpen);
+  };
 
   return (
     <nav aria-label="LemonLime" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">
@@ -226,6 +244,10 @@ export function AppSidebar(p: AppSidebarProps) {
             </button>
           }
         >
+          <MenuItem icon={<FolderPlus />} onSelect={p.onNewProject}>
+            New project…
+          </MenuItem>
+          <MenuSeparator />
           <SubMenu icon={<Layers />} label="Organize">
             <MenuChoice
               value={p.prefs.organize}
@@ -274,6 +296,7 @@ export function AppSidebar(p: AppSidebarProps) {
                       selected={t.id === p.selectedId}
                       pinned={p.prefs.pinned.includes(t.id)}
                       onSelect={p.onSelect}
+                      agentIcon={p.prefs.agentIcons}
                       onPin={pin => p.onPrefs({ pinned: pin ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) })}
                       archived={false}
                       onArchive={a => p.onArchive(t, a)}
@@ -336,6 +359,19 @@ export function AppSidebar(p: AppSidebarProps) {
           </button>
         </Tip>
         <span className="flex-1" />
+        {p.agentUpdates && p.agentUpdates.length > 0 && (
+          <Tip label={`${p.agentUpdates.join(" and ")} ${p.agentUpdates.length === 1 ? "has" : "have"} an update`}>
+            <button
+              type="button"
+              onClick={() => p.onSettings("agents")}
+              aria-label="Agent updates"
+              className="mr-1 inline-flex h-[26px] items-center gap-1.5 rounded-full border border-line bg-cream px-2 text-[12.5px] font-medium text-ink-soft hover:border-line-strong"
+            >
+              <Download aria-hidden="true" className="size-3.5 text-leaf" />
+              {p.agentUpdates.length}
+            </button>
+          </Tip>
+        )}
         <Tip
           label={
             p.cloudConfigured
@@ -384,9 +420,11 @@ function ThreadRow({
   onPin,
   archived,
   onArchive,
+  agentIcon = false,
 }: {
   t: ThreadSummary;
   selected: boolean;
+  agentIcon?: boolean;
   pinned: boolean;
   onSelect: (t: ThreadSummary) => void;
   onPin: (pin: boolean) => void;
@@ -407,6 +445,8 @@ function ThreadRow({
       >
         {working || t.status === "failed" ? (
           <StatusDot status={t.status} className="mx-[5px]" />
+        ) : agentIcon ? (
+          <AgentBadge kind={t.agent.kind} />
         ) : t.mode === "cloud" ? (
           <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
         ) : (
@@ -487,40 +527,71 @@ function groupThreads(threads: ThreadSummary[], prefs: UiPrefs): Group[] {
   return out;
 }
 
+function AgentBadge({ kind }: { kind: ThreadSummary["agent"]["kind"] }) {
+  const letter = { "claude-code": "C", codex: "X", opencode: "O", acp: "A" }[kind];
+  return (
+    <span
+      aria-hidden="true"
+      title={AGENT_LABELS[kind]}
+      className="inline-flex size-4 shrink-0 items-center justify-center rounded-[5px] bg-cream-hover text-[10px] font-semibold text-ink-soft"
+    >
+      {letter}
+    </span>
+  );
+}
+
 function CustomizeNav({ prefs, onPrefs, onDone }: { prefs: UiPrefs; onPrefs: (p: Partial<UiPrefs>) => void; onDone: () => void }) {
-  const move = (item: NavItem, by: -1 | 1) => {
-    const order = [...prefs.navOrder];
-    const i = order.indexOf(item);
-    const j = i + by;
-    if (j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j]!, order[i]!];
-    onPrefs({ navOrder: order });
+  const order = [...prefs.navOrder, ...NAV_ITEMS.filter(i => !prefs.navOrder.includes(i))];
+  const [dragging, setDragging] = useState<NavItem | null>(null);
+  const place = (item: NavItem, to: number) => {
+    const next = order.filter(x => x !== item);
+    next.splice(Math.max(0, Math.min(to, next.length)), 0, item);
+    onPrefs({ navOrder: next });
   };
   return (
     <div className="rounded-lg border border-line bg-cream/60 p-1">
       <div className="flex h-8 items-center px-2">
-        <span className="flex-1 text-[13px] text-ink-soft">Customize sidebar</span>
+        <span className="flex-1 text-[13px] text-ink-soft">Drag to reorder</span>
         <button type="button" onClick={onDone} className="text-[13.5px] font-semibold text-ink hover:text-leaf">
           Done
         </button>
       </div>
       <ul>
-        {prefs.navOrder.map((item, i) => {
+        {order.map((item, i) => {
           const { label, icon: Icon } = NAV[item];
           const shown = !prefs.hiddenNav.includes(item);
           return (
-            <li key={item} className="flex h-[30px] items-center gap-2 rounded-lg px-1.5 hover:bg-cream-hover">
-              <span className="flex flex-col">
-                <button
-                  type="button"
-                  aria-label={`Move ${label} up`}
-                  disabled={i === 0}
-                  onClick={() => move(item, -1)}
-                  className="text-ink-faint disabled:opacity-30"
-                >
-                  <GripVertical aria-hidden="true" className="size-3.5" />
-                </button>
-              </span>
+            <li
+              key={item}
+              draggable
+              onDragStart={e => {
+                setDragging(item);
+                e.dataTransfer.effectAllowed = "move";
+              }}
+              onDragEnd={() => setDragging(null)}
+              onDragOver={e => {
+                if (!dragging || dragging === item) return;
+                e.preventDefault();
+                place(dragging, i);
+              }}
+              className={cx("flex h-[30px] items-center gap-2 rounded-lg px-1.5 hover:bg-cream-hover", dragging === item && "bg-cream-hover opacity-70")}
+            >
+              <button
+                type="button"
+                aria-label={`Move ${label}. Up and down arrows move it.`}
+                onKeyDown={e => {
+                  if (e.key === "ArrowUp" && i > 0) {
+                    e.preventDefault();
+                    place(item, i - 1);
+                  } else if (e.key === "ArrowDown" && i < order.length - 1) {
+                    e.preventDefault();
+                    place(item, i + 1);
+                  }
+                }}
+                className="cursor-grab text-ink-faint active:cursor-grabbing"
+              >
+                <GripVertical aria-hidden="true" className="size-3.5" />
+              </button>
               <Icon aria-hidden="true" className="size-4 text-ink-soft" />
               <label htmlFor={`nav-${item}`} className="flex-1 text-[14px]">
                 {label}

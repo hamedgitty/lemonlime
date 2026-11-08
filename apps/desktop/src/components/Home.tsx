@@ -1,11 +1,11 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, Check, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Zap } from "lucide-react";
 import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type ReasoningLevel, type SandboxSize } from "@lemonlime/protocol";
 import { splitCommand } from "../lib/command.ts";
 import { AGENT_LABELS, repoName } from "../lib/format.ts";
 import { inDesktopShell, inspectRepo, pickFolder } from "../lib/native.ts";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
-import type { UiPrefs } from "../lib/storage.ts";
+import type { Settings, UiPrefs } from "../lib/storage.ts";
 import { Composer, PickerButton, type ComposerHandle } from "./Composer.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Popover } from "./primitives.tsx";
 import { Button, SegmentedControl, TextInput, cx, openExternal } from "./ui.tsx";
@@ -38,21 +38,29 @@ export interface HomeProps {
   onConnectCloud: () => void;
   /** The LemonLime dashboard, when connected (for GitHub setup). */
   dashboardUrl?: string;
+  /** Text to put in the composer (from Skills, Plugins…); a new nonce fills it again. */
+  draft?: { text: string; nonce: number } | null;
+  /** ACP agents saved in Settings. */
+  acpAgents?: Settings["acpAgents"];
 }
 
 /**
  * The home screen is the composer: write what you want, pick the project and where it
  * runs underneath, send. Sending starts a thread.
  */
-export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, onConnectCloud, dashboardUrl }: HomeProps) {
+export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, onConnectCloud, draft, acpAgents = [] }: HomeProps) {
   const composer = useRef<ComposerHandle>(null);
   const shell = inDesktopShell();
-  const place = prefs.lastPlace === "cloud" && cloudAvailable ? "cloud" : "local";
+  const wanted = prefs.defaultPlace === "last" ? prefs.lastPlace : prefs.defaultPlace;
+  const place = wanted === "cloud" && cloudAvailable ? "cloud" : "local";
+  useEffect(() => {
+    if (draft) composer.current?.fill(draft.text);
+  }, [draft]);
   const agent = prefs.lastAgent;
   const [model, setModel] = useState("");
   const [reasoning, setReasoning] = useState<ReasoningLevel | "">("");
   const caps = AGENT_CAPABILITIES[agent];
-  const [acpCommand, setAcpCommand] = useState("");
+  const [acpCommand, setAcpCommand] = useState(acpAgents[0]?.command ?? "");
   const [repoPath, setRepoPath] = useState(prefs.recentProjects[0] ?? "");
   const [repoUrl, setRepoUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
@@ -123,16 +131,6 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
   return (
     <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-[740px] px-6 pt-[14vh] pb-16">
-        {!prefs.setupDone && threadCount === 0 && (
-          <SetupCard
-            agent={agent}
-            cloudAvailable={cloudAvailable}
-            dashboardUrl={dashboardUrl}
-            prefs={prefs}
-            onPrefs={onPrefs}
-            onConnectCloud={onConnectCloud}
-          />
-        )}
         <h1 className="mb-6 text-center font-display text-[30px] font-semibold tracking-[-0.03em] text-ink">What should your agent work on?</h1>
         <Composer
           ref={composer}
@@ -155,6 +153,24 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
                   onChange={a => onPrefs({ lastAgent: a })}
                   options={AGENTS.map(a => ({ value: a, label: <span>{AGENT_LABELS[a]}</span> }))}
                 />
+                {acpAgents.length > 0 && (
+                  <>
+                    <MenuSeparator />
+                    <MenuLabel>Saved ACP agents</MenuLabel>
+                    {acpAgents.map(a => (
+                      <MenuItem
+                        key={a.id}
+                        icon={agent === "acp" && acpCommand === a.command ? <Check /> : <span className="size-4" />}
+                        onSelect={() => {
+                          setAcpCommand(a.command);
+                          onPrefs({ lastAgent: "acp" });
+                        }}
+                      >
+                        {a.name}
+                      </MenuItem>
+                    ))}
+                  </>
+                )}
               </Menu>
               <Popover
                 trigger={
@@ -194,7 +210,9 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
                         onChange={v => setReasoning(v === "default" ? "" : (v as ReasoningLevel))}
                         options={[
                           { value: "default", label: "Default" },
-                          ...caps.reasoning.slice(0, 4).map(r => ({ value: r, label: r === "xhigh" ? "Extra high" : r[0]!.toUpperCase() + r.slice(1) })),
+                          ...caps.reasoning
+                            .slice(0, prefs.showMaxReasoning ? undefined : 4)
+                            .map(r => ({ value: r, label: r === "xhigh" ? "Extra high" : r[0]!.toUpperCase() + r.slice(1) })),
                         ]}
                       />
                       <p className="mt-1 text-[12.5px] text-ink-faint">Fixed for this thread once it starts.</p>
@@ -390,116 +408,5 @@ function BranchField({ value, onChange }: { value: string; onChange: (v: string)
       <span className="mb-1 block text-[13.5px] font-medium">Start from branch</span>
       <TextInput value={value} onChange={e => onChange(e.target.value)} placeholder="main" className="font-mono text-[13px]" spellCheck={false} />
     </label>
-  );
-}
-
-const SIGN_IN: Record<AgentKind, string | null> = { "claude-code": "claude auth login", codex: "codex login", opencode: "opencode auth login", acp: null };
-
-/**
- * First run: three steps to being set up. Each says what it's for and can be skipped; the
- * card goes once they're done or put away, and never comes back after the first thread.
- */
-function SetupCard({
-  agent,
-  cloudAvailable,
-  dashboardUrl,
-  prefs,
-  onPrefs,
-  onConnectCloud,
-}: {
-  agent: AgentKind;
-  cloudAvailable: boolean;
-  dashboardUrl: string | undefined;
-  prefs: UiPrefs;
-  onPrefs: (patch: Partial<UiPrefs>) => void;
-  onConnectCloud: () => void;
-}) {
-  const [copied, setCopied] = useState(false);
-  const signIn = SIGN_IN[agent];
-  const steps = [
-    {
-      done: prefs.setupAgentSignedIn,
-      title: `Sign ${AGENT_LABELS[agent]} in to your own account`,
-      body: signIn ? (
-        <>
-          LemonLime runs the agent with your plan or API key. In a terminal, run{" "}
-          <button
-            type="button"
-            className="rounded bg-cream-deep px-1.5 py-0.5 font-mono text-[12.5px] text-ink hover:bg-cream-hover"
-            onClick={() => {
-              void navigator.clipboard?.writeText(signIn);
-              setCopied(true);
-              setTimeout(() => setCopied(false), 2000);
-            }}
-          >
-            {signIn}
-          </button>
-          {copied ? " (copied)" : ""}.
-        </>
-      ) : (
-        "Sign your agent in the way its own docs say."
-      ),
-      action: !prefs.setupAgentSignedIn && (
-        <Button size="sm" variant="secondary" onClick={() => onPrefs({ setupAgentSignedIn: true })}>
-          Done
-        </Button>
-      ),
-    },
-    {
-      done: cloudAvailable,
-      title: "Connect LemonLime Cloud (optional)",
-      body: "So agents keep working after you close your laptop. Local threads need nothing more.",
-      action: !cloudAvailable && (
-        <Button size="sm" variant="secondary" onClick={onConnectCloud}>
-          Connect
-        </Button>
-      ),
-    },
-    {
-      done: false,
-      title: "Connect GitHub for cloud threads",
-      body: "Lets cloud agents clone your private repositories, push their branch and open pull requests.",
-      action: cloudAvailable && dashboardUrl && (
-        <Button size="sm" variant="secondary" onClick={() => void openExternal(`${dashboardUrl.replace(/\/+$/, "")}/settings#github`)}>
-          <ExternalLink aria-hidden="true" className="size-3.5" />
-          Open
-        </Button>
-      ),
-    },
-  ];
-  return (
-    <section aria-labelledby="setup-heading" className="mb-10 rounded-2xl border border-line bg-paper p-5 shadow-panel">
-      <div className="flex items-baseline gap-3">
-        <h2 id="setup-heading" className="flex-1 font-sans text-[16px] font-semibold tracking-normal">
-          Get set up
-        </h2>
-        <button type="button" onClick={() => onPrefs({ setupDone: true })} className="text-[13.5px] text-ink-soft hover:text-ink">
-          Put away
-        </button>
-      </div>
-      <ol className="mt-3 flex flex-col gap-3">
-        {steps.map((s, i) => (
-          <li key={s.title} className="flex items-start gap-3">
-            <span
-              aria-hidden="true"
-              className={cx(
-                "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[12.5px] font-semibold",
-                s.done ? "bg-lime text-ink" : "border border-line-strong text-ink-soft",
-              )}
-            >
-              {s.done ? <Check className="size-3.5" /> : i + 1}
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className={cx("text-[14.5px] font-medium", s.done && "text-ink-soft")}>
-                {s.title}
-                {s.done && <span className="sr-only"> (done)</span>}
-              </p>
-              {!s.done && <p className="mt-0.5 text-[13.5px] text-ink-soft">{s.body}</p>}
-            </div>
-            {s.action || null}
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }

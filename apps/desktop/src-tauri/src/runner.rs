@@ -53,6 +53,11 @@ impl Runners {
         self.lock().values_mut().any(|p| p.alive())
     }
 
+    /// Ports of the runners still alive, by thread id.
+    pub fn ports(&self) -> Vec<(String, u16)> {
+        self.lock().iter_mut().filter_map(|(id, p)| p.alive().then(|| (id.clone(), p.port))).collect()
+    }
+
     /// Stops every runner. Called when the app exits.
     pub fn stop_all(&self) {
         let procs: Vec<RunnerProcess> = self.lock().drain().map(|(_, p)| p).collect();

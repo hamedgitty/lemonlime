@@ -20,7 +20,7 @@ export function DiffView({ path, change, diff, truncated }: { path: string; chan
   const visible = parsed.lines.filter(l => l.kind !== "meta");
 
   return (
-    <div className="overflow-hidden rounded-xl border border-line bg-white shadow-panel">
+    <div className="overflow-hidden rounded-xl border border-line bg-paper shadow-panel">
       <button
         type="button"
         onClick={() => setOpen(o => !o)}

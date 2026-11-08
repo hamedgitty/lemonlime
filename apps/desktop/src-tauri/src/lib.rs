@@ -3,6 +3,7 @@
 
 mod computer;
 mod paths;
+mod plugins;
 mod previews;
 mod repo;
 mod runner;
@@ -52,6 +53,15 @@ pub fn run() {
             skills::add_skill,
             skills::remove_skill,
             skills::skills_folder,
+            plugins::list_plugins,
+            plugins::read_plugin,
+            plugins::install_plugin_from_git,
+            plugins::install_plugin_from_folder,
+            plugins::set_plugin_enabled,
+            plugins::update_plugin,
+            plugins::remove_plugin,
+            plugins::check_plugin_updates,
+            plugins::plugins_folder,
             confirm_quit,
         ])
         .build(tauri::generate_context!())

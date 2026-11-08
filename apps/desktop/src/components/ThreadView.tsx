@@ -33,6 +33,7 @@ import {
   type ThreadOptions,
   type ThreadStatus,
 } from "@lemonlime/protocol";
+import { fetchAttachmentImage, runnerHttpBase } from "@lemonlime/client";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
@@ -88,6 +89,11 @@ export interface ThreadViewProps {
   onComputerLevel: (level: ComputerLevel) => void;
   /** How many answers the agent is waiting for in this thread (for the sidebar and dock badge). */
   onWaiting?: (threadId: string, count: number) => void;
+  /**
+   * The last seq the user had seen in this thread before opening it, when there was more
+   * since; the timeline shows a "New" divider there. Read once, when the thread opens.
+   */
+  unreadAfterSeq?: number | null;
 }
 
 export function ThreadView(props: ThreadViewProps) {
@@ -126,7 +132,10 @@ function ThreadSessionView({
   notifyWhenFocused = false,
   onOpenFolder,
   onWaiting,
+  unreadAfterSeq,
 }: ThreadViewProps & { target: SessionTarget }) {
+  // Where the divider goes is decided when the thread opens; reading it marks it seen.
+  const [unreadAt] = useState(unreadAfterSeq ?? null);
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
   const session = useThreadSession(target, {
@@ -137,6 +146,7 @@ function ThreadSessionView({
   });
   const summary = summarize(entry, runnerUp);
   const items = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
+  const loadImage = useSentImageLoader(session.connection);
   // The agent is waiting on an approval or a question: tell the person if they aren't looking.
   const waiting = items.filter(i => (i.kind === "approval" || i.kind === "question") && i.state === "waiting").map(i => i.key);
   const told = useRef(new Set<string>());
@@ -537,7 +547,9 @@ function ThreadSessionView({
           <Timeline
             foldFinished={foldFinished}
             items={items}
-            working={working && items[items.length - 1]?.kind !== "agent"}
+            working={working}
+            unreadAfterSeq={unreadAt}
+            loadImage={loadImage}
             empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
             onApprove={session.approve}
             onEditQueued={session.editQueued}
@@ -936,4 +948,33 @@ function ConnectionBadge({ state, status }: { state: SessionState; status: Threa
       {label}
     </span>
   );
+}
+
+/**
+ * Loads images sent in this thread from its runner, while connected. Each image is fetched
+ * once and kept as an object URL until the thread closes.
+ */
+function useSentImageLoader(connection: Connection | null): ((id: string) => Promise<string>) | null {
+  const cache = useRef(new Map<string, Promise<string>>());
+  useEffect(() => {
+    const kept = cache.current;
+    return () => {
+      for (const url of kept.values()) url.then(u => URL.revokeObjectURL(u)).catch(() => undefined);
+      kept.clear();
+    };
+  }, []);
+  return useMemo(() => {
+    if (!connection) return null;
+    const base = runnerHttpBase(connection.url);
+    return (id: string) => {
+      const key = `${base}|${id}`;
+      let url = cache.current.get(key);
+      if (!url) {
+        url = fetchAttachmentImage({ base, token: connection.token, id }).then(blob => URL.createObjectURL(blob));
+        url.catch(() => cache.current.delete(key));
+        cache.current.set(key, url);
+      }
+      return url;
+    };
+  }, [connection]);
 }

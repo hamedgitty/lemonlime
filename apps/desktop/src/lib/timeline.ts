@@ -1,4 +1,14 @@
-import { rewindMessage, withoutRewound, type EventOf, type Question, type ThreadEvent, type ThreadOptions, type ThreadStatus } from "@lemonlime/protocol";
+import {
+  elapsedMs,
+  rewindMessage,
+  turnSpans,
+  withoutRewound,
+  type EventOf,
+  type Question,
+  type ThreadEvent,
+  type ThreadOptions,
+  type ThreadStatus,
+} from "@lemonlime/protocol";
 
 /** A message the user sent that the runner has not echoed back yet. */
 export interface PendingMessage {
@@ -20,8 +30,12 @@ export type TimelineItem =
       restorable?: boolean;
       /** Names of files sent with it. */
       files?: string[];
+      /** Images sent with it (upload ids), shown as thumbnails. */
+      images?: { id: string; name: string }[];
     }
   | { kind: "agent"; key: string; seq: number; at: string; text: string; streaming: boolean }
+  /** The agent's reasoning; `startedAt` is when it began thinking (the event before it). */
+  | { kind: "reasoning"; key: string; seq: number; at: string; text: string; streaming: boolean; startedAt: string; endedAt: string }
   | {
       kind: "tool";
       key: string;
@@ -30,7 +44,7 @@ export type TimelineItem =
       callId: string;
       name: string;
       input: unknown;
-      result: { seq: number; output: unknown; isError: boolean } | null;
+      result: { seq: number; output: unknown; isError: boolean; exitCode?: number } | null;
     }
   | {
       kind: "diff";
@@ -42,7 +56,17 @@ export type TimelineItem =
       diff: string;
       truncated: boolean;
     }
-  | { kind: "status"; key: string; seq: number; at: string; from: ThreadStatus; to: ThreadStatus; reason?: string }
+  | {
+      kind: "status";
+      key: string;
+      seq: number;
+      at: string;
+      from: ThreadStatus;
+      to: ThreadStatus;
+      reason?: string;
+      /** Set where the agent stopped working on a turn: how long the turn took. */
+      workedMs?: number;
+    }
   | { kind: "error"; key: string; seq: number; at: string; message: string; code?: string; fatal: boolean }
   | { kind: "notice"; key: string; seq: number; at: string; message: string; code: string; untilAt?: string }
   | {
@@ -77,6 +101,8 @@ export type TimelineItem =
  * Turns an event history into what the thread view shows:
  * - streaming `agent_message` chunks (`partial: true`) are joined into one message,
  *   and a whole message (`partial: false`) that follows them replaces the chunks;
+ *   `agent_reasoning` streams the same way into a reasoning item;
+ * - the status change that ends a turn says how long the turn took;
  * - each `tool_result` is attached to the `tool_call` with the same `callId`;
  * - messages waiting in the runner's queue (the latest `queue_update`) are appended as
  *   queued, and messages the runner has not received yet as pending.
@@ -96,12 +122,58 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   let lastSeq = 0;
   // Index of the agent item still receiving chunks, or -1.
   let openAgent = -1;
+  // The same for reasoning.
+  let openReasoning = -1;
+  // When the previous event happened: reasoning started then.
+  let prevAt: string | null = null;
+  const worked = new Map<number, number>();
+  for (const t of turnSpans(events)) {
+    const ms = t.endAt && t.endSeq !== null ? elapsedMs(t.startAt, t.endAt) : null;
+    if (ms !== null) worked.set(t.endSeq!, ms);
+  }
+  const closeAgent = () => {
+    const open = openAgent >= 0 ? items[openAgent] : undefined;
+    if (open?.kind === "agent") open.streaming = false;
+    openAgent = -1;
+  };
+  const closeReasoning = () => {
+    const open = openReasoning >= 0 ? items[openReasoning] : undefined;
+    if (open?.kind === "reasoning") open.streaming = false;
+    openReasoning = -1;
+  };
 
   for (const ev of events) {
     if (ev.seq <= lastSeq) continue;
     lastSeq = ev.seq;
+    const before = prevAt;
+    if (ev.type !== "queue_update") prevAt = ev.at;
+
+    if (ev.type === "agent_reasoning") {
+      closeAgent();
+      const open = openReasoning >= 0 ? items[openReasoning] : undefined;
+      if (open?.kind === "reasoning") {
+        open.text = ev.partial ? open.text + ev.text : ev.text;
+        open.streaming = ev.partial;
+        open.endedAt = ev.at;
+        if (!ev.partial) openReasoning = -1;
+        continue;
+      }
+      items.push({
+        kind: "reasoning",
+        key: `e${ev.seq}`,
+        seq: ev.seq,
+        at: ev.at,
+        text: ev.text,
+        streaming: ev.partial,
+        startedAt: before ?? ev.at,
+        endedAt: ev.at,
+      });
+      openReasoning = ev.partial ? items.length - 1 : -1;
+      continue;
+    }
 
     if (ev.type === "agent_message") {
+      closeReasoning();
       const open = openAgent >= 0 ? items[openAgent] : undefined;
       if (open && open.kind === "agent") {
         open.text = ev.partial ? open.text + ev.text : ev.text;
@@ -122,12 +194,9 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
     // Neither do the to-do list and the context meter, which show above the composer.
     if (ev.type === "todo_snapshot" || ev.type === "context_usage") continue;
 
-    // Any other event ends a streaming message.
-    if (openAgent >= 0) {
-      const open = items[openAgent];
-      if (open?.kind === "agent") open.streaming = false;
-      openAgent = -1;
-    }
+    // Any other event ends a streaming message or reasoning.
+    closeAgent();
+    closeReasoning();
 
     switch (ev.type) {
       case "user_message":
@@ -142,6 +211,9 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
           pending: false,
           ...(ev.commit ? { restorable: true } : {}),
           ...(ev.attachments?.length ? { files: ev.attachments.map(a => a.name) } : {}),
+          ...(ev.attachments?.some(a => SHOWABLE_IMAGE.test(a.name))
+            ? { images: ev.attachments.filter(a => SHOWABLE_IMAGE.test(a.name)).map(a => ({ id: a.id, name: a.name })) }
+            : {}),
         });
         break;
       case "tool_call":
@@ -160,7 +232,7 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
       case "tool_result": {
         const idx = toolIndex.get(ev.callId);
         const call = idx === undefined ? undefined : items[idx];
-        const result = { seq: ev.seq, output: ev.output, isError: ev.isError };
+        const result = { seq: ev.seq, output: ev.output, isError: ev.isError, ...(ev.exitCode !== undefined ? { exitCode: ev.exitCode } : {}) };
         if (call?.kind === "tool") call.result = result;
         else
           items.push({
@@ -196,6 +268,7 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
           from: ev.from,
           to: ev.to,
           ...(ev.reason ? { reason: ev.reason } : {}),
+          ...(worked.has(ev.seq) ? { workedMs: worked.get(ev.seq)! } : {}),
         });
         break;
       case "notice":
@@ -303,6 +376,9 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   return items;
 }
 
+/** Images the runner sends back for showing (see its `GET /attachments/<id>/image`). */
+const SHOWABLE_IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;
+
 /** Client message ids the runner has echoed back, so pending copies can be dropped. */
 export function confirmedClientIds(events: readonly ThreadEvent[]): Set<string> {
   const ids = new Set<string>();
@@ -365,6 +441,8 @@ export interface FoldedSteps {
   kind: "fold";
   key: string;
   items: TimelineItem[];
+  /** How long the turn took, when known. */
+  workedMs?: number;
 }
 
 /**
@@ -389,7 +467,9 @@ export function foldFinishedTurns(items: readonly TimelineItem[]): Array<Timelin
       i === 0 || i === lastAgent || it.kind === "error" || it.kind === "approval" || it.kind === "plan" || it.kind === "question";
     const folded = turn.filter((it, i) => !keep(it, i));
     out.push(turn[0]!);
-    if (folded.length > 1) out.push({ kind: "fold", key: `fold:${turn[0]!.key}`, items: folded });
+    const end = turn.find(it => it.kind === "status" && it.workedMs !== undefined);
+    const workedMs = end?.kind === "status" ? end.workedMs : undefined;
+    if (folded.length > 1) out.push({ kind: "fold", key: `fold:${turn[0]!.key}`, items: folded, ...(workedMs !== undefined ? { workedMs } : {}) });
     else out.push(...folded);
     out.push(...turn.filter((it, i) => i !== 0 && keep(it, i)));
   }

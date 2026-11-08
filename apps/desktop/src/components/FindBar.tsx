@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
-import { clearMatches, findRanges, matchLabel, paintMatches, revealRange, stepMatch } from "../lib/findInThread.ts";
+import { clearMatches, findRanges, flashItem, matchLabel, paintMatches, revealRange, stepMatch } from "../lib/findInThread.ts";
 import { IconButton } from "./ui.tsx";
 
 /**
@@ -76,7 +76,11 @@ export function FindBar({
     paintMatches(ranges.current, next);
     const r = ranges.current[next];
     const scroller = root.current?.querySelector<HTMLElement>('[role="log"]');
-    if (r && scroller) revealRange(r, scroller);
+    if (r && scroller) {
+      revealRange(r, scroller);
+      // Moving between matches: tint the message it landed in for a moment.
+      flashItem(r.startContainer);
+    }
   };
   const label = matchLabel(current, total, query);
 

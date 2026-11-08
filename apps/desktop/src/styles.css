@@ -318,3 +318,17 @@
   background-color: var(--color-lemon);
   color: #17200e;
 }
+
+/* A jump (find in thread, the message list) briefly tints where it landed. Colour only. */
+@keyframes flash-hit {
+  from {
+    background-color: color-mix(in oklab, var(--color-lemon) 45%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.flash-hit {
+  border-radius: 14px;
+  animation: flash-hit 1100ms ease-out;
+}

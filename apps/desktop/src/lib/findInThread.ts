@@ -80,3 +80,16 @@ export function revealRange(range: Range, scroller: HTMLElement): void {
   if (box.top >= view.top + 40 && box.bottom <= view.bottom - 40) return;
   scroller.scrollTop += box.top - view.top - view.height / 3;
 }
+
+/**
+ * Briefly tints the timeline item holding `node` (marked `data-flash-target`), so the eye
+ * lands on where a jump went. Starts over if it is already tinted.
+ */
+export function flashItem(node: Node | null | undefined): void {
+  const el = (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>("[data-flash-target]");
+  if (!el) return;
+  el.classList.remove("flash-hit");
+  void el.offsetWidth; // restart the animation
+  el.classList.add("flash-hit");
+  el.addEventListener("animationend", () => el.classList.remove("flash-hit"), { once: true });
+}

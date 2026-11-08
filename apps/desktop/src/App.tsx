@@ -1087,6 +1087,9 @@ export function App() {
                     ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
                     : {})}
                   onWaiting={onWaiting}
+                  unreadAfterSeq={
+                    selectedId && (prefs.seenSeq[selectedId] ?? -1) >= 0 && selectedSeq > prefs.seenSeq[selectedId]! ? prefs.seenSeq[selectedId] : null
+                  }
                   computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
                   onComputerLevel={level => {
                     if (selectedEntry.mode !== "cloud") return;

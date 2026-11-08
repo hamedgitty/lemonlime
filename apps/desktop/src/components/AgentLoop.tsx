@@ -1,6 +1,5 @@
-import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
-  Bot,
   Check,
   ChevronDown,
   ClipboardList,
@@ -26,9 +25,12 @@ import {
   type ThreadOptions,
   type TodoItem,
 } from "@lemonlime/protocol";
-import { AGENT_LABELS } from "../lib/format.ts";
 import { Markdown } from "../lib/markdown.tsx";
+import { effortLevels } from "../lib/models.ts";
+import { keysFor } from "../lib/shortcuts.ts";
+import { loadUiPrefs } from "../lib/storage.ts";
 import { PickerButton } from "./Composer.tsx";
+import { ModelControl } from "./ModelControl.tsx";
 import { Kbd, Menu, MenuChoice, MenuLabel, MenuSeparator, Popover, Tip } from "./primitives.tsx";
 import { Button, Spinner, cx, inputClass } from "./ui.tsx";
 
@@ -57,7 +59,10 @@ const PERMISSION_ICONS: Record<PermissionMode, ReactNode> = {
 /** What a change does while the agent is working. */
 const NEXT_TURN = "Applies from the agent's next turn";
 
-/** The model and reasoning level, as one control. */
+/**
+ * The model and effort inside a thread: the composer's model control with only the thread's
+ * agent. Changes go to the runner and apply from the agent's next turn.
+ */
 export function ModelPicker({
   kind,
   options,
@@ -69,64 +74,29 @@ export function ModelPicker({
   options: ThreadOptions;
   working: boolean;
   disabled: boolean;
-  onChange: (change: { model?: string | null; reasoning?: ReasoningLevel | null }) => void;
+  onChange: (change: { model?: string | null; reasoning?: ReasoningLevel | null; fast?: boolean }) => void;
 }) {
   const caps = AGENT_CAPABILITIES[kind];
-  const modelLabel = options.model ? (caps.models.find(m => m.id === options.model)?.label ?? options.model) : AGENT_LABELS[kind];
-  const label = (
-    <>
-      {modelLabel}
-      {options.reasoning && <span className="ml-1.5 font-normal text-ink-faint">{REASONING_LABELS[options.reasoning]}</span>}
-    </>
-  );
-  // Nothing to change mid-thread: the plain label it always was.
-  if (!caps.live.model && !caps.live.reasoning) {
-    return (
-      <span className="inline-flex h-8 min-w-0 items-center gap-1.5 px-2 text-[14px] font-medium text-ink-soft [&_svg]:size-4" title={`${AGENT_LABELS[kind]}`}>
-        <Bot aria-hidden="true" className="shrink-0" />
-        <span className="min-w-0 truncate">{label}</span>
-      </span>
-    );
-  }
-  const models = [...caps.models];
-  if (options.model && !models.some(m => m.id === options.model)) models.push({ id: options.model, label: options.model });
+  const prefs = useMemo(() => loadUiPrefs(), []);
+  const offered = effortLevels(kind, prefs.showMaxReasoning);
+  // A level picked before (or by the thread's start) stays on offer.
+  const levels = caps.live.reasoning ? (options.reasoning && !offered.includes(options.reasoning) ? [...offered, options.reasoning] : offered) : [];
   return (
-    <Menu
-      side="top"
-      trigger={
-        <PickerButton icon={<Bot />} disabled={disabled} aria-label={`Model and reasoning: ${modelLabel}${options.reasoning ? `, ${options.reasoning}` : ""}`}>
-          {label}
-        </PickerButton>
-      }
-    >
-      {caps.live.model && (
-        <>
-          <MenuLabel>Model</MenuLabel>
-          <MenuChoice
-            value={options.model ?? ""}
-            onChange={v => onChange({ model: v || null })}
-            options={[{ value: "", label: `${AGENT_LABELS[kind]} default` }, ...models.map(m => ({ value: m.id, label: m.label }))]}
-          />
-        </>
-      )}
-      {caps.live.reasoning && caps.reasoning.length > 0 && (
-        <>
-          {caps.live.model && <MenuSeparator />}
-          <MenuLabel>Reasoning</MenuLabel>
-          <MenuChoice
-            value={options.reasoning ?? ""}
-            onChange={v => onChange({ reasoning: (v || null) as ReasoningLevel | null })}
-            options={[{ value: "", label: "Default" }, ...caps.reasoning.map(r => ({ value: r, label: REASONING_LABELS[r] }))]}
-          />
-        </>
-      )}
-      {working && (
-        <>
-          <MenuSeparator />
-          <MenuLabel>{NEXT_TURN}</MenuLabel>
-        </>
-      )}
-    </Menu>
+    <ModelControl
+      agent={kind}
+      tabs={[kind]}
+      model={options.model}
+      reasoning={options.reasoning}
+      fast={Boolean(options.fast)}
+      levels={levels}
+      fixedModel={!caps.live.model}
+      onModel={(_, model) => onChange({ model })}
+      onReasoning={caps.live.reasoning ? reasoning => onChange({ reasoning }) : undefined}
+      onFast={caps.fast ? fast => onChange({ fast }) : undefined}
+      cycleKeys={keysFor("cycle-effort", prefs.shortcuts)}
+      disabled={disabled}
+      note={working ? NEXT_TURN : undefined}
+    />
   );
 }
 
@@ -563,8 +533,13 @@ export function QuestionRecord({
 export function OptionsRow({ options }: { options: ThreadOptions }) {
   const parts = [
     PERMISSION_MODES[options.permission].label,
-    options.model ?? "default model",
-    options.reasoning ? `${REASONING_LABELS[options.reasoning].toLowerCase()} reasoning` : null,
+    options.model
+      ? (Object.values(AGENT_CAPABILITIES)
+          .flatMap(c => c.models)
+          .find(m => m.id === options.model)?.label ?? options.model)
+      : "default model",
+    options.reasoning ? `${REASONING_LABELS[options.reasoning].toLowerCase()} effort` : null,
+    options.fast ? "fast mode" : null,
   ];
   return (
     <div className="flex items-center gap-3 py-0.5 text-xs text-ink-faint" role="note">

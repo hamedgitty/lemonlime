@@ -306,7 +306,7 @@ export const Composer = forwardRef<
   };
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className="relative" data-composer="">
       <div
         className={cx(
           "rounded-xl border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",

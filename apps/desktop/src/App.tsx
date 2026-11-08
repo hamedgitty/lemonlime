@@ -10,7 +10,8 @@ import { PluginsView } from "./components/PluginsView.tsx";
 import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
-import { needsUpdate } from "./components/settings/AgentsPage.tsx";
+import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
+import { OPEN_SETTINGS_EVENT } from "./lib/settingsNav.ts";
 import { TipProvider } from "./components/primitives.tsx";
 import { SETTINGS_PAGES, SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
@@ -23,9 +24,9 @@ import { settled, withChildren } from "./lib/children.ts";
 import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
-import { keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
+import { COMPOSER_SHORTCUTS, keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
 import { appCommands, loadRecents, rememberPick, type PaletteItem } from "./lib/palette.ts";
-import { detectAgents, localRunnerStatuses, notify, openFolder, setKeepAwake, threadFolder, type AgentInstall } from "./lib/system.ts";
+import { detectAgents, installAgent, localRunnerStatuses, notify, openFolder, setKeepAwake, threadFolder, type AgentInstall } from "./lib/system.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -285,6 +286,18 @@ export function App() {
     return () => clearInterval(t);
   }, [refreshAgents]);
   const agentUpdates = useMemo(() => (agents ?? []).filter(needsUpdate).map(a => AGENT_LABELS[a.kind]), [agents]);
+  // Auto-update (Settings → Agents → Harness): agents installed with npm, once a day at most.
+  useEffect(() => {
+    if (!agents?.length) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const due = agentsToAutoUpdate(agents, prefs.autoUpdateAgents);
+    if (!due.length || prefs.agentsUpdatedOn === today) return;
+    onPrefs({ agentsUpdatedOn: today });
+    void (async () => {
+      for (const kind of due) await installAgent(kind).catch(() => undefined);
+      refreshAgents();
+    })();
+  }, [agents, prefs.autoUpdateAgents, prefs.agentsUpdatedOn, onPrefs, refreshAgents]);
 
   // ── Setup wizard and composer drafts ─────────────────────
   // First run opens setup; it stays open until finished or skipped, even once chats are imported.
@@ -670,6 +683,7 @@ export function App() {
       ...(input.agentCommand ? { command: input.agentCommand } : {}),
       ...(input.model ? { model: input.model } : {}),
       ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+      ...(input.fast ? { fast: true } : {}),
     };
 
     if (input.mode === "local") {
@@ -967,6 +981,14 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       const id = matchShortcut(e, shortcutState.current.prefs.shortcuts);
       if (!id) return;
+      // The message box's own shortcuts: only while one has focus, and it handles them.
+      if (COMPOSER_SHORTCUTS.includes(id)) {
+        const box = document.activeElement instanceof Element ? document.activeElement.closest("[data-composer]") : null;
+        if (!box) return;
+        e.preventDefault();
+        box.dispatchEvent(new CustomEvent("lemonlime:composer-shortcut", { detail: id }));
+        return;
+      }
       e.preventDefault();
       runShortcut(id);
     };
@@ -1001,6 +1023,12 @@ export function App() {
     }
     return out;
   }, [threadChildren, localThreads, running]);
+  // Settings opened from deep inside a view (the model picker's "+").
+  useEffect(() => {
+    const open = (e: Event) => go({ view: "settings", page: ((e as CustomEvent<string>).detail || "agents") as SettingsPage });
+    window.addEventListener(OPEN_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, open);
+  }, [go]);
   const [drafts, setDrafts] = useState<Set<string>>(draftThreadIds);
   useEffect(() => {
     const update = () => setDrafts(draftThreadIds());
@@ -1604,6 +1632,7 @@ export function App() {
                   onConnectCloud={() => go({ view: "settings", page: "account" })}
                   draft={draft}
                   acpAgents={settings.acpAgents}
+                  agents={agents}
                   onOpenSettings={page => go({ view: "settings", page: page as SettingsPage })}
                   getStarted={{
                     agentReady,

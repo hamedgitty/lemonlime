@@ -3,7 +3,7 @@ import { appCommands, parseQuery, rankPalette, type PaletteItem } from "../src/l
 import { findOffsets, matchLabel, stepMatch } from "../src/lib/findInThread.ts";
 import { splitMarkdownBlocks } from "../src/lib/markdownStreamBlocks.ts";
 import { grammarFor, highlightCode, type HlNode } from "../src/lib/highlightGrammars.ts";
-import { SHORTCUTS } from "../src/lib/shortcuts.ts";
+import { COMPOSER_SHORTCUTS, SHORTCUTS } from "../src/lib/shortcuts.ts";
 
 const thread = (id: string, label: string, detail = "repo"): PaletteItem => ({ id: `thread:${id}`, section: "threads", label, detail });
 
@@ -17,7 +17,8 @@ describe("command palette", () => {
 
   it("turns every shortcut but its own into a command, with its keys", () => {
     const cmds = appCommands([]);
-    expect(cmds.length).toBe(SHORTCUTS.length - 1);
+    // Less the palette's own and the ones that only work in the message box.
+    expect(cmds.length).toBe(SHORTCUTS.length - 1 - COMPOSER_SHORTCUTS.length);
     expect(cmds.find(c => c.id === "command:new-thread")?.shortcut).toBe("new-thread");
     expect(cmds.some(c => c.id === "command:search")).toBe(false);
     expect(appCommands([], ["find"]).some(c => c.id === "command:find")).toBe(false);

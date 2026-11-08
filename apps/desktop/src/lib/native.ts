@@ -17,6 +17,8 @@ export interface StartLocalRunnerArgs {
   agentCommand?: string | undefined;
   model?: string | undefined;
   reasoning?: string | undefined;
+  /** Start in the agent's fast mode (--fast). */
+  fast?: boolean | undefined;
   workdir: string;
   baseBranch?: string | undefined;
   /** Path to lemonlime-runner, or empty to look it up on PATH. */
@@ -60,6 +62,7 @@ export async function startLocalRunner(input: StartLocalRunnerArgs): Promise<Loc
     agentCommand: args.agentCommand || null,
     model: args.model || null,
     reasoning: args.reasoning || null,
+    fast: args.fast ?? null,
     workdir: args.workdir,
     baseBranch: args.baseBranch || null,
     runnerPath: args.runnerPath || null,
@@ -84,6 +87,7 @@ export async function startSshRunner(input: StartLocalRunnerArgs & { host: strin
     agentCommand: args.agentCommand || null,
     model: args.model || null,
     reasoning: args.reasoning || null,
+    fast: args.fast ?? null,
     workdir: args.workdir,
     baseBranch: args.baseBranch || null,
     instructions: args.instructions?.trim() ? args.instructions : null,

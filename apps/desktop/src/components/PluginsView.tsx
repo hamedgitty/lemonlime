@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Bot, ChevronDown, ExternalLink, FolderOpen, GitBranch, Plus, Puzzle, RefreshCw, Search, Trash2, X } from "lucide-react";
+import { ChevronDown, MessageSquarePlus, ExternalLink, FolderOpen, GitBranch, Plus, Puzzle, RefreshCw, Search, Trash2, X } from "lucide-react";
 import { Markdown } from "../lib/markdown.tsx";
 import { confirmAction, inDesktopShell } from "../lib/native.ts";
 import {
@@ -238,7 +238,7 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
                   onClick={createWithAgent}
                   className="flex w-full items-start gap-3 rounded-xl border border-line bg-paper p-3 text-left transition-colors hover:bg-cream-deep"
                 >
-                  <Bot aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
+                  <MessageSquarePlus aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
                   <span>
                     <span className="block text-[14px] font-medium text-ink">Create a plugin with an agent</span>
                     <span className="block text-[13px] text-ink-faint">Starts a thread that builds one with you.</span>
@@ -322,7 +322,7 @@ function NewPluginButton({
             {/* A group label needs its group around it. */}
             <BaseMenu.Group>
               <MenuLabel>Examples</MenuLabel>
-              <MenuItem icon={<Bot aria-hidden="true" />} onSelect={onCreate}>
+              <MenuItem icon={<MessageSquarePlus aria-hidden="true" />} onSelect={onCreate}>
                 Create a plugin with an agent
               </MenuItem>
             </BaseMenu.Group>
@@ -475,7 +475,7 @@ function EmptyState({ shell, onGit, onFolder, onCreate }: { shell: boolean; onGi
             </Button>
             {onCreate && (
               <Button variant="ghost" onClick={onCreate}>
-                <Bot aria-hidden="true" className="size-4" />
+                <MessageSquarePlus aria-hidden="true" className="size-4" />
                 Create a plugin with an agent
               </Button>
             )}

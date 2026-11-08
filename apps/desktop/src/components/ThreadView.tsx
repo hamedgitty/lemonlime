@@ -223,7 +223,12 @@ function ThreadSessionView({
   // To-dos, an open question, the context meter and the thread's current options.
   const loop = useMemo(() => agentLoopState(session.events), [session.events]);
   const threadOptions: ThreadOptions = session.options ??
-    loop.options ?? { model: summary.agent.model ?? null, reasoning: summary.agent.reasoning ?? null, permission: entry.mode === "cloud" ? "full" : "edits" };
+    loop.options ?? {
+      model: summary.agent.model ?? null,
+      reasoning: summary.agent.reasoning ?? null,
+      permission: entry.mode === "cloud" ? "full" : "edits",
+      ...(summary.agent.fast ? { fast: true } : {}),
+    };
   const implementPlan = () => {
     session.setOptions({ permission: modeAfterPlan(threadOptions) });
     session.send(IMPLEMENT_PLAN_PROMPT);

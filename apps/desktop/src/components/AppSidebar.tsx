@@ -47,6 +47,7 @@ import { NAV_ITEMS, type NavItem, type SidebarChild, type UiPrefs } from "../lib
 import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.ts";
 import { Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip } from "./primitives.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
+import { AgentIcon } from "./AgentIcon.tsx";
 import { LogoMark, Spinner, StatusDot, cx } from "./ui.tsx";
 
 export interface AppSidebarProps {
@@ -787,14 +788,9 @@ function groupThreads(threads: ThreadSummary[], prefs: UiPrefs, machines: readon
 }
 
 function AgentBadge({ kind }: { kind: ThreadSummary["agent"]["kind"] }) {
-  const letter = { "claude-code": "C", codex: "X", opencode: "O", acp: "A" }[kind];
   return (
-    <span
-      aria-hidden="true"
-      title={AGENT_LABELS[kind]}
-      className="inline-flex size-4 shrink-0 items-center justify-center rounded-[5px] bg-cream-hover text-[10px] font-semibold text-ink-soft"
-    >
-      {letter}
+    <span title={AGENT_LABELS[kind]} className="inline-flex shrink-0 text-ink-soft">
+      <AgentIcon kind={kind} />
     </span>
   );
 }

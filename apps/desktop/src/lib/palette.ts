@@ -1,5 +1,5 @@
 import { fuzzyMatch, type FuzzyMatch } from "@lemonlime/protocol";
-import { SHORTCUTS, type ShortcutId } from "./shortcuts.ts";
+import { COMPOSER_SHORTCUTS, SHORTCUTS, type ShortcutId } from "./shortcuts.ts";
 
 /**
  * The command palette (⌘K): threads, projects and app commands in one fuzzy search.
@@ -47,7 +47,7 @@ export interface ExtraCommand {
 
 /** Every app command: each shortcut (but the palette's own), then the extras. */
 export function appCommands(extras: readonly ExtraCommand[], skip: readonly ShortcutId[] = []): PaletteItem[] {
-  const fromShortcuts = SHORTCUTS.filter(s => s.id !== "search" && !skip.includes(s.id)).map<PaletteItem>(s => ({
+  const fromShortcuts = SHORTCUTS.filter(s => s.id !== "search" && !COMPOSER_SHORTCUTS.includes(s.id) && !skip.includes(s.id)).map<PaletteItem>(s => ({
     id: `command:${s.id}`,
     section: "commands",
     label: s.label,

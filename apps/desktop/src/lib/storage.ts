@@ -142,6 +142,14 @@ export function forgetEvents(threadId: string): void {
 
 const KEY_UI = "lemonlime:ui";
 
+const AgentKindPref = z.enum(["claude-code", "codex", "opencode", "acp"]);
+export const AgentChoice = z.object({
+  model: z.string().nullable().catch(null).default(null),
+  reasoning: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).nullable().catch(null).default(null),
+  fast: z.boolean().catch(false).default(false),
+});
+export type AgentChoice = z.infer<typeof AgentChoice>;
+
 export const NAV_ITEMS = ["new", "search", "skills", "plugins", "automations"] as const;
 export type NavItem = (typeof NAV_ITEMS)[number];
 
@@ -223,6 +231,18 @@ export const UiPrefs = z.object({
   phoneAccess: z.boolean().default(false),
   /** What the dashboard calls this computer; empty uses "My Mac" and the like. */
   computerName: z.string().max(100).default(""),
+  /** The agents in the user's order (Settings → Agents → Harness), used by the model picker's tabs. */
+  agentOrder: z.array(AgentKindPref).catch([]).default([]),
+  /** Agents left out of the model picker. */
+  hiddenAgents: z.array(AgentKindPref).catch([]).default([]),
+  /** The model, effort and fast mode last picked for each agent, used for new threads. */
+  agentChoices: z.record(z.string(), AgentChoice).catch({}).default({}),
+  /** Agents installed with npm that LemonLime keeps up to date when it starts. */
+  autoUpdateAgents: z.array(AgentKindPref).catch([]).default([]),
+  /** The day (YYYY-MM-DD) agents were last updated by themselves, so it happens at most once a day. */
+  agentsUpdatedOn: z.string().catch("").default(""),
+  /** The saved ACP agent last picked (Settings → Agents → ACP agents), by id. */
+  lastAcpAgent: z.string().catch("").default(""),
 });
 export type UiPrefs = z.infer<typeof UiPrefs>;
 

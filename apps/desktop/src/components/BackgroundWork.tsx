@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { Bot, ChevronDown, Clock, Hourglass, SquareTerminal, X } from "lucide-react";
+import { ChevronDown, ListTree, Clock, Hourglass, SquareTerminal, X } from "lucide-react";
 import type { BackgroundWork, ChildWork } from "@lemonlime/protocol";
 import { Spinner, cx } from "./ui.tsx";
 
@@ -68,7 +68,7 @@ export function BackgroundWorkCard({
         onClick={() => setOpen(o => !o)}
         className="flex h-9 w-full items-center gap-2.5 rounded-xl px-3 text-left text-[13.5px] hover:bg-cream/60 focus-visible:-outline-offset-2"
       >
-        <Bot aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
+        <ListTree aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
         <span className="shrink-0 font-medium text-ink">In the background</span>
         <span className="min-w-0 flex-1 truncate text-ink-faint tabular-nums">
           {summary || (held.length ? `${held.length} held ${held.length === 1 ? "message" : "messages"}` : "")}

@@ -22,6 +22,7 @@ export async function startThreadRunner(meta: LocalThreadMeta, runnerPath: strin
     agentCommand: meta.agent.command ? joinCommand(meta.agent.command) : undefined,
     model: meta.agent.model,
     reasoning: meta.agent.reasoning,
+    fast: meta.agent.fast,
     workdir: meta.repoPath,
     baseBranch: meta.baseBranch,
   };

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, Bot, Check, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Plus, Server, X, Zap } from "lucide-react";
-import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type ReasoningLevel, type SandboxSize } from "@lemonlime/protocol";
+import { ArrowLeftRight, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Plus, Server, X, Zap } from "lucide-react";
+import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type SandboxSize } from "@lemonlime/protocol";
 import { splitCommand } from "../lib/command.ts";
-import { AGENT_LABELS, repoName } from "../lib/format.ts";
+import { repoName } from "../lib/format.ts";
+import { effortLevels, pickerAgents } from "../lib/models.ts";
+import { keysFor } from "../lib/shortcuts.ts";
+import type { AgentInstall } from "../lib/system.ts";
 import { inDesktopShell, inspectRepo, pickFolder } from "../lib/native.ts";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
 import { showGetStarted, type GetStartedFacts, type GetStartedStep } from "../lib/getStarted.ts";
@@ -11,16 +14,9 @@ import { rememberPath, remoteFolderName, remotePathProblem, saveMachines, useMac
 import { GetStarted } from "./GetStarted.tsx";
 import type { Settings, UiPrefs } from "../lib/storage.ts";
 import { Composer, PickerButton, type ComposerHandle } from "./Composer.tsx";
-import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Popover } from "./primitives.tsx";
+import { defaultModel, ModelControl } from "./ModelControl.tsx";
+import { Menu, MenuChoice, MenuItem, MenuSeparator, Popover } from "./primitives.tsx";
 import { Button, SegmentedControl, TextInput, cx, openExternal } from "./ui.tsx";
-
-const AGENTS: AgentKind[] = ["claude-code", "codex", "opencode", "acp"];
-const AGENT_HINT: Record<AgentKind, string> = {
-  "claude-code": "Your Claude account",
-  codex: "Your ChatGPT or OpenAI account",
-  opencode: "The providers you set up in OpenCode",
-  acp: "Any Agent Client Protocol agent",
-};
 
 /** Ready-made first messages, shown to people who haven't started many threads yet. */
 const STARTERS = [
@@ -46,6 +42,8 @@ export interface HomeProps {
   draft?: { text: string; nonce: number } | null;
   /** ACP agents saved in Settings. */
   acpAgents?: Settings["acpAgents"];
+  /** Agent CLIs found on this computer (null while looking), for the model picker's tabs. */
+  agents?: AgentInstall[] | null;
   /** What the Get started checklist needs to know (everything but the projects and dismissal, which are prefs). */
   getStarted?: Omit<GetStartedFacts, "projects" | "dismissed">;
   onOpenSettings?: (page: string) => void;
@@ -64,6 +62,7 @@ export function Home({
   onConnectCloud,
   draft,
   acpAgents = [],
+  agents = null,
   getStarted,
   onOpenSettings,
   dashboardUrl,
@@ -85,10 +84,26 @@ export function Home({
     if (draft) composer.current?.fill(draft.text);
   }, [draft]);
   const agent = prefs.lastAgent;
-  const [model, setModel] = useState("");
-  const [reasoning, setReasoning] = useState<ReasoningLevel | "">("");
   const caps = AGENT_CAPABILITIES[agent];
-  const [acpCommand, setAcpCommand] = useState(acpAgents[0]?.command ?? "");
+  // The model, effort and fast mode last picked for each agent; the first listed model otherwise.
+  const choiceOf = (k: AgentKind) => prefs.agentChoices[k] ?? { model: null, reasoning: null, fast: false };
+  const choice = choiceOf(agent);
+  const model = choice.model ?? defaultModel(agent);
+  const levels = effortLevels(agent, prefs.showMaxReasoning);
+  const reasoning = choice.reasoning && levels.includes(choice.reasoning) ? choice.reasoning : null;
+  const fast = caps.fast && choice.fast;
+  const choose = (k: AgentKind, patch: Partial<ReturnType<typeof choiceOf>>) =>
+    onPrefs({ lastAgent: k, agentChoices: { ...prefs.agentChoices, [k]: { ...choiceOf(k), ...patch } } });
+  const acpSaved = acpAgents.find(a => a.id === prefs.lastAcpAgent) ?? acpAgents[0];
+  const acpCommand = acpSaved?.command ?? "";
+  const tabs = pickerAgents({
+    order: prefs.agentOrder,
+    hidden: prefs.hiddenAgents,
+    installed: agents,
+    inShell: shell,
+    acpSaved: acpAgents.length,
+    current: agent,
+  });
   const [repoPath, setRepoPath] = useState(prefs.recentProjects[0] ?? "");
   const [repoUrl, setRepoUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
@@ -127,7 +142,7 @@ export function Home({
     setError(null);
     setDenial(null);
     const words = agent === "acp" ? splitCommand(acpCommand) : [];
-    if (agent === "acp" && words.length === 0) return setError("Enter the command that starts your ACP agent, under the agent picker.");
+    if (agent === "acp" && words.length === 0) return setError("Pick an ACP agent in the model picker, or add one in Settings, Agents, ACP agents.");
     const remote = remotePath.trim();
     if (machine) {
       const problem = remotePathProblem(remote, "project folder");
@@ -148,8 +163,9 @@ export function Home({
       title: "",
       agent,
       agentCommand: agent === "acp" ? words : undefined,
-      model: model.trim() || undefined,
-      reasoning: reasoning && caps.reasoning.includes(reasoning) ? reasoning : undefined,
+      model: agent === "acp" ? undefined : (model ?? undefined),
+      reasoning: reasoning ?? undefined,
+      fast: fast || undefined,
       baseBranch: baseBranch.trim(),
       prompt,
     };
@@ -210,100 +226,21 @@ export function Home({
           onSend={text => void send(text)}
           onTextChange={setTyped}
           tools={
-            <>
-              <Menu
-                trigger={
-                  <PickerButton icon={<Bot />} aria-label={`Agent: ${AGENT_LABELS[agent]}`}>
-                    {AGENT_LABELS[agent]}
-                    {model.trim() ? <span className="ml-1 font-normal text-ink-faint">({model.trim()})</span> : null}
-                  </PickerButton>
-                }
-              >
-                <MenuLabel>Agent</MenuLabel>
-                <MenuChoice
-                  value={agent}
-                  onChange={a => onPrefs({ lastAgent: a })}
-                  options={AGENTS.map(a => ({ value: a, label: <span>{AGENT_LABELS[a]}</span> }))}
-                />
-                {acpAgents.length > 0 && (
-                  <>
-                    <MenuSeparator />
-                    <MenuLabel>Saved ACP agents</MenuLabel>
-                    {acpAgents.map(a => (
-                      <MenuItem
-                        key={a.id}
-                        icon={agent === "acp" && acpCommand === a.command ? <Check /> : <span className="size-4" />}
-                        onSelect={() => {
-                          setAcpCommand(a.command);
-                          onPrefs({ lastAgent: "acp" });
-                        }}
-                      >
-                        {a.name}
-                      </MenuItem>
-                    ))}
-                  </>
-                )}
-              </Menu>
-              <Popover
-                trigger={
-                  <PickerButton tone="muted" aria-label="Model and agent options">
-                    {model.trim() ? "Model" : "Default model"}
-                  </PickerButton>
-                }
-                className="w-[320px] p-3"
-              >
-                <div className="space-y-3">
-                  <p className="text-[13.5px] text-ink-soft">{AGENT_HINT[agent]}. Leave the model empty to use the agent's own default.</p>
-                  <label className="block">
-                    <span className="mb-1 block text-[13.5px] font-medium">Model</span>
-                    <TextInput
-                      value={model}
-                      onChange={e => setModel(e.target.value)}
-                      placeholder="Agent's default"
-                      className="font-mono text-[13px]"
-                      list={caps.models.length ? "lemonlime-models" : undefined}
-                    />
-                    {caps.models.length > 0 && (
-                      <datalist id="lemonlime-models">
-                        {caps.models.map(m => (
-                          <option key={m.id} value={m.id}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </datalist>
-                    )}
-                  </label>
-                  {caps.reasoning.length > 0 && (
-                    <div>
-                      <span className="mb-1 block text-[13.5px] font-medium">Thinking</span>
-                      <SegmentedControl
-                        label="Thinking"
-                        value={reasoning || "default"}
-                        onChange={v => setReasoning(v === "default" ? "" : (v as ReasoningLevel))}
-                        options={[
-                          { value: "default", label: "Default" },
-                          ...caps.reasoning
-                            .slice(0, prefs.showMaxReasoning ? undefined : 4)
-                            .map(r => ({ value: r, label: r === "xhigh" ? "Extra high" : r[0]!.toUpperCase() + r.slice(1) })),
-                        ]}
-                      />
-                      <p className="mt-1 text-[12.5px] text-ink-faint">Fixed for this thread once it starts.</p>
-                    </div>
-                  )}
-                  {agent === "acp" && (
-                    <label className="block">
-                      <span className="mb-1 block text-[13.5px] font-medium">Command that starts the agent</span>
-                      <TextInput
-                        value={acpCommand}
-                        onChange={e => setAcpCommand(e.target.value)}
-                        placeholder="gemini --experimental-acp"
-                        className="font-mono text-[13px]"
-                      />
-                    </label>
-                  )}
-                </div>
-              </Popover>
-            </>
+            <ModelControl
+              agent={agent}
+              tabs={tabs}
+              model={model}
+              reasoning={reasoning}
+              fast={fast}
+              levels={levels}
+              acpAgents={acpAgents}
+              acpId={acpSaved?.id ?? null}
+              onModel={(k, m) => (k === "acp" ? onPrefs({ lastAgent: "acp", lastAcpAgent: m ?? "" }) : choose(k, { model: m }))}
+              onReasoning={r => choose(agent, { reasoning: r })}
+              onFast={on => choose(agent, { fast: on })}
+              cycleKeys={keysFor("cycle-effort", prefs.shortcuts)}
+              side="bottom"
+            />
           }
         />
 

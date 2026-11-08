@@ -7,6 +7,8 @@ export interface NewLocalThread {
   agentCommand: string[] | undefined;
   model: string | undefined;
   reasoning: ReasoningLevel | undefined;
+  /** Start in the agent's fast mode. */
+  fast?: boolean | undefined;
   repoPath: string;
   /** Run it on one of the user's machines (Settings → Machines) over SSH; repoPath is a path there. */
   machine?: string | undefined;
@@ -21,6 +23,7 @@ export interface NewCloudThread {
   agentCommand: string[] | undefined;
   model: string | undefined;
   reasoning: ReasoningLevel | undefined;
+  fast?: boolean | undefined;
   repoUrl: string;
   baseBranch: string;
   sandboxSize: SandboxSize;

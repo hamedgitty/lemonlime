@@ -10,6 +10,8 @@ export interface AgentInstall {
   version: string | null;
   /** Null when it can't be told without reading a credential. */
   signedIn: boolean | null;
+  /** Installed with npm, so LemonLime can update it (older apps leave it out). */
+  viaNpm?: boolean;
 }
 
 /** Agent CLI versions LemonLime is tested with (kept in step with the runner's TESTED_AGENTS). */
@@ -38,6 +40,17 @@ export async function detectAgents(): Promise<AgentInstall[]> {
 /** Installs or updates an agent CLI with npm. Resolves with npm's output. */
 export async function installAgent(kind: Exclude<AgentKind, "acp">): Promise<string> {
   return invoke<string>("install_agent", { kind });
+}
+
+/** The text `opencode models --verbose` prints (see parseOpencodeModels). */
+export async function opencodeModelsText(): Promise<string> {
+  if (!isTauri()) throw new Error("Listing OpenCode's models works in the desktop app.");
+  return invoke<string>("agent_models", { kind: "opencode" });
+}
+
+/** Signs an agent out on this computer with its own command (Claude Code and Codex). */
+export async function signOutAgent(kind: Exclude<AgentKind, "acp">): Promise<void> {
+  await invoke("sign_out_agent", { kind });
 }
 
 /** Keeps the computer awake (and the screen on, with `display`) or lets it sleep. */

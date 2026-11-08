@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { installCoauthorHooks } from "./coauthors.ts";
 import {
+  DEFAULT_ACCOUNT_ID,
   hasAccounts,
   PERMISSION_MODES,
   PermissionMode,
@@ -437,7 +438,9 @@ export class ThreadRunner {
       delete this.sessionOpts.command;
     }
     if (saved?.limitStop) this.limitStop = saved.limitStop;
-    this.setAccount(typeof saved?.account === "string" ? saved.account : null);
+    // A thread keeps its account. One that ran before accounts existed ran on the usual sign-in.
+    const ranBefore = Object.keys(saved?.agentState ?? {}).length > 0;
+    this.setAccount(typeof saved?.account === "string" ? saved.account : ranBefore ? DEFAULT_ACCOUNT_ID : null);
     if (this.git) {
       if (this.opts.sourceRepo) {
         await this.git.ensureWorktree(this.opts.sourceRepo, this.opts.thread.branch, this.opts.thread.repo.baseBranch);

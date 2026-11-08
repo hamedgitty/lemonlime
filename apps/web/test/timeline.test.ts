@@ -106,3 +106,24 @@ describe("buildTimeline: plans and questions", () => {
     expect(buildTimeline(events)[2]).toMatchObject({ kind: "plan", open: false });
   });
 });
+
+describe("usage limits in the dashboard", () => {
+  it("shows a limit row, with the runner's wait folded in, until the thread carries on", () => {
+    seq = 0;
+    const hit = ev({
+      type: "limit_hit",
+      agent: "codex",
+      resetAt: "2026-01-01T03:00:00.000Z",
+      message: "You've hit your usage limit.",
+      accounts: [],
+      agents: [],
+    });
+    const waiting = ev({ type: "notice", code: "retry_scheduled", message: "…", untilAt: "2026-01-01T03:01:00.000Z" });
+    let items = buildTimeline([hit, waiting]);
+    expect(items).toMatchObject([{ kind: "limit", open: true, waiting: true, waitingUntil: "2026-01-01T03:01:00.000Z" }]);
+    const moved = ev({ type: "agent_switch", from: { agent: "codex" }, to: { agent: "claude-code", model: "opus" }, carried: "handoff", auto: false });
+    items = buildTimeline([hit, waiting, moved, ev({ type: "status_change", from: "idle", to: "running" })]);
+    expect(items[0]).toMatchObject({ kind: "limit", open: false, waiting: false });
+    expect(items[1]).toMatchObject({ kind: "switch", event: { to: { agent: "claude-code" } } });
+  });
+});

@@ -23,6 +23,7 @@ import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "..
 import { DiffView } from "./DiffView.tsx";
 import { AgentMessage } from "./AgentMessage.tsx";
 import { OptionsRow, PlanCard, QuestionRecord } from "./AgentLoop.tsx";
+import { LimitRow, SwitchRow, type LimitActions } from "./LimitRow.tsx";
 import { Button, Spinner, cx } from "./ui.tsx";
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
@@ -37,6 +38,7 @@ export function Timeline({
   onEditQueued,
   onRewind,
   onImplementPlan,
+  limit,
   foldFinished = false,
 }: {
   items: TimelineItem[];
@@ -49,7 +51,10 @@ export function Timeline({
   onRewind?: RewindFn;
   /** Approve the latest plan (leave plan mode and tell the agent to go ahead). */
   onImplementPlan?: (() => void) | undefined;
+  /** What the usage-limit row can do (absent while it can't act). */
+  limit?: LimitActions | undefined;
 }) {
+  const lastSwitch = useMemo(() => items.findLast(i => i.kind === "switch")?.key ?? null, [items]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
@@ -122,6 +127,8 @@ export function Timeline({
                           <Item
                             key={it.key}
                             item={it}
+                            limit={limit}
+                            latest={it.key === lastSwitch}
                             onApprove={onApprove}
                             onEditQueued={onEditQueued}
                             onRewind={onRewind}
@@ -130,7 +137,15 @@ export function Timeline({
                         ))}
                     </div>
                   ) : (
-                    <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} onImplementPlan={onImplementPlan} />
+                    <Item
+                      item={item}
+                      limit={limit}
+                      latest={item.key === lastSwitch}
+                      onApprove={onApprove}
+                      onEditQueued={onEditQueued}
+                      onRewind={onRewind}
+                      onImplementPlan={onImplementPlan}
+                    />
                   )}
                 </div>
               ))}
@@ -166,8 +181,13 @@ const Item = memo(function Item({
   onEditQueued,
   onRewind,
   onImplementPlan,
+  limit,
+  latest,
 }: {
   item: TimelineItem;
+  limit?: LimitActions | undefined;
+  /** The newest switch row (the one that can offer to switch other threads too). */
+  latest?: boolean;
   onApprove?: ApproveFn | undefined;
   onEditQueued?: EditQueuedFn | undefined;
   onRewind?: RewindFn | undefined;
@@ -209,6 +229,10 @@ const Item = memo(function Item({
       return <QuestionRecord questions={item.questions} answers={item.answers} state={item.state} by={item.by} />;
     case "options":
       return <OptionsRow options={item.options} />;
+    case "limit":
+      return <LimitRow hit={item.hit} open={item.open} waiting={item.waiting} actions={limit} />;
+    case "switch":
+      return <SwitchRow event={item.event} others={latest ? limit?.others : undefined} />;
   }
 });
 

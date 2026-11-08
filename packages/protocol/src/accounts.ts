@@ -26,7 +26,7 @@ export const OnLimit = z.enum(["wait", "switch", "ask"]);
 export type OnLimit = z.infer<typeof OnLimit>;
 
 export const ON_LIMIT_LABELS: Record<OnLimit, string> = {
-  wait: "Wait and try again",
+  wait: "Wait until it resets",
   switch: "Switch to my next account",
   ask: "Ask me",
 };

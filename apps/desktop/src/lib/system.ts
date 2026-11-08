@@ -62,7 +62,17 @@ export async function openInEditor(editor: string, path: string): Promise<void> 
 
 export interface LocalRunnerStatus {
   threadId: string;
-  health: { status?: ThreadStatus; latestSeq?: number; idleSince?: string | null; waitingApprovals?: number };
+  health: {
+    status?: ThreadStatus;
+    latestSeq?: number;
+    idleSince?: string | null;
+    waitingApprovals?: number;
+    /** The agent and account the thread uses now (runners from before accounts leave them out). */
+    agent?: AgentKind;
+    account?: string | null;
+    /** The usage limit it's stopped on, if any. */
+    limit?: { agent: AgentKind; account: string | null; resetAt: string | null } | null;
+  };
 }
 
 /** What each runner on this computer is doing, including threads that aren't open. */

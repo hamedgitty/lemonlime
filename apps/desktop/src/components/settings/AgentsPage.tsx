@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { ON_LIMIT_LABELS, OnLimit } from "@lemonlime/protocol";
+import { listAccounts, setOnLimit } from "../../lib/accounts.ts";
+import { AccountsTab } from "./AccountsTab.tsx";
 import { Copy, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { AGENT_LABELS } from "../../lib/format.ts";
 import { inDesktopShell } from "../../lib/native.ts";
@@ -8,7 +11,7 @@ import { Button, IconButton, Spinner, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
 import { code, ErrorText, Pill, Row, Section, Select, Tabs, ToggleRow } from "./parts.tsx";
 
-type Tab = "installed" | "defaults" | "guard" | "acp" | "retry";
+type Tab = "installed" | "accounts" | "defaults" | "guard" | "acp" | "retry";
 
 export function AgentsPage({ ctx }: { ctx: SettingsCtx }) {
   const [tab, setTab] = useState<Tab>("installed");
@@ -19,13 +22,15 @@ export function AgentsPage({ ctx }: { ctx: SettingsCtx }) {
         onChange={setTab}
         tabs={[
           { id: "installed", label: "Installed" },
+          { id: "accounts", label: "Accounts" },
           { id: "defaults", label: "Defaults" },
           { id: "guard", label: "Command guard" },
           { id: "acp", label: "ACP agents", count: ctx.settings.acpAgents.length },
-          { id: "retry", label: "Retry" },
+          { id: "retry", label: "Limits" },
         ]}
       />
       {tab === "installed" && <InstalledTab ctx={ctx} />}
+      {tab === "accounts" && <AccountsTab />}
       {tab === "defaults" && <DefaultsTab ctx={ctx} />}
       {tab === "guard" && <GuardTab ctx={ctx} />}
       {tab === "acp" && <AcpTab ctx={ctx} />}
@@ -289,13 +294,63 @@ const WAITS = [
   { value: "1440", label: "Up to a day" },
 ];
 
+const ON_LIMIT_HINTS: Record<OnLimit, string> = {
+  wait: "The thread waits for the limit to reset, then carries on by itself.",
+  switch: "The thread carries on with your next signed-in account of the same agent, in the same conversation. If every account is out, it waits.",
+  ask: "The thread stops and asks: switch account, carry on with another agent, or wait.",
+};
+
+function LimitPolicy() {
+  const shell = inDesktopShell();
+  const [value, setValue] = useState<OnLimit | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!shell) return;
+    let live = true;
+    void listAccounts()
+      .then(l => live && l && setValue(l.onLimit))
+      .catch(err => live && setError(err instanceof Error ? err.message : String(err)));
+    return () => {
+      live = false;
+    };
+  }, [shell]);
+  const change = (next: OnLimit) => {
+    const before = value;
+    setValue(next);
+    setError(null);
+    void setOnLimit(next).catch(err => {
+      setValue(before);
+      setError(err instanceof Error ? err.message : String(err));
+    });
+  };
+  return (
+    <>
+      <Row
+        label="When an agent hits its limit"
+        description={value ? `${ON_LIMIT_HINTS[value]} Applies to threads on this computer straight away.` : shell ? "Looking…" : "Works in the desktop app."}
+      >
+        {value && (
+          <Select<OnLimit>
+            label="When an agent hits its limit"
+            value={value}
+            onChange={change}
+            options={OnLimit.options.map(o => ({ value: o, label: ON_LIMIT_LABELS[o] }))}
+          />
+        )}
+      </Row>
+      <ErrorText>{error}</ErrorText>
+    </>
+  );
+}
+
 function RetryTab({ ctx }: { ctx: SettingsCtx }) {
   const { settings, onSave } = ctx;
   return (
     <Section
-      title="Automatic retry"
-      description="When the provider is busy or you hit a usage limit, the agent waits and carries on by itself, instead of stopping the thread."
+      title="Limits and retries"
+      description="When the provider is busy or you hit a usage limit, the thread carries on by itself instead of stopping. Add more accounts under Accounts to switch between them."
     >
+      <LimitPolicy />
       <Row
         label="Wait and try again"
         description="If a limit resets later than this, the thread stops and tells you. Applies to threads started after you change it."

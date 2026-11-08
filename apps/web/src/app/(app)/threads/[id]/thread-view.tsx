@@ -382,7 +382,12 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
             {items.length === 0 ? (
               <EmptyState status={thread.status} connected={conn === "live"} />
             ) : (
-              <Timeline items={items} onApprove={(id, d) => clientRef.current?.approve(id, d)} onImplementPlan={live ? implementPlan : undefined} />
+              <Timeline
+                items={items}
+                onApprove={(id, d) => clientRef.current?.approve(id, d)}
+                onImplementPlan={live ? implementPlan : undefined}
+                onLimitWait={live ? () => clientRef.current?.limitAction({ action: "wait" }) : undefined}
+              />
             )}
             <div ref={bottomRef} />
           </section>

@@ -229,11 +229,12 @@ export function signedInAgents(env: NodeJS.ProcessEnv = process.env, home = home
   return out;
 }
 
-function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 15_000): Promise<{ code: number | null; stdout: string }> {
+function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 15_000): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise(resolve => {
-    execFile(cmd, args, { env, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(cmd, args, { env, timeout: timeoutMs, windowsHide: true, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       const code = err ? (typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code as number) : null) : 0;
-      resolve({ code, stdout: String(stdout ?? "") });
+      // Some CLIs say how they're signed in on stderr.
+      resolve({ code, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
     });
   });
 }
@@ -248,7 +249,7 @@ export async function accountStatus(agent: AccountAgent, dir: string | null): Pr
   }
   const r = await run("codex", ["login", "status"], env);
   if (r.code === null) return { signedIn: null };
-  return parseCodexStatus(r.stdout, r.code);
+  return parseCodexStatus(`${r.stdout}\n${r.stderr}`, r.code);
 }
 
 /** `claude auth status --json`: whether it's signed in, the email and the plan. Null if unreadable. */

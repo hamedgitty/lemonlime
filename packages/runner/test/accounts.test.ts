@@ -286,7 +286,7 @@ function fakeAgents(limited: Set<string>) {
           }
           if (limited.has(dir ?? `${kind}:default`)) throw new AgentError("You've hit your limit · resets 3pm", "usage_limit");
         },
-        saveState: () => (id ? { sessionId: id } : {}),
+        saveState: (): Record<string, string> => (id ? { sessionId: id } : {}),
         dispose: async () => {},
       };
     },
@@ -430,6 +430,33 @@ describe("carrying a thread on past a usage limit", () => {
     await restarted.settled();
     expect(again.turns[0]).toMatchObject({ kind: "codex", resumed: "sess-2" });
     await restarted.close();
+  });
+
+  it("starts new threads on the default account, and keeps older threads on the usual sign-in", async () => {
+    const home = tmp();
+    addAccount(home, "claude-code", "Work");
+    setDefaultAccount(home, "claude-code", "work");
+    const make = (dataDir: string, id: string) =>
+      new ThreadRunner({
+        thread: thread(id),
+        workdir: "/tmp",
+        dataDir,
+        adapter: fakeAgents(new Set()).make("claude-code"),
+        session: { autonomy: "edits" },
+        git: false,
+        bundledSkills: false,
+        accountsHome: home,
+      });
+    const fresh = make(tmp(), "switch-thread-6");
+    await fresh.init();
+    expect(fresh.currentAccount).toBe("work");
+    await fresh.close();
+    const older = tmp();
+    writeFileSync(join(older, "state.json"), JSON.stringify({ agentState: { sessionId: "s1" }, status: "idle" }));
+    const old = make(older, "switch-thread-7");
+    await old.init();
+    expect(old.currentAccount).toBe("default");
+    await old.close();
   });
 
   it("refuses what can't be done", async () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { elapsedMs, formatDuration, type EventOf } from "@lemonlime/protocol";
+import { elapsedMs, formatDuration, shortPath, type EventOf } from "@lemonlime/protocol";
 import { diffLines, type DiffLineKind, type TimelineItem } from "@/lib/timeline.ts";
 import { PlanCard, QuestionRecord } from "./agent-loop.tsx";
 
@@ -20,7 +20,7 @@ function toolSummary(input: unknown): string {
   const o = input as Record<string, unknown>;
   for (const key of ["command", "cmd", "file_path", "path", "pattern", "query", "url", "description"]) {
     const v = o[key];
-    if (typeof v === "string" && v) return v;
+    if (typeof v === "string" && v) return key === "file_path" || key === "path" ? shortPath(v) : v;
     if (Array.isArray(v) && v.every(x => typeof x === "string")) return v.join(" ");
   }
   return "";
@@ -189,6 +189,8 @@ function Item({
 function Reasoning({ item }: { item: Extract<TimelineItem, { kind: "reasoning" }> }) {
   const ms = elapsedMs(item.startedAt, item.endedAt);
   const label = item.streaming ? "Thinking" : ms !== null && ms >= 1000 ? `Thought for ${formatDuration(ms)}` : "Thought for a moment";
+  // Some agents keep what they thought to themselves: just say that they did.
+  if (!item.text.trim() && !item.streaming) return <p className="text-[13.5px] text-muted tabular-nums">{label}</p>;
   return (
     <details className="group text-[13.5px]">
       <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-muted hover:text-ink [&::-webkit-details-marker]:hidden">

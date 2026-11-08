@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AcpTranslator, parseClaudeLine, parseCodexLine } from "../src/index.ts";
 
 describe("the agent's reasoning", () => {
-  it("Claude Code: thinking blocks become reasoning, redacted ones are left out", () => {
+  it("Claude Code: thinking blocks become reasoning, hidden ones as a bare row, redacted ones are left out", () => {
     const line = parseClaudeLine(
       JSON.stringify({
         type: "assistant",
@@ -12,6 +12,8 @@ describe("the agent's reasoning", () => {
             { type: "thinking", thinking: "  The tests live in test/, so run them first.\n", signature: "sig" },
             { type: "redacted_thinking", data: "opaque" },
             { type: "thinking", thinking: "   " },
+            // What Claude Code prints when it keeps its thinking to itself.
+            { type: "thinking", thinking: "", signature: "sig2" },
             { type: "text", text: "Running the tests." },
           ],
         },
@@ -19,6 +21,7 @@ describe("the agent's reasoning", () => {
     );
     expect(line.events).toEqual([
       { type: "agent_reasoning", text: "The tests live in test/, so run them first.", partial: false },
+      { type: "agent_reasoning", text: "", partial: false },
       { type: "agent_message", text: "Running the tests.", partial: false },
     ]);
   });

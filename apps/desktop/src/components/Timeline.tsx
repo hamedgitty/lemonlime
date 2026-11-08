@@ -4,6 +4,7 @@ import {
   ArrowDown,
   ArrowDownToLine,
   ArrowUpToLine,
+  Brain,
   Check,
   ChevronRight,
   CircleAlert,
@@ -774,6 +775,14 @@ function ReasoningRow({ text, streaming, startedAt, endedAt }: { text: string; s
   const bodyId = useId();
   const ms = elapsedMs(startedAt, endedAt);
   const label = streaming ? "Thinking" : ms !== null && ms >= 1000 ? `Thought for ${formatDuration(ms)}` : "Thought for a moment";
+  // Some agents keep what they thought to themselves: just say that they did.
+  if (!text.trim() && !streaming)
+    return (
+      <p className="inline-flex items-center gap-1.5 py-0.5 pr-1.5 pl-1 text-[13px] text-ink-faint">
+        <Brain aria-hidden="true" className="size-3.5" />
+        <span className="tabular-nums">{label}</span>
+      </p>
+    );
   return (
     <div>
       <button

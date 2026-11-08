@@ -1,4 +1,4 @@
-import type { AgentKind, ThreadStatus } from "@lemonlime/protocol";
+import { shortPath, type AgentKind, type ThreadStatus } from "@lemonlime/protocol";
 
 export const AGENT_LABELS: Record<AgentKind, string> = {
   "claude-code": "Claude Code",
@@ -67,6 +67,8 @@ export function stringifyValue(value: unknown): string {
   }
 }
 
+export { shortPath };
+
 /** One-line summary of a tool call's input for the collapsed row. */
 export function summarizeToolInput(input: unknown): string {
   if (typeof input === "string") return firstLine(input);
@@ -74,7 +76,7 @@ export function summarizeToolInput(input: unknown): string {
     const o = input as Record<string, unknown>;
     for (const k of ["command", "cmd", "file_path", "path", "pattern", "query", "url", "description"]) {
       const v = o[k];
-      if (typeof v === "string" && v.trim()) return firstLine(v);
+      if (typeof v === "string" && v.trim()) return k === "file_path" || k === "path" ? shortPath(v.trim().split("\n")[0] ?? "") : firstLine(v);
       if (Array.isArray(v) && v.every(x => typeof x === "string")) return firstLine(v.join(" "));
     }
   }

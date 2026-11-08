@@ -21,6 +21,7 @@ import type { EditQueuedFn } from "../lib/useThreadSession.ts";
 import { Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
 import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
 import { DiffView } from "./DiffView.tsx";
+import { OptionsRow, PlanCard, QuestionRecord } from "./AgentLoop.tsx";
 import { Button, LogoMark, Spinner, cx } from "./ui.tsx";
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
@@ -34,6 +35,7 @@ export function Timeline({
   onApprove,
   onEditQueued,
   onRewind,
+  onImplementPlan,
   foldFinished = false,
 }: {
   items: TimelineItem[];
@@ -44,6 +46,8 @@ export function Timeline({
   onApprove?: ApproveFn;
   onEditQueued?: EditQueuedFn;
   onRewind?: RewindFn;
+  /** Approve the latest plan (leave plan mode and tell the agent to go ahead). */
+  onImplementPlan?: (() => void) | undefined;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -113,10 +117,19 @@ export function Timeline({
                         Worked through {item.items.length} steps
                       </button>
                       {unfolded.has(item.key) &&
-                        item.items.map(it => <Item key={it.key} item={it} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} />)}
+                        item.items.map(it => (
+                          <Item
+                            key={it.key}
+                            item={it}
+                            onApprove={onApprove}
+                            onEditQueued={onEditQueued}
+                            onRewind={onRewind}
+                            onImplementPlan={onImplementPlan}
+                          />
+                        ))}
                     </div>
                   ) : (
-                    <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} />
+                    <Item item={item} onApprove={onApprove} onEditQueued={onEditQueued} onRewind={onRewind} onImplementPlan={onImplementPlan} />
                   )}
                 </div>
               ))}
@@ -151,11 +164,13 @@ const Item = memo(function Item({
   onApprove,
   onEditQueued,
   onRewind,
+  onImplementPlan,
 }: {
   item: TimelineItem;
   onApprove?: ApproveFn | undefined;
   onEditQueued?: EditQueuedFn | undefined;
   onRewind?: RewindFn | undefined;
+  onImplementPlan?: (() => void) | undefined;
 }) {
   switch (item.kind) {
     case "user":
@@ -187,6 +202,12 @@ const Item = memo(function Item({
       return <NoticeRow message={item.untilAt ? `${item.message} ${resetsWhen(item.untilAt)}` : item.message} />;
     case "approval":
       return <ApprovalCard item={item} onApprove={onApprove} />;
+    case "plan":
+      return <PlanCard plan={item.plan} open={item.open} onImplement={onImplementPlan} />;
+    case "question":
+      return <QuestionRecord questions={item.questions} answers={item.answers} state={item.state} by={item.by} />;
+    case "options":
+      return <OptionsRow options={item.options} />;
   }
 });
 

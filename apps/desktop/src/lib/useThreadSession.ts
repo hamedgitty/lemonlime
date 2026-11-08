@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RunnerClient } from "@lemonlime/client";
-import { signToken, type ComputerRequest, type SideChatSummary, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
+import {
+  signToken,
+  type ClientSetOptions,
+  type ComputerRequest,
+  type SideChatSummary,
+  type Thread,
+  type ThreadEvent,
+  type ThreadOptions,
+  type ThreadStatus,
+} from "@lemonlime/protocol";
 import { appendEvents, contiguousSeq, type PendingMessage } from "./timeline.ts";
 import { forgetEvents, loadEvents, saveEvents, type LocalThreadMeta } from "./storage.ts";
 import { confirmAction, isLocalRunnerRunning, startLocalRunner } from "./native.ts";
@@ -68,6 +77,12 @@ export interface ThreadSession {
   editQueued: EditQueuedFn;
   rewind: (toSeq: number, restoreFiles: boolean) => void;
   compact: () => void;
+  /** The thread's model, reasoning and permission mode, as the runner last said (null before it has). */
+  options: ThreadOptions | null;
+  /** Change them from the agent's next turn. */
+  setOptions: (change: Omit<ClientSetOptions, "type">) => void;
+  /** Answer the agent's questions (one list per question), or decline with null. */
+  answerQuestion: (requestId: string, answers: string[][] | null) => void;
   /** Signing a cloud thread's agent in to the user's own account (never part of the history). */
   login: {
     update: LoginUpdate | null;
@@ -100,6 +115,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const [state, setState] = useState<SessionState>("starting");
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<ThreadStatus | null>(null);
+  const [options, setOptionsState] = useState<ThreadOptions | null>(null);
   const [generation, setGeneration] = useState(0);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [loginUpdate, setLoginUpdate] = useState<LoginUpdate | null>(null);
@@ -212,9 +228,10 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         url: conn.url,
         token: conn.token,
         resumeFrom,
-        onWelcome: (thread, latestSeq) => {
+        onWelcome: (thread, latestSeq, current) => {
           if (cancelled) return;
           updateStatus(thread.status);
+          if (current) setOptionsState(current);
           // The runner holds less history than we cached: its store was reset.
           if (latestSeq < resumeFrom) {
             forceFullReplay.current = true;
@@ -242,6 +259,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
           if (cancelled) return;
           buffer.push(ev);
           if (ev.type === "status_change") updateStatus(ev.to);
+          if (ev.type === "options_change") setOptionsState(ev.options);
           if (!flushHandle) flushHandle = setTimeout(flush, 16);
         },
         onState: s => {
@@ -342,6 +360,8 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const editQueued = useCallback<EditQueuedFn>((id, change) => clientRef.current?.editQueued(id, change), []);
   const rewind = useCallback((toSeq: number, restoreFiles: boolean) => clientRef.current?.rewind(toSeq, restoreFiles), []);
   const compact = useCallback(() => clientRef.current?.compact(), []);
+  const setOptions = useCallback((change: Omit<ClientSetOptions, "type">) => clientRef.current?.setOptions(change), []);
+  const answerQuestion = useCallback((requestId: string, answers: string[][] | null) => clientRef.current?.answerQuestion(requestId, answers), []);
   const sideAsk = useCallback(
     (text: string, sideId?: string) =>
       new Promise<string>((resolve, reject) => {
@@ -382,7 +402,27 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setError(null);
   }, []);
 
-  return { events, pending, state, error, status, connection, send, interrupt, approve, editQueued, rewind, compact, login, side, restart, disconnect };
+  return {
+    events,
+    pending,
+    state,
+    error,
+    status,
+    connection,
+    send,
+    interrupt,
+    approve,
+    editQueued,
+    rewind,
+    compact,
+    options,
+    setOptions,
+    answerQuestion,
+    login,
+    side,
+    restart,
+    disconnect,
+  };
 }
 
 function newClientMsgId(): string {

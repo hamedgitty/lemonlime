@@ -185,3 +185,49 @@ describe("contiguousSeq / latestStatus", () => {
     expect(items[3]).not.toHaveProperty("restorable");
   });
 });
+
+describe("buildTimeline: plans, questions and options", () => {
+  it("shows the latest plan as open until the user replies", () => {
+    seq = 0;
+    const base = [
+      ev({ type: "user_message", text: "plan it" }),
+      ev({ type: "plan_proposal", plan: "# Old" }),
+      ev({ type: "user_message", text: "change step 2" }),
+      ev({ type: "plan_proposal", plan: "# New" }),
+    ];
+    const plans = buildTimeline(base).filter(i => i.kind === "plan");
+    expect(plans.map(p => (p.kind === "plan" ? [p.plan, p.open] : null))).toEqual([
+      ["# Old", false],
+      ["# New", true],
+    ]);
+    const after = buildTimeline([...base, ev({ type: "user_message", text: "The plan is approved. Go ahead and implement it." })]).filter(
+      i => i.kind === "plan",
+    );
+    expect(after.at(-1)).toMatchObject({ open: false });
+  });
+
+  it("records questions with their answers, and options changes", () => {
+    seq = 0;
+    const items = buildTimeline([
+      ev({ type: "question_request", requestId: "q1", questions: [{ question: "Which?", options: [{ label: "A" }] }] }),
+      ev({ type: "question_request", requestId: "q2", questions: [{ question: "And?", options: [] }] }),
+      ev({ type: "question_result", requestId: "q1", answers: [["A"]], by: "user" }),
+      ev({ type: "question_result", requestId: "q2", answers: null, by: "timeout" }),
+      ev({ type: "options_change", options: { model: "opus", reasoning: null, permission: "plan" } }),
+    ]);
+    expect(items.map(i => i.kind)).toEqual(["question", "question", "options"]);
+    expect(items[0]).toMatchObject({ state: "answered", answers: [["A"]] });
+    expect(items[1]).toMatchObject({ state: "declined", by: "timeout" });
+  });
+
+  it("keeps a streaming message whole across to-do and usage updates", () => {
+    seq = 0;
+    const items = buildTimeline([
+      ev({ type: "agent_message", text: "Work", partial: true }),
+      ev({ type: "todo_snapshot", items: [{ text: "A", status: "in_progress" }] }),
+      ev({ type: "context_usage", used: 10, window: 100 }),
+      ev({ type: "agent_message", text: "ing", partial: true }),
+    ]);
+    expect(items).toEqual([expect.objectContaining({ kind: "agent", text: "Working", streaming: true })]);
+  });
+});

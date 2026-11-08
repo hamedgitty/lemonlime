@@ -293,6 +293,17 @@ export class GitWorkspace {
     return (await this.git(["rev-parse", "HEAD"])).trim();
   }
 
+  /** Whether `ref` names a commit (not a tree or nothing). */
+  async isCommit(ref: string): Promise<boolean> {
+    if (!ref || ref.startsWith("-")) return false;
+    return (await this.git(["rev-parse", "--verify", "-q", "--end-of-options", `${ref}^{commit}`], { allowFail: true })).trim().length > 0;
+  }
+
+  /** Object id of the empty tree, to diff against before the first commit. */
+  emptyTreeId(): Promise<string> {
+    return this.emptyTree();
+  }
+
   /** Object id of the empty tree for this repo's hash format (sha1 or sha256). */
   private async emptyTree(): Promise<string> {
     // Hash empty input as a tree. Works on every OS (no /dev/null) and both hash formats.

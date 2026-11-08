@@ -15,6 +15,7 @@ import {
 import { TerminalSession, type SpawnPty } from "./terminal.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
+import { handleGitApi } from "./git-api.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 import type { Relay } from "./relay.ts";
 
@@ -57,7 +58,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
       path.startsWith("/subagents") ||
       path === "/computer" ||
       path.startsWith("/teleport") ||
-      path.startsWith("/relay")
+      path.startsWith("/relay") ||
+      path.startsWith("/git/")
     ) {
       void handleHttpApi(req, res, path, runner, opts).catch(() => {
         if (!res.headersSent) res.writeHead(500, { "content-type": "application/json" });
@@ -498,6 +500,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
   const auth = token ? await verifyToken(token, opts.threadSecret) : null;
   if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
 
+  if (path.startsWith("/git/")) return handleGitApi(req, res, path, runner.review, { reply, readBody });
   if (path === "/teleport/export" && req.method === "POST") {
     try {
       return reply(res, 200, await runner.exportForTeleport());

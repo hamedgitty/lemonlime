@@ -145,6 +145,22 @@ sit in `.lemonlime-attachments/` in the thread's folder (kept out of git), and a
 levels and limits. `--model` and `--reasoning` are fixed when the thread starts: Claude
 Code gets a thinking budget (`MAX_THINKING_TOKENS`), Codex `model_reasoning_effort`.
 
+## Reviewing the branch
+
+The apps read the thread's branch from git itself, over HTTP with the client token:
+`GET /git/status` (changed files, commits, push state, the GitHub compare page, whether
+the GitHub CLI is signed in), `GET /git/diff?scope=branch|uncommitted|commit` (per-file
+status, line counts and hunks; `commit=<sha>` for one commit, `path=` and `context=` for
+more lines around one file), `POST /git/push` (never forced) and `GET`/`POST
+/git/pull-request` (opens one with `gh` when it's installed and signed in; otherwise the
+answer has the compare page to open instead). Diffs are capped at 400 files and 3 MB of
+text; bigger files say they were shortened. Working-tree diffs use a scratch index, so
+the agent's own index is never touched.
+
+Every git call the runner makes turns off `core.fsmonitor`, hooks and bare-repository
+discovery, never runs an external diff or textconv filter, has a time limit, and refuses
+branch names, refs and paths that start with `-`.
+
 ## Previews
 
 When the agent starts a dev server it runs `lemonlime-runner preview <port> --name <what>`

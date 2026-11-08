@@ -1,5 +1,6 @@
 export { EventStore } from "./event-store.ts";
 export { GitWorkspace, commitSubject, type FileChange } from "./git.ts";
+export { GitReview, DEFAULT_DIFF_CAPS, type DiffCaps, type DiffQuery, type GhRunner } from "./git-review.ts";
 export { ThreadRunner, BusyError, CONTINUE_AFTER_LIMIT, recapBefore, fixHint, tokensIn, type SendResult, type ThreadRunnerOptions } from "./thread-runner.ts";
 export { ApprovalBridge, summarizeToolInput, type ApprovalDecision, type ApprovalRequest } from "./approvals.ts";
 export { capEvent, capValue, MAX_MESSAGE_CHARS, MAX_TOOL_CHARS } from "./limits.ts";

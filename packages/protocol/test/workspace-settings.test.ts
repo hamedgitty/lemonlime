@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  branchForThread,
-  isSafeBranchPrefix,
-  PutWorkspaceSettingsRequest,
-  PutWorkspaceSkillsRequest,
-  USER_SKILLS_MAX_BYTES,
-} from "../src/index.ts";
+import { branchForThread, isSafeBranchPrefix, PutWorkspaceSettingsRequest, PutWorkspaceSkillsRequest, USER_SKILLS_MAX_BYTES } from "../src/index.ts";
 
 describe("branch prefixes", () => {
   it("default to agent/ and accept other safe prefixes", () => {
@@ -16,7 +10,26 @@ describe("branch prefixes", () => {
   });
 
   it("refuse prefixes git would reject or that look like options", () => {
-    const bad = ["", "-x/", "/agent/", "a//b/", "a..b/", ".hidden/", "x.lock/", "x./", "a b/", "a~1/", "a^/", "a:b/", "a?/", "a*/", "a[/", "a\\b/", "a@{/", "x".repeat(101)];
+    const bad = [
+      "",
+      "-x/",
+      "/agent/",
+      "a//b/",
+      "a..b/",
+      ".hidden/",
+      "x.lock/",
+      "x./",
+      "a b/",
+      "a~1/",
+      "a^/",
+      "a:b/",
+      "a?/",
+      "a*/",
+      "a[/",
+      "a\\b/",
+      "a@{/",
+      "x".repeat(101),
+    ];
     for (const p of bad) expect(isSafeBranchPrefix(p), p).toBe(false);
     expect(() => branchForThread("abc123", "../")).toThrow();
   });
@@ -34,7 +47,9 @@ describe("workspace settings", () => {
 
   it("check skills: a SKILL.md each, safe paths, unique names, a total size", () => {
     const skill = (name: string, files: Record<string, string> = { "SKILL.md": "# hi" }) => ({ name, files });
-    expect(PutWorkspaceSkillsRequest.safeParse({ skills: [skill("review"), skill("deploy", { "SKILL.md": "x", "scripts/run.sh": "echo" })] }).success).toBe(true);
+    expect(PutWorkspaceSkillsRequest.safeParse({ skills: [skill("review"), skill("deploy", { "SKILL.md": "x", "scripts/run.sh": "echo" })] }).success).toBe(
+      true,
+    );
     expect(PutWorkspaceSkillsRequest.safeParse({ skills: [skill("review", { "README.md": "x" })] }).success).toBe(false);
     expect(PutWorkspaceSkillsRequest.safeParse({ skills: [skill("review"), skill("review")] }).success).toBe(false);
     expect(PutWorkspaceSkillsRequest.safeParse({ skills: [skill("../up")] }).success).toBe(false);

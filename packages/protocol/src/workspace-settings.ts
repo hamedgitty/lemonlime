@@ -80,7 +80,7 @@ export type PutWorkspaceSettingsRequest = z.infer<typeof PutWorkspaceSettingsReq
 
 export const WorkspaceSettings = WorkspaceSettingsFields.extend({
   /** The workspace's own skills, without their contents (GET /api/workspace/skills has those). */
-  skills: z.array(z.object({ name: SkillName, files: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() })),
+  skills: z.array(z.object({ name: SkillName, fileCount: z.number().int().nonnegative(), bytes: z.number().int().nonnegative() })),
   /** When they were last changed (ISO), or null if never. */
   updatedAt: z.string().nullable(),
 });

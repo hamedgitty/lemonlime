@@ -738,6 +738,19 @@ export function App() {
     }
   };
 
+  // ── Forking a thread: a new one on the same project, starting from a note of the conversation ──
+  const forkThread = async (entry: ThreadEntry, note: string, title: string) => {
+    const a = entry.mode === "local" ? entry.meta.agent : entry.thread.agent;
+    const agent = { agent: a.kind, agentCommand: a.command, model: a.model, reasoning: a.reasoning, fast: a.fast, title, prompt: note };
+    if (entry.mode === "local") {
+      const m = entry.meta;
+      await createThread({ mode: "local", ...agent, repoPath: m.repoPath, ...(m.machine ? { machine: m.machine } : {}), baseBranch: m.baseBranch }, true);
+    } else {
+      const t = entry.thread;
+      await createThread({ mode: "cloud", ...agent, repoUrl: t.repo.url, baseBranch: t.repo.baseBranch, sandboxSize: t.sandboxSize }, true);
+    }
+  };
+
   // ── Moving a thread between this computer and the cloud ───
   const moveThread = async (entry: ThreadEntry, from: Connection, onStep: (text: string) => void) => {
     const retry = async <T,>(fn: () => Promise<T>, what: string): Promise<T> => {
@@ -1490,6 +1503,7 @@ export function App() {
         agents={agents}
         onLocalAgent={onLocalAgent}
         onSwitchOthers={onSwitchOthers}
+        {...(entry.mode === "local" || cloudApi ? { onFork: forkThread } : {})}
         computerLevel={prefs.computerAccess[entry.mode === "cloud" ? entry.thread.id : ""] ?? "off"}
         onComputerLevel={level => {
           if (entry.mode !== "cloud") return;

@@ -37,21 +37,30 @@ export function DiffView({ path, change, diff, truncated }: { path: string; chan
         </span>
       </button>
       {open && (
-        <div id={bodyId} className="scroll-thin max-h-[480px] overflow-auto border-t border-line">
-          {visible.length === 0 ? (
-            <p className="px-4 py-3 text-[13px] text-ink-faint">No line changes to show.</p>
-          ) : (
-            <table className="w-full border-collapse font-mono text-[12px] leading-[1.6]">
-              <tbody>
-                {visible.map((line, i) => (
-                  <DiffRow key={i} line={line} />
-                ))}
-              </tbody>
-            </table>
-          )}
-          {truncated && <p className="border-t border-line bg-cream px-4 py-2 text-[13px] text-ink-soft">This diff was shortened because the file is large.</p>}
+        <div id={bodyId} className="border-t border-line">
+          <DiffBody lines={visible} truncated={truncated} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** The changed lines of one file, as a table with old and new line numbers. */
+export function DiffBody({ lines, truncated }: { lines: DiffLine[]; truncated: boolean }) {
+  return (
+    <div className="scroll-thin max-h-[480px] overflow-auto">
+      {lines.length === 0 ? (
+        <p className="px-4 py-3 text-[13px] text-ink-faint">No line changes to show.</p>
+      ) : (
+        <table className="w-full border-collapse font-mono text-[12px] leading-[1.6]">
+          <tbody>
+            {lines.map((line, i) => (
+              <DiffRow key={i} line={line} />
+            ))}
+          </tbody>
+        </table>
+      )}
+      {truncated && <p className="border-t border-line bg-cream px-4 py-2 text-[13px] text-ink-soft">This diff was shortened because the file is large.</p>}
     </div>
   );
 }

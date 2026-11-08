@@ -32,6 +32,8 @@
   --color-rind-line: #2a3720;
   --color-rind-text: #dfe6d3;
   --color-rind-muted: #9aa58d;
+  /* Failure text on rind (a terminal block's failed exit). */
+  --color-rind-danger: #f2877e;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
   --color-amber: #b45309;

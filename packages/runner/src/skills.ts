@@ -38,12 +38,19 @@ export async function installSkills(opts: {
   git: GitWorkspace | null;
   extraDirs?: string[];
   bundled?: boolean;
+  /** Bundled skills to leave out, by folder name. */
+  disabled?: readonly string[];
+  /** Where the bundled skills are (tests). */
+  bundledDir?: string;
 }): Promise<string[]> {
   const target = skillsDirFor(opts.kind);
-  const sources = [...(opts.bundled === false ? [] : [BUNDLED_SKILLS_DIR]), ...(opts.extraDirs ?? [])];
+  const bundledDir = opts.bundledDir ?? BUNDLED_SKILLS_DIR;
+  const sources = [...(opts.bundled === false ? [] : [bundledDir]), ...(opts.extraDirs ?? [])];
+  const disabled = new Set(opts.disabled ?? []);
   const installed: string[] = [];
   for (const source of sources) {
     for (const name of listSkills(source)) {
+      if (source === bundledDir && disabled.has(name)) continue;
       cpSync(join(source, name), join(opts.workdir, target, name), { recursive: true, force: true });
       await opts.git?.excludePath(`${target}/${name}/`);
       installed.push(name);

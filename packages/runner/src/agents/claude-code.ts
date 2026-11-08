@@ -71,6 +71,8 @@ class ClaudeCodeSession implements AgentSession {
     const args = ["-p", ctx.prompt, "--output-format", "stream-json", "--verbose"];
     if (this.sessionId) args.push("--resume", this.sessionId);
     if (this.opts.model) args.push("--model", this.opts.model);
+    // The user's own instructions join the system prompt on every turn.
+    if (this.opts.instructions?.trim()) args.push("--append-system-prompt", this.opts.instructions);
     const env: Record<string, string> = { ...this.opts.env };
     // Claude Code's thinking budget, in tokens.
     const thinking = { low: 4_000, medium: 12_000, high: 31_999, xhigh: 31_999, max: 31_999, ultra: 31_999 }[this.opts.reasoning ?? ""];

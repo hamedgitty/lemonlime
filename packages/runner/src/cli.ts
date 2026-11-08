@@ -1,9 +1,20 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { AgentKind, branchForThread, ReasoningLevel, signToken, ThreadId, type Thread } from "@lemonlime/protocol";
+import { gunzipSync } from "node:zlib";
+import {
+  AgentKind,
+  branchForThread,
+  DEFAULT_BRANCH_PREFIX,
+  isSafeBranchPrefix,
+  ReasoningLevel,
+  signToken,
+  ThreadId,
+  UserSkillList,
+  type Thread,
+} from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { runApprovalMcp } from "./approval-mcp.ts";
 import { runSubagentsMcp } from "./subagents-mcp.ts";
@@ -61,8 +72,27 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --skills <dir>           Also copy the skill folders in <dir> into the thread (repeatable).
                            Skills in ~/.lemonlime/skills are always copied too.
   --no-bundled-skills      Don't copy LemonLime's own skills into the thread
+  --disable-skills <names> Leave these bundled skills out (comma-separated, repeatable),
+                           e.g. lemonlime-open-pr,lemonlime-previews
   --no-command-guard       Let the agent run commands that wipe the computer or home
-                           folder, erase disks or fork-bomb (blocked by default; Claude Code)
+                           folder, erase disks or fork-bomb (blocked by default: Claude Code
+                           through a hook, OpenCode and other ACP agents when they ask
+                           before running a command)
+  --instructions-file <path>
+                           Your own instructions, added to every turn (Claude Code's system
+                           prompt, Codex's developer instructions, the first message of each
+                           new ACP conversation). At most 32 KB; longer is cut short.
+  --strip-coauthors        Remove Co-authored-by trailers from commits the agent makes in
+                           the thread (a commit-msg hook for the thread only; the
+                           repository's own hooks still run and are never changed)
+  --branch-prefix <prefix> Name the thread's branch <prefix><thread> (default: agent/).
+                           A thread keeps the branch it started on.
+  --retry-max-wait <min>   When a turn fails because the AI provider is overloaded or a
+                           usage limit was hit, try it again (at the time the agent gives,
+                           or after a growing wait), waiting at most this many minutes in
+                           all. Sending a message or stopping the agent cancels the wait.
+                           0 (the default) turns it off; a usage limit then still continues
+                           the thread once it resets.
   --memory-limit-mb <n>    Local threads: stop the agent when what it started uses more
                            than this much memory (default: half the computer's)
   --no-git                 Don't manage a branch or commit changes
@@ -73,7 +103,78 @@ Environment:
   LEMONLIME_HOME           Where worktrees and local history live (default: ~/.lemonlime)
   LEMONLIME_REDACT_ENV     Comma-separated names of variables holding secrets; their
                            values are removed from every event
+  LEMONLIME_INSTRUCTIONS   Instructions, as with --instructions-file (the file wins)
+  LEMONLIME_STRIP_COAUTHORS=1          Same as --strip-coauthors
+  LEMONLIME_RETRY_MAX_WAIT=<minutes>   Same as --retry-max-wait (the flag wins)
+  LEMONLIME_USER_SKILLS_0, _1, ...     Skills to add to ~/.lemonlime/skills before starting:
+                           gzip-compressed JSON [{"name","files":{path: content}}] in
+                           base64, split over numbered variables (cloud sandboxes)
+  LEMONLIME_SETUP_LOG      Output of the sandbox's setup script, shown in the thread once
 `;
+
+/** Most bytes of instructions an agent gets. */
+export const INSTRUCTIONS_MAX_BYTES = 32 * 1024;
+
+/** Cut text to at most `max` UTF-8 bytes, never in the middle of a character. */
+export function capBytes(text: string, max: number): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= max) return text;
+  return bytes.subarray(0, max).toString("utf8").replace(/�$/, "");
+}
+
+/** The user's instructions: --instructions-file, else LEMONLIME_INSTRUCTIONS; capped. */
+export function readInstructions(file: string | undefined, env: NodeJS.ProcessEnv = process.env): { text: string; cut: boolean } | null {
+  const raw = file ? readFileSync(file, "utf8") : env.LEMONLIME_INSTRUCTIONS;
+  delete env.LEMONLIME_INSTRUCTIONS;
+  if (!raw?.trim()) return null;
+  const text = capBytes(raw, INSTRUCTIONS_MAX_BYTES);
+  return { text, cut: text.length < raw.length };
+}
+
+/**
+ * The thread's branch. A thread keeps the branch it started on (saved in its data folder),
+ * so changing the prefix later never moves an existing thread to a new branch. Threads
+ * from before branch names were saved used the default prefix.
+ */
+export function threadBranch(dataDir: string, id: ThreadId, prefix: string | undefined): string {
+  const file = join(dataDir, "branch");
+  if (existsSync(file)) {
+    const saved = readFileSync(file, "utf8").trim();
+    if (saved) return saved;
+  }
+  const existing = existsSync(join(dataDir, "state.json")) || existsSync(join(dataDir, "events.jsonl"));
+  if (existing || prefix === undefined || prefix === DEFAULT_BRANCH_PREFIX) return branchForThread(id);
+  const branch = branchForThread(id, prefix);
+  mkdirSync(dataDir, { recursive: true });
+  writeFileSync(file, `${branch}\n`);
+  return branch;
+}
+
+/**
+ * Skills from LEMONLIME_USER_SKILLS_<n> (see HELP), written into `skillsDir`, replacing any
+ * skill of the same name. The variables are then removed so the agent never sees them.
+ * Returns the names written.
+ */
+export function writeUserSkills(skillsDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  const parts: string[] = [];
+  for (let i = 0; env[`LEMONLIME_USER_SKILLS_${i}`] !== undefined; i++) {
+    parts.push(env[`LEMONLIME_USER_SKILLS_${i}`]!);
+    delete env[`LEMONLIME_USER_SKILLS_${i}`];
+  }
+  if (!parts.length) return [];
+  const parsed = UserSkillList.safeParse(JSON.parse(gunzipSync(Buffer.from(parts.join(""), "base64")).toString("utf8")));
+  if (!parsed.success) throw new Error(`the workspace's skills are not valid: ${parsed.error.issues[0]?.message ?? "unknown problem"}`);
+  for (const skill of parsed.data) {
+    const dir = join(skillsDir, skill.name);
+    rmSync(dir, { recursive: true, force: true });
+    for (const [path, content] of Object.entries(skill.files)) {
+      const file = join(dir, path);
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, content);
+    }
+  }
+  return parsed.data.map(s => s.name);
+}
 
 /** Split a command string into args, honouring simple quotes. */
 export function splitCommand(input: string): string[] {
@@ -163,6 +264,11 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       "no-bundled-skills": { type: "boolean", default: false },
       "memory-limit-mb": { type: "string" },
       "no-command-guard": { type: "boolean", default: false },
+      "instructions-file": { type: "string" },
+      "strip-coauthors": { type: "boolean", default: false },
+      "branch-prefix": { type: "string" },
+      "retry-max-wait": { type: "string" },
+      "disable-skills": { type: "string", multiple: true },
       help: { type: "boolean", short: "h", default: false },
     },
     strict: true,
@@ -201,13 +307,39 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const now = new Date().toISOString();
   const id = threadId.data!;
 
+  const branchPrefix = values["branch-prefix"];
+  if (branchPrefix !== undefined && !isSafeBranchPrefix(branchPrefix)) fail("--branch-prefix must be a safe git branch prefix, e.g. agent/ or ai-");
+  const retryMinutes = Number(values["retry-max-wait"] ?? process.env.LEMONLIME_RETRY_MAX_WAIT ?? 0);
+  if (!Number.isFinite(retryMinutes) || retryMinutes < 0) fail("--retry-max-wait must be a number of minutes (0 turns it off)");
+  delete process.env.LEMONLIME_RETRY_MAX_WAIT;
+  const stripCoauthors = values["strip-coauthors"] || process.env.LEMONLIME_STRIP_COAUTHORS === "1";
+  delete process.env.LEMONLIME_STRIP_COAUTHORS;
+  const disabledSkills = (values["disable-skills"] ?? [])
+    .flatMap(v => v.split(","))
+    .map(s => s.trim())
+    .filter(Boolean);
+  let instructions: ReturnType<typeof readInstructions> = null;
+  try {
+    instructions = readInstructions(values["instructions-file"]);
+  } catch (err) {
+    fail(`could not read --instructions-file: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const setupLog = process.env.LEMONLIME_SETUP_LOG;
+  delete process.env.LEMONLIME_SETUP_LOG;
+  // The workspace's own skills (cloud sandboxes), next to the user's own ones.
+  try {
+    writeUserSkills(join(home, "skills"));
+  } catch (err) {
+    process.stderr.write(`[runner ${id}] could not add the workspace's skills: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
+
   const reasoning = values.reasoning && ReasoningLevel.safeParse(values.reasoning).success ? (values.reasoning as ReasoningLevel) : undefined;
   const thread: Thread = {
     id,
     title: "",
     agent: { kind: agent.data!, ...(command ? { command } : {}), ...(values.model ? { model: values.model } : {}), ...(reasoning ? { reasoning } : {}) },
     repo: { url: values.repo ?? sourceRepo ?? workdir, baseBranch: values.base! },
-    branch: branchForThread(id),
+    branch: values["no-git"] ? branchForThread(id, branchPrefix) : threadBranch(dataDir, id, branchPrefix),
     mode: inSandbox ? "cloud" : "local",
     status: "provisioning",
     sandboxSize: "small",
@@ -239,7 +371,12 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       ...(reasoning ? { reasoning } : {}),
       ...(command ? { command } : {}),
       ...(values["no-command-guard"] ? { commandGuard: false } : {}),
+      ...(instructions ? { instructions: instructions.text } : {}),
     },
+    stripCoauthors,
+    disabledSkills,
+    retryMaxWaitMs: Math.round(retryMinutes * 60_000),
+    ...(setupLog ? { setupLog } : {}),
     git: !values["no-git"],
     ...(values.repo ? { repoUrl: values.repo } : {}),
     ...(sourceRepo ? { sourceRepo } : {}),
@@ -258,6 +395,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   // Sign-ins the user made in earlier sandboxes arrive as files to put back in place.
   for (const credential of writeAgentFiles()) runner.useCredential(credential);
   await runner.init();
+  if (instructions?.cut) log(`instructions were longer than ${INSTRUCTIONS_MAX_BYTES / 1024} KB, so only the start is used`);
   const server = await startServer(runner, {
     host: values.host!,
     port,

@@ -27,6 +27,8 @@ class CodexSession implements AgentSession {
     const flags = ["--json", "--skip-git-repo-check"];
     if (this.opts.model) flags.push("--model", this.opts.model);
     if (this.opts.reasoning && /^[a-z]+$/.test(this.opts.reasoning)) flags.push("-c", `model_reasoning_effort="${this.opts.reasoning}"`);
+    // The user's own instructions, as developer instructions on every turn.
+    if (this.opts.instructions?.trim()) flags.push("-c", `developer_instructions=${tomlString(this.opts.instructions)}`);
     if (this.opts.subagents !== false) {
       const [cmd, ...rest] = selfCommand("subagents-mcp");
       flags.push(
@@ -155,6 +157,20 @@ export function parseCodexLine(line: string): { events: NewEvent[]; threadId?: s
     }
   }
   return { events };
+}
+
+/** A TOML basic string (what Codex's `-c key=value` reads), with every control character escaped. */
+export function tomlString(value: string): string {
+  // oxlint-disable-next-line no-control-regex -- control characters are exactly what needs escaping
+  const escaped = value.replace(/[\u0000-\u001f\u007f"\\]/g, ch => {
+    if (ch === '"') return '\\"';
+    if (ch === "\\") return "\\\\";
+    if (ch === "\n") return "\\n";
+    if (ch === "\t") return "\\t";
+    if (ch === "\r") return "\\r";
+    return `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  });
+  return `"${escaped}"`;
 }
 
 /** Codex passes API errors through as a JSON string; pull out the human-readable message. */

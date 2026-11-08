@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { Bot, Cloud, FolderGit2, GitBranch, Laptop } from "lucide-react";
+import { Bot, Cloud, FolderGit2, GitBranch, Laptop, Mic } from "lucide-react";
+import { joinDictation, useDictation } from "@/lib/dictation.ts";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { RunnerClient, type ConnectionState } from "@lemonlime/client";
@@ -59,6 +60,8 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
   const [busy, setBusy] = useState<null | "pause" | "resume" | "close" | "pr">(null);
   const [pullRequestUrl, setPullRequestUrl] = useState<string | null>(initial.pullRequestUrl);
   const [draft, setDraft] = useState("");
+  // Voice input, handy on a phone: each finished phrase lands at the end of the message.
+  const dictation = useDictation(phrase => setDraft(cur => joinDictation(cur, phrase)));
   const [login, setLogin] = useState<LoginUpdate | null>(null);
   const [showSignIn, setShowSignIn] = useState(false);
   const [options, setOptions] = useState<ThreadOptions | null>(null);
@@ -227,6 +230,7 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
     e?.preventDefault();
     const text = draft.trim();
     if (!text) return;
+    if (dictation.listening) dictation.stop();
     const clientMsgId = crypto.randomUUID();
     setPending(p => [...p, { clientMsgId, text, at: new Date().toISOString() }]);
     setDraft("");
@@ -460,10 +464,27 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
                   placeholder={canResume ? "Message the agent to resume the sandbox" : "Message the agent"}
                   className="max-h-48 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-relaxed outline-none placeholder:text-muted/70 [field-sizing:content]"
                 />
+                {dictation.supported && (
+                  <button
+                    type="button"
+                    onClick={dictation.toggle}
+                    aria-label={dictation.listening ? "Stop dictating" : "Dictate a message"}
+                    aria-pressed={dictation.listening}
+                    title={dictation.listening ? "Stop dictating" : "Dictate"}
+                    className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-cream-deep hover:text-ink ${dictation.listening ? "bg-lime text-ink hover:bg-lime" : ""}`}
+                  >
+                    <Mic aria-hidden className="h-4 w-4" />
+                  </button>
+                )}
                 <button type="submit" className="btn-primary" disabled={!draft.trim() || busy === "resume"}>
                   {canResume ? "Resume and send" : "Send"}
                 </button>
               </div>
+              {(dictation.listening || dictation.error) && (
+                <p role="status" className={`mt-1.5 px-1 text-[13px] ${dictation.error ? "text-danger" : "text-muted"}`}>
+                  {dictation.error ?? (dictation.interim || "Listening… speak, then tap the microphone again to stop.")}
+                </p>
+              )}
               <div className="mt-1.5 flex flex-wrap items-center gap-2 px-1">
                 <OptionsControls
                   kind={thread.agent.kind}

@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, BookOpen, FileText, Puzzle, Square, SquareSlash } from "lucide-react";
+import { ArrowUp, BookOpen, FileText, Mic, Puzzle, Square, SquareSlash } from "lucide-react";
+import { joinDictation, useDictation } from "../lib/dictation.ts";
 import { fuzzyFilter, fuzzyMatchPath, type AgentCommand, type FuzzyMatch } from "@lemonlime/protocol";
 import { applyPick, detectTrigger, insertQuote, type Trigger } from "../lib/composerTriggers.ts";
 import { HISTORY_IDLE, loadDraft, saveDraft, stepHistory, type HistoryState } from "../lib/promptHistory.ts";
@@ -83,6 +84,8 @@ export const Composer = forwardRef<
   handle,
 ) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
+  // Voice input: each finished phrase lands at the end of the message.
+  const dictation = useDictation(phrase => setText(cur => joinDictation(cur, phrase)));
   const ref = useRef<HTMLTextAreaElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const listId = useId();
@@ -240,6 +243,8 @@ export const Composer = forwardRef<
   const canSend = !disabled && !busy && text.trim().length > 0;
   const submit = (send: (text: string) => void = onSend) => {
     if (!canSend) return;
+    // Sending ends dictation, so a late phrase doesn't start the next message.
+    if (dictation.listening) dictation.stop();
     send(text.trim());
     setText("");
     historyState.current = HISTORY_IDLE;
@@ -355,8 +360,29 @@ export const Composer = forwardRef<
             <span className="sr-only">Press Tab to use it.</span>
           </span>
         )}
+        {(dictation.listening || dictation.error) && (
+          <p role="status" className={cx("px-4 pb-1 text-[13px]", dictation.error ? "text-danger" : "text-ink-faint")}>
+            {dictation.error ?? (dictation.interim ? dictation.interim : "Listening… speak, then press the microphone again to stop.")}
+          </p>
+        )}
         <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
           <div className="flex min-w-0 flex-1 items-center gap-0.5">{tools}</div>
+          {dictation.supported && !disabled && (
+            <Tip label={dictation.listening ? "Stop dictating" : "Dictate"}>
+              <button
+                type="button"
+                onClick={dictation.toggle}
+                aria-label={dictation.listening ? "Stop dictating" : "Dictate a message"}
+                aria-pressed={dictation.listening}
+                className={cx(
+                  "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-cream-deep hover:text-ink",
+                  dictation.listening && "bg-lime text-ink hover:bg-lime",
+                )}
+              >
+                <Mic aria-hidden="true" className="size-4" />
+              </button>
+            </Tip>
+          )}
           {working && onInterrupt && (
             <Tip
               label={

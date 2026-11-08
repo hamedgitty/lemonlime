@@ -7,6 +7,7 @@ import type { SettingsCtx } from "./context.ts";
 import { ErrorText, Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, useSaved } from "./parts.tsx";
 import { normalizeBaseUrl } from "../../lib/cloud.ts";
 import { computerPlatform, defaultComputerName, type PhoneLinkState } from "../../lib/phoneBridge.ts";
+import { QrCode } from "../QrCode.tsx";
 
 type Tab = "general" | "notifications" | "awake" | "files" | "phone";
 
@@ -263,24 +264,27 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
         )}
         {on && state === "error" && phone?.detail && <ErrorText>{phone.detail}</ErrorText>}
         {on && dashboard && (
-          <Row
-            label="On your phone"
-            description={
-              <>
-                Open <span className="text-ink">{dashboard}</span> in your phone's browser and sign in with the same account. This computer's threads are listed
-                on the home page.
-              </>
-            }
-          >
-            <Button
-              onClick={() => {
-                void navigator.clipboard?.writeText(dashboard).then(markCopied, () => undefined);
-              }}
-            >
-              Copy link
-            </Button>
-            <SavedNote show={copied} text="Copied" />
-          </Row>
+          <div className="flex items-start gap-5 py-3">
+            {/* Just the dashboard's address: signing in on the phone is what lets it in. */}
+            <QrCode text={dashboard} label={`QR code for ${dashboard}`} />
+            <div className="min-w-0 flex-1">
+              <p className="text-[14px] font-medium text-ink">On your phone</p>
+              <p className="mt-1 text-[13.5px] text-ink-soft">
+                Point your phone's camera at the code, or open <span className="break-all text-ink">{dashboard}</span> in its browser, then sign in with the
+                same account. This computer's threads are listed on the home page.
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(dashboard).then(markCopied, () => undefined);
+                  }}
+                >
+                  Copy link
+                </Button>
+                <SavedNote show={copied} text="Copied" />
+              </div>
+            </div>
+          </div>
         )}
       </Section>
       {on && (

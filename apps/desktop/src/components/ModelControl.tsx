@@ -173,7 +173,8 @@ export function ModelControl(p: ModelControlProps) {
             disabled={p.disabled}
             aria-label={`Model: ${label}${p.agent !== "acp" ? `, ${AGENT_LABELS[p.agent]}` : ""}`}
             className={cx(
-              "inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg px-2 text-[14px] font-medium text-ink transition-colors duration-100 hover:bg-cream-deep disabled:opacity-50 data-[popup-open]:bg-cream-deep",
+              // The model's name keeps its room; the effort beside it gives way first.
+              "inline-flex h-8 max-w-[220px] shrink-0 items-center gap-1.5 rounded-lg px-2 text-[14px] font-medium text-ink transition-colors duration-100 hover:bg-cream-deep disabled:opacity-50 data-[popup-open]:bg-cream-deep",
               effort && "rounded-r-none pr-2.5",
             )}
           >

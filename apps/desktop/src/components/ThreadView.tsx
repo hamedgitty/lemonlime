@@ -656,7 +656,10 @@ function ThreadSessionView({
             {/* The title always keeps some room; buttons drop their words first (see @max-…/head). */}
             <div data-tauri-drag-region className="flex min-w-[120px] flex-1 items-center gap-2.5">
               <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
-              <span className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex" title={summary.repo}>
+              <span
+                className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex @max-[640px]/head:hidden"
+                title={summary.repo}
+              >
                 {machine ? (
                   <Server aria-hidden="true" className="size-3.5 shrink-0" />
                 ) : summary.mode === "local" ? (

@@ -216,7 +216,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
         assert!(out.contains("bg="), "{}", &out[..out.len().min(200)]);
         assert!(out.len() <= MAX_OUTPUT + 64);
-        let pid: u32 = out.split("bg=").nth(1).unwrap().trim().split_whitespace().next().unwrap().parse().unwrap();
+        let pid: u32 = out.split("bg=").nth(1).unwrap().split_whitespace().next().unwrap().parse().unwrap();
         let alive = Command::new("kill").arg("-0").arg(pid.to_string()).stderr(Stdio::null()).status().unwrap().success();
         assert!(!alive, "the background job should have been stopped");
     }

@@ -201,6 +201,12 @@ export const UiPrefs = z.object({
   editor: z.string().default(""),
   /** Shortcuts the user changed, by id ("" turns one off). */
   shortcuts: z.record(z.string(), z.string()).default({}),
+  /** The last event seq seen in each thread, so the sidebar can mark finished work as unread. */
+  seenSeq: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  /** When this computer started keeping `seenSeq` (ISO); older threads count as read. */
+  unreadSince: z.string().default(""),
+  /** Threads marked as unread by hand. */
+  markedUnread: z.array(z.string()).default([]),
 });
 export type UiPrefs = z.infer<typeof UiPrefs>;
 
@@ -214,4 +220,60 @@ export function loadUiPrefs(): UiPrefs {
 
 export function saveUiPrefs(p: UiPrefs): void {
   write(KEY_UI, p);
+}
+
+// ── Thread side panel width ──────────────────────────────────
+
+const KEY_PANEL_WIDTH = "lemonlime:thread-panel-width";
+export const THREAD_PANEL = { min: 360, max: 1400, default: 440 } as const;
+
+/** The thread panel's width, clamped to what fits beside the conversation. */
+export function clampPanelWidth(width: number, windowWidth: number): number {
+  const max = Math.max(THREAD_PANEL.min, Math.min(THREAD_PANEL.max, windowWidth - 420));
+  return Math.round(Math.max(THREAD_PANEL.min, Math.min(max, width)));
+}
+
+export function loadPanelWidth(): number {
+  const n = Number(read(KEY_PANEL_WIDTH));
+  return Number.isFinite(n) && n > 0 ? n : THREAD_PANEL.default;
+}
+
+export function savePanelWidth(width: number): void {
+  write(KEY_PANEL_WIDTH, Math.round(width));
+}
+
+// ── Unsent drafts, per thread ────────────────────────────────
+
+const DRAFT_PREFIX = "lemonlime:draft:";
+
+export function loadDraft(threadId: string): string {
+  const v = read(DRAFT_PREFIX + threadId);
+  return typeof v === "string" ? v : "";
+}
+
+/** Keep (or with empty text, forget) what was typed in a thread and not sent. */
+export function saveDraft(threadId: string, text: string): void {
+  const had = loadDraft(threadId) !== "";
+  if (text.trim()) write(DRAFT_PREFIX + threadId, text);
+  else
+    try {
+      localStorage.removeItem(DRAFT_PREFIX + threadId);
+    } catch {
+      /* ignore */
+    }
+  if (had !== Boolean(text.trim()) && typeof window !== "undefined") window.dispatchEvent(new Event("lemonlime:drafts-changed"));
+}
+
+/** Threads with an unsent draft. */
+export function draftThreadIds(): Set<string> {
+  const ids = new Set<string>();
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(DRAFT_PREFIX)) ids.add(k.slice(DRAFT_PREFIX.length));
+    }
+  } catch {
+    /* ignore */
+  }
+  return ids;
 }

@@ -106,6 +106,24 @@ export class CloudApi {
     await this.request("DELETE", `/api/automations/${encodeURIComponent(id)}`);
   }
 
+  /** Rename a cloud thread. */
+  async renameThread(id: string, title: string): Promise<void> {
+    await this.request("PATCH", `/api/threads/${encodeURIComponent(id)}`, { title });
+  }
+
+  /** Open a pull request for the thread's branch (or get the one already open). */
+  async openPullRequest(id: string, body: { title?: string; body?: string } = {}): Promise<{ url: string; created: boolean }> {
+    const r = (await this.request("POST", `/api/threads/${encodeURIComponent(id)}/pull-request`, body)) as { url?: unknown; created?: unknown } | null;
+    if (typeof r?.url !== "string") throw new CloudError("The control plane didn't say where the pull request is.", 200);
+    return { url: r.url, created: r.created === true };
+  }
+
+  /** The thread's pull request, if one was opened through the control plane. */
+  async pullRequestUrl(id: string): Promise<string | null> {
+    const r = (await this.request("GET", `/api/threads/${encodeURIComponent(id)}`)) as { pullRequestUrl?: unknown } | null;
+    return typeof r?.pullRequestUrl === "string" && r.pullRequestUrl ? r.pullRequestUrl : null;
+  }
+
   async pauseThread(id: string): Promise<void> {
     await this.request("POST", `/api/threads/${encodeURIComponent(id)}/pause`);
   }

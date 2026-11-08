@@ -55,6 +55,20 @@ describe("CloudApi", () => {
     expect(urls[2]).toBe("http://cp.test/api/workspaces");
   });
 
+  it("renames threads and opens pull requests through the control plane", async () => {
+    const calls: { url: string; method: string; body: string }[] = [];
+    const api = new CloudApi({ url: "http://cp.test", token: "t" }, async (url, init) => {
+      calls.push({ url, method: init?.method ?? "GET", body: String(init?.body ?? "") });
+      if (url.endsWith("/pull-request")) return new Response(JSON.stringify({ url: "https://github.com/a/b/pull/3", created: true }), { status: 200 });
+      return new Response(JSON.stringify({ thread, endpoint: null, pullRequestUrl: "https://github.com/a/b/pull/3" }), { status: 200 });
+    });
+    await api.renameThread("thread-0001", "New name");
+    expect(calls[0]).toEqual({ url: "http://cp.test/api/threads/thread-0001", method: "PATCH", body: JSON.stringify({ title: "New name" }) });
+    expect(await api.openPullRequest("thread-0001")).toEqual({ url: "https://github.com/a/b/pull/3", created: true });
+    expect(calls[1]!.method).toBe("POST");
+    expect(await api.pullRequestUrl("thread-0001")).toBe("https://github.com/a/b/pull/3");
+  });
+
   it("turns a 402 into a policy denial", async () => {
     const api = new CloudApi(
       { url: "http://cp.test", token: "t" },

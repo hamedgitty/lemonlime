@@ -107,6 +107,11 @@ interface SavedState {
   usageLimit?: { resetAt: string | null };
   /** When the runner continued a thread on its own after a limit (ISO), for the daily cap. */
   autoContinues?: string[];
+  /**
+   * Earlier conversation for the next turn's fresh agent conversation (after a rewind, a
+   * move, or an import of history from outside LemonLime), kept until that turn starts.
+   */
+  recap?: string;
 }
 
 /** What the runner says on the user's behalf when a usage limit lifts. */
@@ -244,6 +249,7 @@ export class ThreadRunner {
       });
     }
     this.agentState = saved?.agentState ?? {};
+    if (typeof saved?.recap === "string" && saved.recap) this.recap = saved.recap;
     this.session = this.newSession();
     this.initialised = true;
     const open = new Set<string>();
@@ -877,6 +883,7 @@ export class ThreadRunner {
       queue: this.queue,
       ...(this.usageLimit ? { usageLimit: this.usageLimit } : {}),
       ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
+      ...(this.recap ? { recap: this.recap } : {}),
     };
     writeFileSync(f, JSON.stringify(state, null, 2));
   }

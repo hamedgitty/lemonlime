@@ -1,4 +1,13 @@
-import { parseServerMessage, type ClientMessage, type ComputerRequest, type SideChatSummary, type Thread, type ThreadEvent } from "@lemonlime/protocol";
+import {
+  parseServerMessage,
+  type ClientMessage,
+  type ClientSetOptions,
+  type ComputerRequest,
+  type SideChatSummary,
+  type Thread,
+  type ThreadEvent,
+  type ThreadOptions,
+} from "@lemonlime/protocol";
 
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "closed";
 
@@ -12,7 +21,8 @@ export interface RunnerClientOptions {
   /** Supply a WebSocket implementation outside the browser (e.g. `ws` in Node). */
   WebSocketImpl?: typeof WebSocket;
   onEvent?: (event: ThreadEvent) => void;
-  onWelcome?: (thread: Thread, latestSeq: number) => void;
+  /** `options`: the thread's model, reasoning and permission mode now (newer runners). */
+  onWelcome?: (thread: Thread, latestSeq: number, options?: ThreadOptions) => void;
   onState?: (state: ConnectionState) => void;
   onError?: (message: string, code?: string) => void;
   /** Sign-in progress (cloud sandboxes). Never part of the history. */
@@ -124,6 +134,16 @@ export class RunnerClient {
     this.post({ type: "compact" });
   }
 
+  /** Change the model, reasoning level or permission mode from the agent's next turn. */
+  setOptions(change: Omit<ClientSetOptions, "type">): void {
+    this.post({ type: "set_options", ...change });
+  }
+
+  /** Answer the agent's questions (one list of picked labels or typed text per question), or decline with null. */
+  answerQuestion(requestId: string, answers: string[][] | null): void {
+    this.post({ type: "answer_question", requestId, answers });
+  }
+
   /** Ask in a side chat (a new one without `sideId`). The chat's id arrives in onSideStarted. */
   sideAsk(text: string, sideId?: string, requestId: string = newId()): string {
     this.post({ type: "side_ask", text, ...(sideId ? { sideId } : {}), requestId });
@@ -194,7 +214,7 @@ export class RunnerClient {
       switch (msg.type) {
         case "welcome":
           this.attempts = 0;
-          this.opts.onWelcome?.(msg.thread, msg.latestSeq);
+          this.opts.onWelcome?.(msg.thread, msg.latestSeq, msg.options);
           break;
         case "event":
           if (msg.event.seq <= this.lastSeq) return; // already have it

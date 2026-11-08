@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PermissionMode, ReasoningLevel, ThreadOptions } from "./capabilities.ts";
 import { ThreadEvent } from "./events.ts";
 import { Thread } from "./thread.ts";
 
@@ -79,6 +80,32 @@ export const ClientComputerResult = z.object({
 export const ClientCompact = z.object({ type: z.literal("compact") });
 
 /**
+ * Change the model, reasoning level or permission mode. Fields left out stay as they are;
+ * `model: null` goes back to the agent's default. Applies from the agent's next turn and is
+ * recorded as an `options_change`; what the agent can't change is refused with an error.
+ */
+export const ClientSetOptions = z.object({
+  type: z.literal("set_options"),
+  model: z.string().min(1).max(200).nullable().optional(),
+  reasoning: ReasoningLevel.nullable().optional(),
+  permission: PermissionMode.optional(),
+});
+export type ClientSetOptions = z.infer<typeof ClientSetOptions>;
+
+/**
+ * Answer a `question_request`: for each question, the picked option labels and any typed
+ * answer. `null` declines. Answers for questions already settled are ignored.
+ */
+export const ClientAnswerQuestion = z.object({
+  type: z.literal("answer_question"),
+  requestId: z.string().min(1).max(100),
+  answers: z
+    .array(z.array(z.string().max(10_000)).max(50))
+    .max(20)
+    .nullable(),
+});
+
+/**
  * Side chats: questions about the thread answered by a separate, read-only agent
  * conversation, kept out of the thread's history. `side_ask` without `sideId` starts one.
  * Unpinned chats are discarded when closed.
@@ -120,6 +147,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientSideClose,
   ClientSideOpen,
   ClientComputerResult,
+  ClientSetOptions,
+  ClientAnswerQuestion,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 
@@ -128,6 +157,8 @@ export const ServerWelcome = z.object({
   thread: Thread,
   latestSeq: z.number().int().nonnegative(),
   runnerVersion: z.string(),
+  /** The thread's model, reasoning and permission mode now (runners from before these were changeable leave it out). */
+  options: ThreadOptions.optional(),
 });
 
 export const ServerEvent = z.object({ type: z.literal("event"), event: ThreadEvent });

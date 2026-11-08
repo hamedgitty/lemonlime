@@ -15,5 +15,6 @@ export * from "./git-review.ts";
 export * from "./agent-loop.ts";
 export * from "./turns.ts";
 export * from "./background.ts";
+export * from "./phone.ts";
 
 export const PROTOCOL_VERSION = "1";

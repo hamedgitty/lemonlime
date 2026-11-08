@@ -37,12 +37,15 @@ export function OptionsControls({
   options,
   working,
   disabled,
+  noFullAccess,
   onChange,
 }: {
   kind: AgentKind;
   options: ThreadOptions;
   working: boolean;
   disabled: boolean;
+  /** From a phone, full access can only be turned on at the computer itself. */
+  noFullAccess?: boolean;
   onChange: (change: { model?: string | null; reasoning?: ReasoningLevel | null; permission?: PermissionMode }) => void;
 }) {
   const caps = AGENT_CAPABILITIES[kind];
@@ -95,11 +98,13 @@ export function OptionsControls({
         value={options.permission}
         onChange={e => onChange({ permission: e.target.value as PermissionMode })}
       >
-        {caps.permissions.map(m => (
-          <option key={m} value={m}>
-            {PERMISSION_MODES[m].label}
-          </option>
-        ))}
+        {caps.permissions
+          .filter(m => !noFullAccess || m !== "full" || options.permission === "full")
+          .map(m => (
+            <option key={m} value={m}>
+              {PERMISSION_MODES[m].label}
+            </option>
+          ))}
       </select>
     </div>
   );

@@ -11,6 +11,16 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["next-env.d.ts", "src", "test", "next.config.ts", "open-next.config.ts", "worker.ts", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
+  "include": [
+    "next-env.d.ts",
+    "src",
+    "test",
+    "next.config.ts",
+    "open-next.config.ts",
+    "worker.ts",
+    "server.ts",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
   "exclude": ["node_modules", ".open-next", ".wrangler"]
 }

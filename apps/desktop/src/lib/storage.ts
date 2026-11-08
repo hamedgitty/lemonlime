@@ -215,6 +215,10 @@ export const UiPrefs = z.object({
   projectHint: z.boolean().default(true),
   /** The Get started checklist on Home was put away. */
   getStartedDismissed: z.boolean().default(false),
+  /** Use this computer's threads from the dashboard on your phone (docs/phone-access.md). Off until turned on. */
+  phoneAccess: z.boolean().default(false),
+  /** What the dashboard calls this computer; empty uses "My Mac" and the like. */
+  computerName: z.string().max(100).default(""),
 });
 export type UiPrefs = z.infer<typeof UiPrefs>;
 

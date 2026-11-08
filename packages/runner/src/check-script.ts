@@ -26,7 +26,7 @@ export function runCheckScript(script: string, cwd: string, opts: { timeoutMs?: 
     try {
       child = spawn("/bin/sh", ["-c", script], {
         cwd,
-        env: { ...shellEnv(opts.env), TERM: "dumb", COLORTERM: "" },
+        env: { ...shellEnv(opts.env), TERM: "dumb", COLORTERM: "" } satisfies Record<string, string> as unknown as NodeJS.ProcessEnv,
         stdio: ["ignore", "pipe", "ignore"],
         // Its own process group, so a timeout stops whatever it started too.
         detached: process.platform !== "win32",

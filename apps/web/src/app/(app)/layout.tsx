@@ -12,6 +12,8 @@ import { SidebarThreads } from "@/components/sidebar-threads.tsx";
 import { listThreads } from "@/lib/threads.ts";
 import { listWorkspaces } from "@/lib/members.ts";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher.tsx";
+import { ComputerThreadList } from "@/components/computer-threads.tsx";
+import { listComputerThreads } from "@/lib/computers.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +29,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   const threads = await listThreads(ctx, user.userId, workspaceId);
   const workspaceList = await listWorkspaces(ctx.db, user.userId);
+  const computers = await listComputerThreads(ctx, user.userId, workspaceId);
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -59,6 +62,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           </Link>
         </div>
         <div className="mx-3 my-4 h-px bg-line" />
+        <ComputerThreadList computers={computers} variant="sidebar" />
         <p className="px-4 pb-2 text-[13.5px] text-muted">Threads</p>
         <SidebarThreads threads={threads} />
         <div className="px-2 pb-2">{renderSlot(billingUI.headerBadge, { workspaceId })}</div>

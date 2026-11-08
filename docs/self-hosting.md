@@ -151,6 +151,11 @@ pnpm --filter @lemonlime/web build
 pnpm --filter @lemonlime/web start       # next start; or: pnpm dev:web during development
 ```
 
+To let people use the threads on their own computers from their phones, start it with
+`pnpm --filter @lemonlime/web serve` instead (`next start` plus the phone bridge's
+WebSockets; see [phone-access.md](phone-access.md)). On Workers, that is the
+`PHONE_BRIDGE` Durable Object in `wrangler.jsonc`.
+
 The database file is created and migrated on first use (the same migrations
 as D1, tracked in the same `d1_migrations` table). Back it up like any SQLite
 file. Run a single instance per database file.

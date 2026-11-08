@@ -152,6 +152,12 @@
       transition-duration: 1ms !important;
     }
   }
+  /* Calm when idle: spinners, pulses and shimmer hold still while the window isn't in front. */
+  :root[data-window-blurred] *,
+  :root[data-window-blurred] *::before,
+  :root[data-window-blurred] *::after {
+    animation-play-state: paused !important;
+  }
 }
 
 @layer components {
@@ -161,6 +167,33 @@
   }
   .on-rind .scroll-thin {
     scrollbar-color: var(--color-rind-line) transparent;
+  }
+
+  /* A thin scrollbar that shows only while scrolling or with the pointer over the area. */
+  .scroll-quiet {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  .scroll-quiet[data-scrolling],
+  .scroll-quiet:hover {
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+  .scroll-quiet::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-quiet::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scroll-quiet::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: transparent;
+  }
+  .scroll-quiet[data-scrolling]::-webkit-scrollbar-thumb,
+  .scroll-quiet:hover::-webkit-scrollbar-thumb {
+    background-color: var(--color-line-strong);
   }
 
   /* Rendered agent text: keep paragraphs and code readable without a markdown parser. */

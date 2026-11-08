@@ -54,6 +54,18 @@ function GeneralTab({ ctx }: { ctx: SettingsCtx }) {
             ]}
           />
         </Row>
+        <ToggleRow
+          label="Suggest what to say next"
+          description="When the agent finishes, the empty message box offers a likely reply, like “Fix the failing tests”. Press Tab to use it. Worked out on this computer; no model is asked."
+          checked={prefs.suggestNextPrompt}
+          onChange={suggestNextPrompt => onPrefs({ suggestNextPrompt })}
+        />
+        <ToggleRow
+          label="Spot the wrong project"
+          description="On Home, if your message names another of your projects, offer to switch to it."
+          checked={prefs.projectHint}
+          onChange={projectHint => onPrefs({ projectHint })}
+        />
       </Section>
       <Section
         title="Threads on this computer"

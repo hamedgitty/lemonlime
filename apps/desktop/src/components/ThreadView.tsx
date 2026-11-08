@@ -55,6 +55,7 @@ import { SignInPanel } from "./SignInPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
+import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { clampPanelWidth, loadPanelWidth, saveDraft, savePanelWidth, THREAD_PANEL } from "../lib/storage.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
@@ -88,6 +89,8 @@ export interface ThreadViewProps {
   onComputerLevel: (level: ComputerLevel) => void;
   /** How many answers the agent is waiting for in this thread (for the sidebar and dock badge). */
   onWaiting?: (threadId: string, count: number) => void;
+  /** Offer a likely next message in the empty composer once a turn ends. */
+  suggestNext?: boolean;
 }
 
 export function ThreadView(props: ThreadViewProps) {
@@ -126,6 +129,7 @@ function ThreadSessionView({
   notifyWhenFocused = false,
   onOpenFolder,
   onWaiting,
+  suggestNext = true,
 }: ThreadViewProps & { target: SessionTarget }) {
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
@@ -353,6 +357,12 @@ function ThreadSessionView({
   const fileDiffs = useMemo(() => session.events.filter(e => e.type === "file_diff").length, [session.events]);
   const gitRefresh = `${fileDiffs}:${liveStatus ?? ""}`;
   const git = useGitState({ connection: session.connection, mode: entry.mode, threadId: summary.id, cloudApi, refreshKey: gitRefresh });
+  // A likely next message once the turn is over, from the thread itself.
+  const uncommittedFiles = git.status?.uncommittedFiles;
+  const suggestion = useMemo(
+    () => (suggestNext && !working && session.pending.length === 0 ? suggestNextPrompt(session.events, { uncommittedFiles }) : null),
+    [suggestNext, working, session.pending.length, session.events, uncommittedFiles],
+  );
   const showChanges = () => {
     setPanelTab("changes");
     setPanelOpen(true);
@@ -620,6 +630,7 @@ function ThreadSessionView({
               suggestions={composerSuggestions}
               history={prompts}
               draftKey={summary.id}
+              suggestion={suggestion}
               onInterrupt={session.interrupt}
               working={working}
               disabled={composerDisabled}

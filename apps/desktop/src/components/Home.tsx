@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Check, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Zap } from "lucide-react";
+import { ArrowLeftRight, Bot, Check, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, X, Zap } from "lucide-react";
 import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type ReasoningLevel, type SandboxSize } from "@lemonlime/protocol";
 import { splitCommand } from "../lib/command.ts";
 import { AGENT_LABELS, repoName } from "../lib/format.ts";
 import { inDesktopShell, inspectRepo, pickFolder } from "../lib/native.ts";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
+import { showGetStarted, type GetStartedFacts, type GetStartedStep } from "../lib/getStarted.ts";
+import { otherProjectMentioned } from "../lib/projectHint.ts";
+import { GetStarted } from "./GetStarted.tsx";
 import type { Settings, UiPrefs } from "../lib/storage.ts";
 import { Composer, PickerButton, type ComposerHandle } from "./Composer.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Popover } from "./primitives.tsx";
@@ -42,13 +45,28 @@ export interface HomeProps {
   draft?: { text: string; nonce: number } | null;
   /** ACP agents saved in Settings. */
   acpAgents?: Settings["acpAgents"];
+  /** What the Get started checklist needs to know (everything but the projects and dismissal, which are prefs). */
+  getStarted?: Omit<GetStartedFacts, "projects" | "dismissed">;
+  onOpenSettings?: (page: string) => void;
 }
 
 /**
  * The home screen is the composer: write what you want, pick the project and where it
  * runs underneath, send. Sending starts a thread.
  */
-export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, onConnectCloud, draft, acpAgents = [] }: HomeProps) {
+export function Home({
+  cloudAvailable,
+  threadCount,
+  prefs,
+  onPrefs,
+  onCreate,
+  onConnectCloud,
+  draft,
+  acpAgents = [],
+  getStarted,
+  onOpenSettings,
+  dashboardUrl,
+}: HomeProps) {
   const composer = useRef<ComposerHandle>(null);
   const shell = inDesktopShell();
   const wanted = prefs.defaultPlace === "last" ? prefs.lastPlace : prefs.defaultPlace;
@@ -69,6 +87,10 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [denial, setDenial] = useState<PolicyDenied | null>(null);
+  const [typed, setTyped] = useState("");
+  const [hintDismissed, setHintDismissed] = useState<string | null>(null);
+  const hinted = prefs.projectHint && place === "local" ? otherProjectMentioned(typed, prefs.recentProjects, repoPath) : null;
+  const projectHint = hinted && hinted !== hintDismissed ? hinted : null;
 
   const pickProject = async (path: string) => {
     setError(null);
@@ -126,6 +148,21 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
     }
   };
 
+  const checklist: GetStartedFacts | null = getStarted ? { ...getStarted, projects: prefs.recentProjects.length, dismissed: prefs.getStartedDismissed } : null;
+  const onStep = (id: GetStartedStep) => {
+    if (id === "agent") return onOpenSettings?.("agents");
+    if (id === "project") return void chooseFolder();
+    if (id === "thread") return composer.current?.focus();
+    if (id === "cloud") {
+      if (!cloudAvailable) return onConnectCloud();
+      onPrefs({ lastPlace: "cloud" });
+      setProjectOpen(true);
+      return;
+    }
+    if (!cloudAvailable) return onConnectCloud();
+    if (dashboardUrl) void openExternal(`${dashboardUrl.replace(/\/+$/, "")}/settings#github`);
+  };
+
   const projectLabel = place === "local" ? (repoPath ? repoName(repoPath) : "Work in a project") : repoUrl.trim() ? repoName(repoUrl) : "Choose a repository";
 
   return (
@@ -137,6 +174,7 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
           autoFocus
           busy={busy}
           onSend={text => void send(text)}
+          onTextChange={setTyped}
           tools={
             <>
               <Menu
@@ -344,6 +382,28 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
           </Menu>
         </div>
 
+        {projectHint && (
+          <div role="status" className="mt-2.5 flex items-center gap-2 rounded-lg border border-line bg-cream-deep px-3 py-2 text-[14px]">
+            <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-ink-soft" />
+            <p className="min-w-0 flex-1">
+              Did you mean <span className="font-medium">{repoName(projectHint)}</span>? This thread would start in{" "}
+              {repoPath ? repoName(repoPath) : "no project"}.
+            </p>
+            <Button size="sm" onClick={() => void pickProject(projectHint)}>
+              <ArrowLeftRight aria-hidden="true" className="size-3.5" />
+              Switch
+            </Button>
+            <button
+              type="button"
+              aria-label="Keep this project"
+              onClick={() => setHintDismissed(projectHint)}
+              className="inline-flex size-7 items-center justify-center rounded-md text-ink-faint hover:bg-cream-hover hover:text-ink"
+            >
+              <X aria-hidden="true" className="size-4" />
+            </button>
+          </div>
+        )}
+
         {(error || denial) && (
           <div
             role="alert"
@@ -360,6 +420,8 @@ export function Home({ cloudAvailable, threadCount, prefs, onPrefs, onCreate, on
             )}
           </div>
         )}
+
+        {checklist && showGetStarted(checklist) && <GetStarted facts={checklist} onStep={onStep} onDismiss={() => onPrefs({ getStartedDismissed: true })} />}
 
         {threadCount < 10 && (
           <>

@@ -14,6 +14,7 @@ import { needsUpdate } from "./components/settings/AgentsPage.tsx";
 import { TipProvider } from "./components/primitives.tsx";
 import { SETTINGS_PAGES, SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
+import { NotificationCenter } from "./components/NotificationCenter.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { Toaster, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
@@ -54,6 +55,7 @@ import {
   type UiPrefs,
 } from "./lib/storage.ts";
 import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
+import { addToInbox, automationRunItems, loadInbox, markAllRead, markRead, markThreadRead, saveInbox, type Inbox } from "./lib/inbox.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 
 type Selection = { mode: "local" | "cloud"; id: string };
@@ -316,6 +318,11 @@ export function App() {
     return () => clearInterval(t);
   }, [cloudApi, refreshCloud]);
 
+  // ── Notification centre: recent events across threads, kept on this computer ──
+  const [inbox, setInbox] = useState<Inbox>(() => loadInbox());
+  useEffect(() => saveInbox(inbox), [inbox]);
+  const inboxSince = inbox.since;
+
   // The deployment's usage banner (e.g. running low on cloud hours).
   const [usage, setUsage] = useState<Awaited<ReturnType<CloudApi["usageNotice"]>>>(null);
   const [summary, setSummary] = useState<Awaited<ReturnType<CloudApi["usageSummary"]>>>(null);
@@ -333,6 +340,41 @@ export function App() {
     const t = setInterval(load, 5 * 60_000);
     return () => clearInterval(t);
   }, [cloudApi]);
+
+  // Automation runs since the notification list began, as they finish or are skipped.
+  useEffect(() => {
+    if (!cloudApi || !inboxSince) return;
+    const load = () =>
+      void cloudApi.listAutomations().then(
+        list => {
+          const items = automationRunItems(list, inboxSince);
+          if (items.length) setInbox(i => items.reduce(addToInbox, i));
+        },
+        () => undefined,
+      );
+    load();
+    const t = setInterval(load, 2 * 60_000);
+    return () => clearInterval(t);
+  }, [cloudApi, inboxSince]);
+
+  // ── Calm when idle: looping animations pause while the window isn't in front ──
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => {
+      if (document.hasFocus() && document.visibilityState === "visible") delete root.dataset.windowBlurred;
+      else root.dataset.windowBlurred = "";
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      document.removeEventListener("visibilitychange", sync);
+      delete root.dataset.windowBlurred;
+    };
+  }, []);
 
   // ── Keep awake while an agent here works ─────────────────
   const anyLocalWorking = Object.values(localStatus).some(st => st === "running");
@@ -352,9 +394,26 @@ export function App() {
     for (const [id, cur] of Object.entries(now)) {
       const before = lastStatus.current[id];
       lastStatus.current[id] = cur.status;
-      if (!n.enabled || !before || before === cur.status || prefs.archived[id]) continue;
+      if (!before || before === cur.status || prefs.archived[id]) continue;
       const p = placeRef.current;
       const watching = p.view === "thread" && p.selection.id === id && document.hasFocus();
+      const finished = before === "running" && cur.status === "idle";
+      if (finished || cur.status === "failed") {
+        const at = new Date().toISOString();
+        const kind = finished ? "finished" : "failed";
+        setInbox(i =>
+          addToInbox(i, {
+            id: `${kind}:${id}:${at}`,
+            kind,
+            title: cur.title,
+            detail: finished ? "The agent finished its turn." : "Something went wrong.",
+            at,
+            thread: { mode: cur.mode, id },
+            read: watching,
+          }),
+        );
+      }
+      if (!n.enabled) continue;
       if (watching && !n.whenFocused) continue;
       if (before === "running" && cur.status === "idle" && n.finished) void notify(cur.title || "Thread finished", "The agent finished its turn.");
       else if (cur.status === "failed" && n.failed) void notify(cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.");
@@ -371,6 +430,19 @@ export function App() {
       lastWaiting.current[m.id] = now;
       const p = placeRef.current;
       const open = p.view === "thread" && p.selection.id === m.id;
+      if (now > before && !open) {
+        const at = new Date().toISOString();
+        setInbox(i =>
+          addToInbox(i, {
+            id: `waiting:${m.id}:${at}`,
+            kind: "waiting",
+            title: m.title,
+            detail: "It's waiting for your answer.",
+            at,
+            thread: { mode: "local", id: m.id },
+          }),
+        );
+      }
       if (now > before && !open && n.enabled && n.needsInput)
         void notify(m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
     }
@@ -696,6 +768,9 @@ export function App() {
     if (selectedId && prefsRef.current.markedUnread.includes(selectedId))
       onPrefs({ markedUnread: prefsRef.current.markedUnread.filter(id => id !== selectedId) });
   }, [selectedId, onPrefs]);
+  useEffect(() => {
+    if (selectedId) setInbox(i => markThreadRead(i, selectedId));
+  }, [selectedId]);
   const selectedSummary = selectedId ? summaries.find(t => t.id === selectedId) : undefined;
   const selectedSeq = selectedSummary ? latestSeq(selectedSummary) : 0;
   useEffect(() => {
@@ -888,6 +963,23 @@ export function App() {
     />
   );
 
+  // GitHub accounts linked, for the Get started checklist on Home (asked once per connection).
+  const [githubLinked, setGithubLinked] = useState<number | null>(null);
+  const wantsChecklist = place.view === "home" && !prefs.getStartedDismissed;
+  useEffect(() => {
+    setGithubLinked(null);
+    if (!cloudApi || !wantsChecklist) return;
+    let live = true;
+    cloudApi.githubInstallations().then(
+      list => live && setGithubLinked(list === null ? null : list.length),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [cloudApi, wantsChecklist]);
+  const agentReady = (agents ?? []).some(a => a.installed && a.signedIn !== false);
+
   const promptInComposer = (text: string) => {
     setDraft({ text, nonce: Date.now() });
     go({ view: "home" });
@@ -964,6 +1056,19 @@ export function App() {
         onMarkUnread={onMarkUnread}
         onRename={onRename}
         usageCard={summary ? <UsageCard summary={summary} /> : undefined}
+        notifications={className => (
+          <NotificationCenter
+            inbox={inbox}
+            className={className}
+            onMarkAllRead={() => setInbox(markAllRead)}
+            onOpen={item => {
+              setInbox(i => markRead(i, item.id));
+              if (!item.thread) return;
+              if (item.thread.mode === "cloud") void refreshCloud();
+              go({ view: "thread", selection: item.thread });
+            }}
+          />
+        )}
       />
     );
 
@@ -1083,10 +1188,24 @@ export function App() {
                     : {})}
                   foldFinished={prefs.collapseFinished}
                   notifyWhenFocused={prefs.notifications.whenFocused}
-                  {...(prefs.notifications.enabled && prefs.notifications.needsInput
-                    ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
-                    : {})}
+                  onNeedsInput={(title: string) => {
+                    const id = selectedEntry.mode === "local" ? selectedEntry.meta.id : selectedEntry.thread.id;
+                    const at = new Date().toISOString();
+                    setInbox(i =>
+                      addToInbox(i, {
+                        id: `waiting:${id}:${at}`,
+                        kind: "waiting",
+                        title,
+                        detail: "It's waiting for your answer.",
+                        at,
+                        thread: { mode: selectedEntry.mode, id },
+                      }),
+                    );
+                    if (prefs.notifications.enabled && prefs.notifications.needsInput)
+                      void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.");
+                  }}
                   onWaiting={onWaiting}
+                  suggestNext={prefs.suggestNextPrompt}
                   computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
                   onComputerLevel={level => {
                     if (selectedEntry.mode !== "cloud") return;
@@ -1105,6 +1224,14 @@ export function App() {
                   onConnectCloud={() => go({ view: "settings", page: "account" })}
                   draft={draft}
                   acpAgents={settings.acpAgents}
+                  onOpenSettings={page => go({ view: "settings", page: page as SettingsPage })}
+                  getStarted={{
+                    agentReady,
+                    threads: summaries.length,
+                    cloudThreads: cloudThreads.length,
+                    cloudConnected: cloudConfigured,
+                    githubLinked: cloudConfigured ? githubLinked : null,
+                  }}
                   {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
                 />
               )}

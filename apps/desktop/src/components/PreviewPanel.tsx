@@ -32,6 +32,9 @@ export function PreviewPanel({
   const [local, setLocal] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  // The page within the preview: typed in the address bar, kept per preview.
+  const [path, setPath] = useState("/");
+  const [typed, setTyped] = useState("/");
   const frame = useRef<HTMLIFrameElement>(null);
   const current: Preview | undefined = previews.find(p => p.port === port) ?? previews[0];
 
@@ -66,7 +69,18 @@ export function PreviewPanel({
       </div>
     );
   }
-  const address = local ? `http://127.0.0.1:${local}/` : null;
+  const origin = local ? `http://127.0.0.1:${local}` : null;
+  const address = origin ? `${origin}${path}` : null;
+  const go = (value: string) => {
+    let next = value.trim() || "/";
+    // A full local address on the same port keeps just its path.
+    const m = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1)(?::\d+)?(\/.*)?$/i.exec(next);
+    if (m) next = m[1] ?? "/";
+    if (!next.startsWith("/")) next = `/${next}`;
+    setPath(next);
+    setTyped(next);
+    setReload(r => r + 1);
+  };
   return (
     <div role="tabpanel" aria-label="Browser" className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-11 items-center gap-1 border-b border-line px-2 py-1.5">
@@ -76,7 +90,11 @@ export function PreviewPanel({
               key={p.port}
               type="button"
               aria-pressed={p.port === current?.port}
-              onClick={() => setPort(p.port)}
+              onClick={() => {
+                setPort(p.port);
+                setPath("/");
+                setTyped("/");
+              }}
               className={cx(
                 "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg px-2 text-[13px]",
                 p.port === current?.port ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60",
@@ -111,6 +129,23 @@ export function PreviewPanel({
           </button>
         </Tip>
       </div>
+      <form
+        onSubmit={e => {
+          e.preventDefault();
+          go(typed);
+        }}
+        className="flex items-center gap-1.5 border-b border-line px-2 py-1.5"
+      >
+        <span className="shrink-0 font-mono text-[12px] text-ink-faint">{origin ? origin.replace("http://", "") : ""}</span>
+        <input
+          value={typed}
+          onChange={e => setTyped(e.target.value)}
+          aria-label="Page to open"
+          spellCheck={false}
+          disabled={!origin}
+          className="h-7 min-w-0 flex-1 rounded-md border border-line bg-paper px-2 font-mono text-[12.5px] text-ink outline-none focus:border-leaf disabled:opacity-50"
+        />
+      </form>
       {error ? (
         <p role="alert" className="m-3 text-[13.5px] text-danger">
           {error}

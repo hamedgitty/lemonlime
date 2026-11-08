@@ -90,6 +90,7 @@ export const ClientSetOptions = z.object({
   model: z.string().min(1).max(200).nullable().optional(),
   reasoning: ReasoningLevel.nullable().optional(),
   permission: PermissionMode.optional(),
+  fast: z.boolean().optional(),
 });
 export type ClientSetOptions = z.infer<typeof ClientSetOptions>;
 

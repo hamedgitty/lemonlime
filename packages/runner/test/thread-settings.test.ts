@@ -217,6 +217,27 @@ describe("the command guard", () => {
   });
 });
 
+describe("fast mode and effort", () => {
+  it("reach Claude Code as --effort and a fastMode setting", async () => {
+    const { args } = await argsFor("claude-code", { reasoning: "xhigh", fast: true, commandGuard: false });
+    expect(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2)).toEqual(["--effort", "xhigh"]);
+    expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual({ fastMode: true });
+  });
+
+  it("keep the command guard in the same Claude Code settings", async () => {
+    const { args } = await argsFor("claude-code", { fast: true });
+    const settings = JSON.parse(args[args.indexOf("--settings") + 1]!) as { fastMode?: boolean; hooks?: unknown };
+    expect(settings.fastMode).toBe(true);
+    expect(settings.hooks).toBeDefined();
+    expect(args.filter(a => a === "--settings")).toHaveLength(1);
+  });
+
+  it("reach Codex as its fast service tier, and are left out when off", async () => {
+    expect((await argsFor("codex", { fast: true })).args).toContain('service_tier="fast"');
+    expect((await argsFor("codex", {})).args).not.toContain('service_tier="fast"');
+  });
+});
+
 describe("stripping co-author trailers", () => {
   it("removes them from the agent's commits in the thread only, and keeps the repo's own hooks", async () => {
     const source = repo();

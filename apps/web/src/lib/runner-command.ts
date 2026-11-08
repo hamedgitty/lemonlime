@@ -49,6 +49,7 @@ export function runnerArgs(input: RunnerCommandInput): string[] {
   }
   if (agent.model) args.push("--model", value("--model", agent.model));
   if (agent.reasoning) args.push("--reasoning", agent.reasoning);
+  if (agent.fast) args.push("--fast");
   args.push(
     "--repo",
     value("--repo", repo.url),

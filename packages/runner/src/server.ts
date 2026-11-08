@@ -362,6 +362,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
           ...(msg.model !== undefined ? { model: msg.model } : {}),
           ...(msg.reasoning !== undefined ? { reasoning: msg.reasoning } : {}),
           ...(msg.permission !== undefined ? { permission: msg.permission } : {}),
+          ...(msg.fast !== undefined ? { fast: msg.fast } : {}),
         });
         if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
         break;

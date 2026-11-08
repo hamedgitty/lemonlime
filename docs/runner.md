@@ -205,8 +205,10 @@ sit in `.lemonlime-attachments/` in the thread's folder (kept out of git), and a
 `send_message` with their ids tells the agent where they are.
 
 `GET /capabilities` lists the agent's models (Codex's own list when it has one), thinking
-levels and limits. `--model` and `--reasoning` are fixed when the thread starts: Claude
-Code gets a thinking budget (`MAX_THINKING_TOKENS`), Codex `model_reasoning_effort`.
+levels and limits. `--model`, `--reasoning` and `--fast` set what the thread starts with
+(`set_options` changes them later): Claude Code gets `--effort` and, for fast mode, a
+`fastMode` setting; Codex `model_reasoning_effort` and the `fast` service tier. ACP agents
+that offer a model setting (OpenCode does) are asked for the thread's model before each turn.
 
 ## Reviewing the branch
 

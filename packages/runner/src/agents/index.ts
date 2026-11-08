@@ -10,7 +10,7 @@ export { runLineProcess } from "./process.ts";
 export { compareVersions, detectVersion, parseVersion, TESTED_AGENTS, versionNotice, type TestedAgent } from "./versions.ts";
 export { commandGuardSettings, newClaudeParseState, parseClaudeLine, readQuestions, type ClaudeParseState } from "./claude-code.ts";
 export { codexContextUsage, CodexTodos, findRollout, parseCodexLine, tomlString } from "./codex.ts";
-export { AcpTranslator, agentModes, answerAgentRequest, acpAdapter, blockedCommand, needsApproval, withInstructions } from "./acp.ts";
+export { AcpTranslator, agentModes, agentModelOption, answerAgentRequest, acpAdapter, blockedCommand, needsApproval, withInstructions } from "./acp.ts";
 export { APPROVAL_TOOL } from "./claude-code.ts";
 
 const adapters: Record<AgentKind, AgentAdapter> = {

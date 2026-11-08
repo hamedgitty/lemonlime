@@ -341,6 +341,7 @@ pub async fn start_ssh_runner(
     agent_command: Option<String>,
     model: Option<String>,
     reasoning: Option<String>,
+    fast: Option<bool>,
     workdir: String,
     base_branch: Option<String>,
     instructions: Option<String>,
@@ -366,7 +367,7 @@ pub async fn start_ssh_runner(
     let settings = RunnerSettings::from_frontend(instructions, strip_coauthors, branch_prefix, retry_max_wait_minutes, disabled_skills, command_guard);
 
     let mut args: Vec<String> = vec!["--thread".into(), thread_id.clone(), "--agent".into(), agent];
-    args.extend(runner::thread_flags(agent_command.as_deref(), model, reasoning, base_branch, &settings));
+    args.extend(runner::thread_flags(agent_command.as_deref(), model, reasoning, fast.unwrap_or(false), base_branch, &settings));
     // --exit-with-parent: with --secret-stdin, the runner also stops when the session's stdin closes.
     args.extend(["--secret-stdin".into(), "--exit-with-parent".into(), "--host".into(), "127.0.0.1".into()]);
     let env: Vec<(&str, &str)> = settings.instructions.as_deref().map(|i| ("LEMONLIME_INSTRUCTIONS", i)).into_iter().collect();

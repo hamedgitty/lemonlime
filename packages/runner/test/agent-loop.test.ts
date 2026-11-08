@@ -12,6 +12,7 @@ import {
   acpAdapter,
   AcpTranslator,
   adapterFor,
+  agentModelOption,
   agentModes,
   answerAgentRequest,
   codexContextUsage,
@@ -325,9 +326,10 @@ describe("changing options mid-thread", () => {
     const codex = await boot("opts-refuse-1", { kind: "codex", createSession: () => recording(true).adapter.createSession({} as SessionOptions) });
     expect(codex.setOptions({ permission: "ask" })).toEqual({ error: "This agent can't run in Ask first mode." });
     const claude = await boot("opts-refuse-3", recording(true).adapter);
-    expect(claude.setOptions({ reasoning: "max" })).toMatchObject({ error: expect.stringMatching(/max reasoning/) });
+    expect(claude.setOptions({ reasoning: "ultra" })).toMatchObject({ error: expect.stringMatching(/ultra reasoning/) });
     const acp = await boot("opts-refuse-2", { kind: "acp", createSession: () => recording(true).adapter.createSession({} as SessionOptions) });
     expect(acp.setOptions({ model: "big" })).toMatchObject({ error: expect.stringMatching(/model can't be changed/) });
+    expect(acp.setOptions({ fast: true })).toMatchObject({ error: "This agent has no fast mode." });
     expect(acp.setOptions({ permission: "plan" })).toEqual({ ok: true });
     expect(ofType(codex.store.since(0), "options_change")).toEqual([]);
   });
@@ -598,6 +600,51 @@ describe("ACP plans, usage and modes", () => {
       { type: "context_usage", used: 17586, window: 200000 },
     ]);
     expect(t.update({ sessionUpdate: "usage_update", used: 5 })).toEqual([]);
+  });
+
+  it("finds the agent's model setting", () => {
+    expect(
+      agentModelOption({
+        configOptions: [
+          {
+            id: "model",
+            category: "model",
+            currentValue: "opencode/big-pickle",
+            options: [{ value: "opencode/big-pickle", name: "OpenCode/Big Pickle" }, { value: 3 }],
+          },
+        ],
+      }),
+    ).toEqual({ configId: "model", current: "opencode/big-pickle", options: [{ value: "opencode/big-pickle", name: "OpenCode/Big Pickle" }] });
+    expect(agentModelOption({ sessionId: "s" })).toBeNull();
+  });
+
+  it("asks an ACP agent for the thread's model before a turn, and says so when it refuses", async () => {
+    for (const [wanted, said] of [
+      ["b", "model=b"],
+      ["zzz", "model=a"],
+    ] as const) {
+      const runner = new ThreadRunner({
+        thread: thread(`acp-model-${wanted}`, "acp"),
+        workdir: temp(),
+        dataDir: null,
+        adapter: acpAdapter("acp", ["node", join(here, "fixtures", "fake-acp-agent.mjs")]),
+        session: { autonomy: "full", model: wanted, env: { FAKE_ACP_MODELS: "a,b" } },
+        git: false,
+        bundledSkills: false,
+      });
+      await runner.init();
+      runner.sendMessage("hi");
+      await runner.settled();
+      const events = runner.store.since(0);
+      expect(
+        events
+          .filter(e => e.type === "agent_message")
+          .map(e => (e as { text: string }).text)
+          .join(""),
+      ).toContain(said);
+      expect(events.some(e => e.type === "notice" && e.code === "model_not_switched")).toBe(wanted === "zzz");
+      await runner.close();
+    }
   });
 
   it("finds the agent's own plan mode in either form", () => {

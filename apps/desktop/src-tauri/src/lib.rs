@@ -73,6 +73,8 @@ pub fn run() {
             skills::export_skills,
             system::detect_agents,
             system::install_agent,
+            system::agent_models,
+            system::sign_out_agent,
             system::set_keep_awake,
             system::list_editors,
             system::open_in_editor,

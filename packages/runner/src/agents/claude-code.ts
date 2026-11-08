@@ -103,9 +103,9 @@ class ClaudeCodeSession implements AgentSession {
     // The user's own instructions join the system prompt on every turn.
     if (this.opts.instructions?.trim()) args.push("--append-system-prompt", this.opts.instructions);
     const env: Record<string, string> = { ...this.opts.env };
-    // Claude Code's thinking budget, in tokens.
-    const thinking = { low: 4_000, medium: 12_000, high: 31_999, xhigh: 31_999, max: 31_999, ultra: 31_999 }[this.opts.reasoning ?? ""];
-    if (thinking) env.MAX_THINKING_TOKENS = String(thinking);
+    // How hard it thinks: the CLI's own effort levels.
+    const effort = this.opts.reasoning === "ultra" ? "max" : this.opts.reasoning;
+    if (effort && /^[a-z]+$/.test(effort)) args.push("--effort", effort);
     const autonomy = this.opts.autonomy;
     const approvals = autonomy !== "read";
     const pluginServers = Object.keys(this.opts.mcpServers ?? {}).length > 0;
@@ -113,7 +113,9 @@ class ClaudeCodeSession implements AgentSession {
     // Subagent tools, allowed without asking (starting one changes nothing by itself).
     if (this.opts.subagents !== false) args.push("--allowedTools", `mcp__${SUBAGENTS_SERVER}`);
     // Hooks run even with permissions skipped, so the guard holds at every autonomy level.
-    if (this.opts.commandGuard !== false) args.push("--settings", JSON.stringify(commandGuardSettings()));
+    // Fast mode is a setting too, so both go in one --settings.
+    const settings = { ...(this.opts.commandGuard !== false ? commandGuardSettings() : {}), ...(this.opts.fast ? { fastMode: true } : {}) };
+    if (Object.keys(settings).length) args.push("--settings", JSON.stringify(settings));
     // Read-only: no editing tools, and with nobody to ask, anything needing permission is refused.
     if (autonomy === "read") args.push("--permission-mode", "default", "--disallowedTools", "Edit,Write,MultiEdit,NotebookEdit");
     else {

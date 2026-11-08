@@ -18,6 +18,7 @@ export interface SessionChange {
   model?: string | null;
   reasoning?: string | null;
   autonomy?: Autonomy;
+  fast?: boolean;
 }
 
 export interface SessionOptions {
@@ -33,6 +34,8 @@ export interface SessionOptions {
   commandGuard?: boolean;
   /** How hard the agent thinks (AGENT_CAPABILITIES lists what each accepts). */
   reasoning?: string;
+  /** The agent's fast mode, for agents that have one (AGENT_CAPABILITIES `fast`). */
+  fast?: boolean;
   /** Offer the subagents tools (an MCP server). On unless set to false (side chats). */
   subagents?: boolean;
   /** MCP servers from the user's agent plugins, by name (Claude Code and Codex use them). */
@@ -198,6 +201,10 @@ export function applyChange(opts: SessionOptions, change: SessionChange): void {
     else opts.reasoning = change.reasoning;
   }
   if (change.autonomy) opts.autonomy = change.autonomy;
+  if (change.fast !== undefined) {
+    if (change.fast) opts.fast = true;
+    else delete opts.fast;
+  }
 }
 
 /** What agents without a plan mode of their own are told in plan mode. */

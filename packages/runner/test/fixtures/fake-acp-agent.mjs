@@ -11,6 +11,9 @@ const ask = (method, params) =>
     send({ id, method, params });
   });
 const update = (sessionId, u) => send({ method: "session/update", params: { sessionId, update: u } });
+// FAKE_ACP_MODELS="a,b": offer a model setting (as OpenCode does) and say which model answered.
+const models = process.env.FAKE_ACP_MODELS?.split(",") ?? [];
+let model = models[0];
 
 createInterface({ input: process.stdin }).on("line", async line => {
   const msg = JSON.parse(line);
@@ -22,12 +25,28 @@ createInterface({ input: process.stdin }).on("line", async line => {
     case "initialize":
       return send({ id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
     case "session/new":
-      return send({ id: msg.id, result: { sessionId: "sess-1" } });
+      return send({
+        id: msg.id,
+        result: {
+          sessionId: "sess-1",
+          ...(models.length
+            ? {
+                configOptions: [
+                  { id: "model", category: "model", type: "select", currentValue: model, options: models.map(value => ({ value, name: value })) },
+                ],
+              }
+            : {}),
+        },
+      });
+    case "session/set_config_option":
+      if (msg.params.configId !== "model" || !models.includes(msg.params.value)) return send({ id: msg.id, error: { code: -32602, message: "unknown model" } });
+      model = msg.params.value;
+      return send({ id: msg.id, result: {} });
     case "session/prompt": {
       const sid = msg.params.sessionId;
       const text = msg.params.prompt[0].text;
       update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "You said: " } });
-      update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+      update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: models.length ? `${text} (model=${model})` : text } });
       const perm = await ask("session/request_permission", {
         sessionId: sid,
         toolCall: { toolCallId: "t1", kind: "execute", title: "Run tests", rawInput: { command: process.env.FAKE_ACP_COMMAND ?? "npm test" } },

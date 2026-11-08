@@ -247,6 +247,7 @@ export interface OptionsChange {
   model?: string | null;
   reasoning?: ReasoningLevel | null;
   permission?: PermissionMode;
+  fast?: boolean;
 }
 
 /** What the runner says on the user's behalf when a usage limit lifts. */
@@ -324,7 +325,9 @@ export class ThreadRunner {
       model: opts.session.model ?? opts.thread.agent.model ?? null,
       reasoning: reasoning.success ? reasoning.data : null,
       permission: startMode.success ? startMode.data : "edits",
+      ...((opts.session.fast ?? opts.thread.agent.fast) ? { fast: true } : {}),
     };
+    if (this.options.fast) this.sessionOpts.fast = true;
     this.redactions = { ...opts.redact };
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
@@ -1134,6 +1137,7 @@ export class ThreadRunner {
       model: cleanModel,
       reasoning: this.options.reasoning && caps.reasoning.includes(this.options.reasoning) ? this.options.reasoning : null,
       permission,
+      ...(this.options.fast && caps.fast ? { fast: true } : {}),
       ...(permission === "plan" && this.options.exitPlanTo && caps.permissions.includes(this.options.exitPlanTo)
         ? { exitPlanTo: this.options.exitPlanTo }
         : {}),
@@ -1209,6 +1213,11 @@ export class ThreadRunner {
       }
       next.reasoning = change.reasoning;
     }
+    if (change.fast !== undefined && change.fast !== Boolean(next.fast)) {
+      if (change.fast && !caps.fast) return { error: "This agent has no fast mode." };
+      if (change.fast) next.fast = true;
+      else delete next.fast;
+    }
     if (JSON.stringify(next) === JSON.stringify(this.options)) return { ok: true };
     this.options = next;
     this.applyOptionsToSession();
@@ -1220,12 +1229,15 @@ export class ThreadRunner {
   /** Hand the current options to the agent session (now, or by starting it again before the next turn). */
   private applyOptionsToSession(): void {
     const { model, reasoning } = this.options;
+    const fast = Boolean(this.options.fast);
     if (model) this.sessionOpts.model = model;
     else delete this.sessionOpts.model;
     if (reasoning) this.sessionOpts.reasoning = reasoning;
     else delete this.sessionOpts.reasoning;
+    if (fast) this.sessionOpts.fast = true;
+    else delete this.sessionOpts.fast;
     if (!this.session) return;
-    if (this.session.setOptions) this.session.setOptions({ model, reasoning, autonomy: this.options.permission });
+    if (this.session.setOptions) this.session.setOptions({ model, reasoning, autonomy: this.options.permission, fast });
     else this.sessionStale = true;
   }
 

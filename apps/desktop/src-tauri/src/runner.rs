@@ -83,6 +83,7 @@ struct StartRequest {
     agent_command: Option<String>,
     model: Option<String>,
     reasoning: Option<String>,
+    fast: bool,
     workdir: String,
     base_branch: Option<String>,
     runner_path: Option<String>,
@@ -129,6 +130,7 @@ pub(crate) fn thread_flags(
     agent_command: Option<&str>,
     model: Option<String>,
     reasoning: Option<String>,
+    fast: bool,
     base_branch: Option<String>,
     s: &RunnerSettings,
 ) -> Vec<String> {
@@ -148,6 +150,9 @@ pub(crate) fn thread_flags(
     // Only the levels the runner knows; anything else is dropped rather than passed on.
     if let Some(r) = non_empty(reasoning).filter(|r| ["low", "medium", "high", "xhigh", "max", "ultra"].contains(&r.as_str())) {
         flag("--reasoning", Some(r));
+    }
+    if fast {
+        flag("--fast", None);
     }
     // A value starting with "-" would read as a flag, so never pass one.
     if let Some(b) = non_empty(base_branch).filter(|b| !b.starts_with('-')) {
@@ -190,6 +195,7 @@ pub async fn start_local_runner(
     agent_command: Option<String>,
     model: Option<String>,
     reasoning: Option<String>,
+    fast: Option<bool>,
     workdir: String,
     base_branch: Option<String>,
     runner_path: Option<String>,
@@ -201,7 +207,7 @@ pub async fn start_local_runner(
     command_guard: Option<bool>,
 ) -> Result<RunnerInfo, String> {
     let settings = RunnerSettings::from_frontend(instructions, strip_coauthors, branch_prefix, retry_max_wait_minutes, disabled_skills, command_guard);
-    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, workdir, base_branch, runner_path, settings };
+    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, fast: fast.unwrap_or(false), workdir, base_branch, runner_path, settings };
     tauri::async_runtime::spawn_blocking(move || start_blocking(&app, req))
         .await
         .map_err(|e| format!("Could not start the runner: {e}"))?
@@ -356,7 +362,7 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         if let Some(file) = &instructions_path {
             cmd.arg("--instructions-file").arg(file);
         }
-        cmd.args(thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.base_branch, &req.settings));
+        cmd.args(thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.fast, req.base_branch, &req.settings));
         // If this app crashes or is force-quit, the runner stops too instead of living on.
         cmd.arg("--exit-with-parent");
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.

@@ -66,6 +66,8 @@ class AcpSession implements AgentSession {
   private readonly opts: SessionOptions & { command: string[] };
   /** The agent's own plan mode, if it offers one, and the mode it was in before. */
   private modes: AgentModes | null = null;
+  /** The agent's model setting, if it offers one (OpenCode does). */
+  private models: AgentModelOption | null = null;
 
   constructor(opts: SessionOptions & { command: string[] }) {
     this.opts = { ...opts };
@@ -92,6 +94,19 @@ class AcpSession implements AgentSession {
     );
     if (ok) m.current = want;
     return ok || !plan;
+  }
+
+  /** Ask the agent for the thread's model, when it has a model setting and uses another. Says why not, if it refused. */
+  private async syncModel(): Promise<string | null> {
+    const m = this.models;
+    const want = this.opts.model;
+    if (!m || !want || want === m.current) return null;
+    const ok = await this.request("session/set_config_option", { sessionId: this.sessionId, configId: m.configId, value: want }).then(
+      () => true,
+      () => false,
+    );
+    if (ok) m.current = want;
+    return ok ? null : `The agent didn't switch to ${want}, so it carries on with ${m.current}.`;
   }
 
   private start(): Promise<void> {
@@ -140,7 +155,7 @@ class AcpSession implements AgentSession {
       if (this.sessionId) {
         // Try to continue the previous session; fall back to a new one if the agent can't.
         const loaded = await this.request("session/load", { sessionId: this.sessionId, cwd: this.opts.cwd, mcpServers: [] }).then(
-          r => ((this.modes = agentModes(r)), true),
+          r => ((this.modes = agentModes(r)), (this.models = agentModelOption(r)), true),
           () => false,
         );
         if (loaded) return;
@@ -149,6 +164,7 @@ class AcpSession implements AgentSession {
       if (!res?.sessionId) throw new AgentError("ACP agent did not return a session id");
       this.sessionId = res.sessionId;
       this.modes = agentModes(res);
+      this.models = agentModelOption(res);
       this.needsInstructions = Boolean(this.opts.instructions?.trim());
     })();
     this.ready.catch(() => (this.ready = null));
@@ -161,10 +177,12 @@ class AcpSession implements AgentSession {
     // The agent's own plan mode if it has one; otherwise LemonLime says what plan mode means
     // (and refuses anything but looking, see answerAgentRequest).
     const nativePlan = await this.syncPlanMode(plan);
+    const modelProblem = await this.syncModel();
     // In plan mode the last message is the plan, so it isn't streamed.
     const hold = plan ? new PlanHold(e => ctx.emit(e)) : null;
     const emit = (e: NewEvent) => (hold ? hold.push(e) : ctx.emit(e));
     this.turn = { ...ctx, emit };
+    if (modelProblem) emit({ type: "notice", code: "model_not_switched", message: modelProblem });
     this.translator = new AcpTranslator();
     const flush = setInterval(() => this.translator.flushText().forEach(emit), CHUNK_FLUSH_MS);
     const onAbort = () => this.notify("session/cancel", { sessionId: this.sessionId });
@@ -301,6 +319,24 @@ export function agentModes(result: unknown): AgentModes | null {
     return { configId: null, current: legacy.currentModeId, normal: legacy.currentModeId, plan: plan ? String(plan.id) : null };
   }
   return null;
+}
+
+interface AgentModelOption {
+  configId: string;
+  current: string;
+  options: { value: string; name: string }[];
+}
+
+/** The model setting from a `session/new` or `session/load` answer (a config option of category "model"), or null. */
+export function agentModelOption(result: unknown): AgentModelOption | null {
+  const r = (result ?? {}) as Json;
+  const options = Array.isArray(r.configOptions) ? (r.configOptions as Json[]) : [];
+  const model = options.find(o => o.category === "model" && typeof o.id === "string" && typeof o.currentValue === "string");
+  if (!model) return null;
+  const values = (Array.isArray(model.options) ? (model.options as Json[]) : [])
+    .filter(o => typeof o.value === "string")
+    .map(o => ({ value: String(o.value), name: typeof o.name === "string" ? o.name : String(o.value) }));
+  return { configId: String(model.id), current: String(model.currentValue), options: values };
 }
 
 /** The first message of a new conversation, with the user's own instructions ahead of it. */

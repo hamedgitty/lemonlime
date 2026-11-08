@@ -55,6 +55,8 @@ export const AgentConfig = z.object({
   model: z.string().optional(),
   /** How hard the agent thinks, for agents that offer it (see AGENT_CAPABILITIES). */
   reasoning: z.enum(["low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
+  /** Start in the agent's fast mode, for agents that have one. */
+  fast: z.boolean().optional(),
 });
 export type AgentConfig = z.infer<typeof AgentConfig>;
 

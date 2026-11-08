@@ -57,25 +57,34 @@ export const AccountsList = z.object({
 });
 export type AccountsList = z.infer<typeof AccountsList>;
 
+/** A model's size class in a list: its own `tier`, or else its place in the list. */
+function tierIn(list: readonly { id: string; tier?: number; family?: string }[], model: string): number {
+  const m = model.toLowerCase();
+  // Exact id first, then a name that contains a listed id or family ("claude-opus-4-5" is "opus").
+  let i = list.findIndex(x => x.id.toLowerCase() === m);
+  if (i < 0) i = list.findIndex(x => m.includes(x.id.toLowerCase()) || (x.family ? m.includes(x.family) : false));
+  if (i < 0) return -1;
+  return list[i]!.tier ?? i;
+}
+
 /**
- * A model of the same tier on another agent. Agents list their models best first, so the
- * model at the same place in the other agent's list. null keeps that agent's own default
+ * A model of the same tier on another agent: each model's `tier` where the list gives one,
+ * else its place in the list (lists are best first). null keeps that agent's own default
  * (also when the thread used its agent's default, or the model isn't a listed one).
  */
 export function matchingModel(
   from: AgentKind,
   model: string | null | undefined,
   to: AgentKind,
-  lists: { from?: readonly { id: string }[]; to?: readonly { id: string }[] } = {},
+  lists: { from?: readonly { id: string; tier?: number; family?: string }[]; to?: readonly { id: string; tier?: number; older?: boolean }[] } = {},
 ): string | null {
   if (!model) return null;
   const fromList = lists.from ?? AGENT_CAPABILITIES[from].models;
-  const toList = lists.to ?? AGENT_CAPABILITIES[to].models;
+  const toList = (lists.to ?? AGENT_CAPABILITIES[to].models).filter(x => !x.older);
   if (!toList.length) return null;
-  const m = model.toLowerCase();
-  // Exact id first, then a full name that contains a listed alias ("claude-opus-4-5" is "opus").
-  let tier = fromList.findIndex(x => x.id.toLowerCase() === m);
-  if (tier < 0) tier = fromList.findIndex(x => m.includes(x.id.toLowerCase()));
+  const tier = tierIn(fromList, model);
   if (tier < 0) return null;
-  return toList[Math.min(tier, toList.length - 1)]!.id;
+  const tiers = toList.map((x, i) => x.tier ?? i);
+  const want = Math.min(tier, Math.max(...tiers));
+  return toList[tiers.findIndex(t => t >= want)]!.id;
 }

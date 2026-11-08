@@ -54,5 +54,6 @@ export function capabilitiesFor(
     permissions: base.permissions,
     live: base.live,
     questions: base.questions,
+    fast: base.fast,
   };
 }

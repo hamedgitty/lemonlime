@@ -241,10 +241,12 @@ describe("handoff to another agent", () => {
   it("picks a model of the same tier", () => {
     expect(matchingModel("claude-code", "opus", "codex")).toBe("gpt-6.1-sol");
     expect(matchingModel("claude-code", "claude-haiku-4-5", "codex")).toBe("gpt-6.1-terra");
-    expect(matchingModel("codex", "gpt-6-astra", "claude-code")).toBe("sonnet");
+    expect(matchingModel("codex", "gpt-6-astra", "claude-code")).toBe("claude-sonnet-5-5");
+    expect(matchingModel("claude-code", "claude-fable-5-1", "codex")).toBe("gpt-6.1-sol");
+    expect(matchingModel("codex", "gpt-6.1-sol", "claude-code")).toBe("claude-opus-5-5");
     expect(matchingModel("claude-code", null, "codex")).toBeNull();
     expect(matchingModel("claude-code", "opus", "opencode")).toBeNull();
-    expect(matchingModel("codex", "gpt-6.1-sol", "claude-code", { from: [{ id: "a" }, { id: "gpt-6.1-sol" }] })).toBe("sonnet");
+    expect(matchingModel("codex", "gpt-6.1-sol", "claude-code", { from: [{ id: "a" }, { id: "gpt-6.1-sol" }] })).toBe("claude-sonnet-5-5");
   });
 });
 

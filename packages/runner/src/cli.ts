@@ -68,7 +68,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
   --agent <kind>           claude-code | codex | opencode | acp (required)
   --agent-command <cmd>    Command for ACP agents, e.g. "gemini --experimental-acp"
   --model <name>           Model to ask the agent for
-  --reasoning <level>      How hard it thinks: low, medium, high (Codex also xhigh, max)
+  --reasoning <level>      How hard it thinks: low, medium, high, xhigh, max
+  --fast                   Use the agent's fast mode (Claude Code and Codex)
   --workdir <path>         Repository working directory (default: ./workspace)
   --repo <url>             Clone this repository into --workdir if it is empty
   --source-repo <path>     Work in a separate git worktree of this local repository, so
@@ -282,6 +283,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       "agent-command": { type: "string" },
       model: { type: "string" },
       reasoning: { type: "string" },
+      fast: { type: "boolean", default: false },
       workdir: { type: "string" },
       "source-repo": { type: "string" },
       repo: { type: "string" },
@@ -410,7 +412,13 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const thread: Thread = {
     id,
     title: "",
-    agent: { kind: agent.data!, ...(command ? { command } : {}), ...(values.model ? { model: values.model } : {}), ...(reasoning ? { reasoning } : {}) },
+    agent: {
+      kind: agent.data!,
+      ...(command ? { command } : {}),
+      ...(values.model ? { model: values.model } : {}),
+      ...(reasoning ? { reasoning } : {}),
+      ...(values.fast ? { fast: true } : {}),
+    },
     repo: { url: values.repo ?? sourceRepo ?? workdir, baseBranch: values.base! },
     branch: values["no-git"] ? branchForThread(id, branchPrefix) : threadBranch(dataDir, id, branchPrefix),
     mode: inSandbox ? "cloud" : "local",
@@ -442,6 +450,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       autonomy,
       ...(values.model ? { model: values.model } : {}),
       ...(reasoning ? { reasoning } : {}),
+      ...(values.fast ? { fast: true } : {}),
       ...(command ? { command } : {}),
       ...(values["no-command-guard"] ? { commandGuard: false } : {}),
       ...(instructions ? { instructions: instructions.text } : {}),

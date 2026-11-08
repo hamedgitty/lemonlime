@@ -31,12 +31,29 @@ export const ThreadOptions = z.object({
   reasoning: ReasoningLevel.nullable(),
   permission: PermissionMode,
   exitPlanTo: PermissionMode.optional(),
+  /** The agent's fast mode (faster output, more usage), for agents with `fast`. */
+  fast: z.boolean().optional(),
 });
 export type ThreadOptions = z.infer<typeof ThreadOptions>;
 
+/**
+ * One model an agent accepts. `tier` is its size class (0 = the biggest), so a thread can
+ * move to a model of the same size on another agent; `family` is a word older or shorter
+ * names of it contain ("opus" in "claude-opus-4-5"). `context` is a short note for the
+ * picker ("1M" for a million-token context window). `older` ones sit under "More models".
+ */
+export interface AgentModel {
+  id: string;
+  label: string;
+  tier?: number;
+  family?: string;
+  context?: string;
+  older?: boolean;
+}
+
 export interface AgentCapabilities {
   /** Model names the agent accepts, best known first. Others can still be typed in. */
-  models: { id: string; label: string }[];
+  models: AgentModel[];
   /** Reasoning levels the agent can be set to, if any. */
   reasoning: ReasoningLevel[];
   attachments: { images: boolean; files: boolean };
@@ -48,6 +65,8 @@ export interface AgentCapabilities {
   live: { model: boolean; reasoning: boolean };
   /** It can ask the user multiple-choice questions mid-turn (`question_request`). */
   questions: boolean;
+  /** It has a fast mode (the same model, answering faster for more usage). */
+  fast: boolean;
 }
 
 /**
@@ -57,25 +76,40 @@ export interface AgentCapabilities {
  * runner exists.
  */
 export const AGENT_CAPABILITIES: Record<AgentKind, AgentCapabilities> = {
+  // Full names, which the CLI accepts as they are (its short aliases move to newer models).
   "claude-code": {
     models: [
-      { id: "opus", label: "Opus" },
-      { id: "sonnet", label: "Sonnet" },
-      { id: "haiku", label: "Haiku" },
+      { id: "claude-opus-5-5", label: "Opus 5.5", tier: 0, family: "opus", context: "1M" },
+      { id: "claude-fable-5-1", label: "Fable 5.1", tier: 0, family: "fable", context: "1M" },
+      { id: "claude-sonnet-5-5", label: "Sonnet 5.5", tier: 1, family: "sonnet", context: "1M" },
+      { id: "claude-haiku-5-5", label: "Haiku 5.5", tier: 2, family: "haiku", context: "1M" },
+      { id: "claude-fable-5", label: "Fable 5", tier: 0, context: "1M", older: true },
+      { id: "claude-opus-5", label: "Opus 5", tier: 0, context: "1M", older: true },
+      { id: "claude-opus-4-8", label: "Opus 4.8", tier: 0, context: "1M", older: true },
+      { id: "claude-opus-4-7", label: "Opus 4.7", tier: 0, context: "1M", older: true },
+      { id: "claude-sonnet-5", label: "Sonnet 5", tier: 1, context: "1M", older: true },
+      { id: "claude-sonnet-4-6", label: "Sonnet 4.6", tier: 1, context: "1M", older: true },
+      { id: "claude-haiku-4-5", label: "Haiku 4.5", tier: 2, older: true },
     ],
-    reasoning: ["low", "medium", "high"],
+    reasoning: ["low", "medium", "high", "xhigh", "max"],
     attachments: { images: true, files: true },
     compact: true,
     permissions: ["ask", "edits", "full", "plan"],
     live: { model: true, reasoning: true },
     questions: true,
+    fast: true,
   },
   // The runner replaces these with Codex's own model list when it can read it.
   codex: {
     models: [
-      { id: "gpt-6.1-sol", label: "GPT-6.1-Sol" },
-      { id: "gpt-6-astra", label: "GPT-6-Astra" },
-      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+      { id: "gpt-6.1-sol", label: "GPT-6.1-Sol", tier: 0 },
+      { id: "gpt-6-astra", label: "GPT-6-Astra", tier: 1 },
+      { id: "gpt-6.1-terra", label: "GPT-6.1 Terra", tier: 2 },
+      { id: "gpt-6-sol", label: "GPT-6-Sol", tier: 0, older: true },
+      { id: "gpt-6-luna", label: "GPT-6-Luna", tier: 2, older: true },
+      { id: "gpt-5.6-sol", label: "GPT-5.6-Sol", tier: 0, older: true },
+      { id: "gpt-5.6-terra", label: "GPT-5.6-Terra", tier: 2, older: true },
+      { id: "gpt-5.6-luna", label: "GPT-5.6-Luna", tier: 2, older: true },
     ],
     reasoning: ["low", "medium", "high", "xhigh", "max"],
     attachments: { images: true, files: true },
@@ -84,15 +118,18 @@ export const AGENT_CAPABILITIES: Record<AgentKind, AgentCapabilities> = {
     permissions: ["edits", "full", "plan"],
     live: { model: true, reasoning: true },
     questions: false,
+    fast: true,
   },
+  // Its models come from its own CLI (`opencode models`); it switches between turns over ACP.
   opencode: {
     models: [],
     reasoning: [],
     attachments: { images: true, files: true },
     compact: false,
     permissions: ["ask", "edits", "full", "plan"],
-    live: { model: false, reasoning: false },
+    live: { model: true, reasoning: false },
     questions: false,
+    fast: false,
   },
   acp: {
     models: [],
@@ -102,6 +139,7 @@ export const AGENT_CAPABILITIES: Record<AgentKind, AgentCapabilities> = {
     permissions: ["ask", "edits", "full", "plan"],
     live: { model: false, reasoning: false },
     questions: false,
+    fast: false,
   },
 };
 
@@ -119,5 +157,7 @@ export const RunnerCapabilities = z.object({
   permissions: z.array(PermissionMode),
   live: z.object({ model: z.boolean(), reasoning: z.boolean() }),
   questions: z.boolean(),
+  /** Runners from before fast mode leave it out. */
+  fast: z.boolean().optional(),
 });
 export type RunnerCapabilities = z.infer<typeof RunnerCapabilities>;

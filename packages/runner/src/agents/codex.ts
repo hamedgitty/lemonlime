@@ -67,6 +67,8 @@ class CodexSession implements AgentSession {
     const flags = ["--json", "--skip-git-repo-check"];
     if (this.opts.model) flags.push("--model", this.opts.model);
     if (this.opts.reasoning && /^[a-z]+$/.test(this.opts.reasoning)) flags.push("-c", `model_reasoning_effort="${this.opts.reasoning}"`);
+    // Codex's fast service tier: the same model, faster, for more of the plan's usage.
+    if (this.opts.fast) flags.push("-c", 'service_tier="fast"');
     // The user's own instructions, as developer instructions on every turn; in plan mode,
     // what plan mode means too (Codex has no plan mode of its own in exec).
     const developer = [plan ? PLAN_INSTRUCTIONS : "", this.opts.instructions?.trim() ?? ""].filter(Boolean).join("\n\n");

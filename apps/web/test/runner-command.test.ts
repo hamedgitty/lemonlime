@@ -47,6 +47,11 @@ describe("runner command", () => {
     );
   });
 
+  it("passes fast mode only when it's on", () => {
+    expect(runnerArgs({ ...base, agent: { kind: "codex", fast: true } })).toContain("--fast");
+    expect(runnerArgs({ ...base, agent: { kind: "codex" } })).not.toContain("--fast");
+  });
+
   it("passes the reasoning level", () => {
     const args = runnerArgs({ ...base, agent: { kind: "codex", model: "gpt-6-astra", reasoning: "high" } });
     expect(args.slice(args.indexOf("--reasoning"), args.indexOf("--reasoning") + 2)).toEqual(["--reasoning", "high"]);

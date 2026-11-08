@@ -40,6 +40,8 @@ pub struct AgentInstall {
     version: Option<String>,
     /// Signed in, as far as can be told without reading any credential: None when unknown.
     signed_in: Option<bool>,
+    /// Installed with npm (its program lives in a node_modules folder), so npm can update it.
+    via_npm: bool,
 }
 
 /// Runs a program with a time limit; returns (exit ok, stdout + stderr).
@@ -154,7 +156,7 @@ fn claude_keychain_item() -> Option<bool> {
 
 fn detect_one(cli: &AgentCli) -> AgentInstall {
     let Some(path) = paths::find_program(cli.program) else {
-        return AgentInstall { kind: cli.kind, installed: false, path: None, version: None, signed_in: None };
+        return AgentInstall { kind: cli.kind, installed: false, path: None, version: None, signed_in: None, via_npm: false };
     };
     let mut c = program_command(&path);
     c.arg("--version");
@@ -165,7 +167,57 @@ fn detect_one(cli: &AgentCli) -> AgentInstall {
         path: Some(path.display().to_string()),
         version,
         signed_in: signed_in(cli.kind, &path),
+        via_npm: installed_with_npm(&path),
     }
+}
+
+/// npm puts a link to the package's script on PATH; the real file is inside node_modules.
+fn installed_with_npm(path: &std::path::Path) -> bool {
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    real.components().any(|c| c.as_os_str() == "node_modules")
+}
+
+/// The models an agent can use, as its own CLI lists them (only OpenCode lists them this
+/// way). The text is returned as it is; the app reads it.
+#[tauri::command]
+pub async fn agent_models(kind: String) -> Result<String, String> {
+    if kind != "opencode" {
+        return Err("Only OpenCode lists its models.".into());
+    }
+    let path = paths::find_program("opencode").ok_or("OpenCode isn't installed.")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut c = program_command(&path);
+        c.args(["models", "--verbose"]);
+        match run_with_timeout(c, Duration::from_secs(30)) {
+            Some((true, text)) => Ok(text),
+            Some((false, text)) => Err(tail(&text, 600)),
+            None => Err("OpenCode took too long to list its models.".into()),
+        }
+    })
+    .await
+    .map_err(|e| format!("Couldn't list the models: {e}"))?
+}
+
+/// Signs an agent out on this computer with its own command. Only these fixed commands run.
+#[tauri::command]
+pub async fn sign_out_agent(kind: String) -> Result<(), String> {
+    let (program, args): (&str, &[&str]) = match kind.as_str() {
+        "claude-code" => ("claude", &["auth", "logout"]),
+        "codex" => ("codex", &["logout"]),
+        _ => return Err("Sign this agent out in a terminal.".into()),
+    };
+    let path = paths::find_program(program).ok_or("The agent isn't installed.")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut c = program_command(&path);
+        c.args(args);
+        match run_with_timeout(c, Duration::from_secs(30)) {
+            Some((true, _)) => Ok(()),
+            Some((false, text)) => Err(tail(&text, 600)),
+            None => Err("Signing out took too long.".into()),
+        }
+    })
+    .await
+    .map_err(|e| format!("Couldn't sign out: {e}"))?
 }
 
 /// Which agent CLIs are installed here, their versions, and whether they're signed in.

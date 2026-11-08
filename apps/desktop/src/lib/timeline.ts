@@ -320,7 +320,7 @@ export interface FoldedSteps {
 export function foldFinishedTurns(items: readonly TimelineItem[]): Array<TimelineItem | FoldedSteps> {
   const starts = items.flatMap((it, i) => (it.kind === "user" ? [i] : []));
   if (starts.length < 2) return [...items];
-  const out: Array<TimelineItem | FoldedSteps> = [...items.slice(0, starts[0])];
+  const out: Array<TimelineItem | FoldedSteps> = items.slice(0, starts[0]);
   for (let t = 0; t < starts.length; t++) {
     const from = starts[t]!;
     const to = t + 1 < starts.length ? starts[t + 1]! : items.length;

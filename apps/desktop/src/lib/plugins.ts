@@ -83,10 +83,13 @@ export async function readPlugin(name: string): Promise<PluginDetail> {
   return invoke<PluginDetail>("read_plugin", { name });
 }
 
-/** Clone an https repository (a plugin or a marketplace of them) and install what it holds. */
-export async function installPluginFromGit(url: string, ref?: string): Promise<PluginInstallResult> {
+/**
+ * Clone an https repository (a plugin or a marketplace of them) and install what it holds.
+ * With `plugin`, install just that plugin from a marketplace, even one kept in another repository.
+ */
+export async function installPluginFromGit(url: string, ref?: string, plugin?: string): Promise<PluginInstallResult> {
   requireShell();
-  return invoke<PluginInstallResult>("install_plugin_from_git", { url: url.trim(), gitRef: ref?.trim() || null });
+  return invoke<PluginInstallResult>("install_plugin_from_git", { url: url.trim(), gitRef: ref?.trim() || null, plugin: plugin?.trim() || null });
 }
 
 /** Install from a folder on this computer. */

@@ -10,7 +10,8 @@
 //! with `plugins.json` recording where each came from and whether it is turned on. The
 //! runner reads that folder (`--plugins-dir`) and puts the enabled plugins into each new
 //! local thread. A marketplace repository (`.claude-plugin/marketplace.json`) installs every
-//! plugin it lists from its own folders. Hooks are listed but never applied.
+//! plugin it lists from its own folders, or one picked by name, even from another repository.
+//! Hooks are listed but never applied.
 //!
 //! Not to be confused with `packages/plugins`, the hosted-deployment hooks.
 
@@ -645,11 +646,61 @@ struct Candidate {
     entry: Option<Map<String, Value>>,
 }
 
+/// A plugin a marketplace lists from another git repository (`url`, `git-subdir` or
+/// `github` sources). Only followed when the person picked that plugin by name.
+struct Remote {
+    name: String,
+    url: String,
+    path: Option<String>,
+    git_ref: Option<String>,
+    sha: Option<String>,
+    entry: Map<String, Value>,
+}
+
+/// Where a marketplace entry's plugin lives when it isn't in the marketplace's own repository.
+fn remote_source(name: &str, entry: &Map<String, Value>) -> Option<Result<Remote, String>> {
+    let source = entry.get("source")?;
+    let text = |v: &Value, key: &str| v.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    let (url, path, git_ref, sha) = match source {
+        Value::String(s) if s.contains("://") => (s.trim().to_string(), None, None, None),
+        Value::Object(o) => {
+            let v = Value::Object(o.clone());
+            let url = match o.get("source").and_then(Value::as_str) {
+                Some("url") | Some("git-subdir") => text(&v, "url")?,
+                Some("github") => format!("https://github.com/{}.git", text(&v, "repo")?),
+                Some(other) => return Some(Err(format!("{name} comes from a \"{other}\" source, which LemonLime doesn't install."))),
+                None => return None,
+            };
+            (url, text(&v, "path"), text(&v, "ref"), text(&v, "sha"))
+        }
+        _ => return None,
+    };
+    let checked = (|| {
+        valid_git_url(&url)?;
+        if git_ref.as_deref().is_some_and(|r| !valid_ref(r)) {
+            return Err(format!("{name} names a branch or tag that isn't valid."));
+        }
+        if sha.as_deref().is_some_and(|s| s.len() != 40 || !s.chars().all(|c| c.is_ascii_hexdigit())) {
+            return Err(format!("{name} pins a commit that isn't a full commit id."));
+        }
+        if path.as_deref().is_some_and(|p| !safe_relative(p.trim_start_matches("./"))) {
+            return Err(format!("{name}'s folder is outside its repository."));
+        }
+        Ok(())
+    })();
+    Some(checked.map(|()| Remote { name: name.to_string(), url, path: path.map(|p| p.trim_start_matches("./").to_string()), git_ref, sha, entry: entry.clone() }))
+}
+
 /// The plugins a source folder holds: itself, or those its marketplace.json lists from its
-/// own folders. Plugins a marketplace lists from elsewhere are returned as skipped.
-fn find_plugins(root: &Path) -> Result<(Vec<Candidate>, Vec<String>), String> {
+/// own folders. With `only`, just that plugin, which may also come from another repository.
+/// Plugins a marketplace lists from elsewhere are otherwise returned as skipped.
+/// What a source holds: plugins to install, reasons others were skipped, and the plugin
+/// picked by name when it lives in another repository.
+type Found = (Vec<Candidate>, Vec<String>, Option<Remote>);
+
+fn find_plugins(root: &Path, only: Option<&str>) -> Result<Found, String> {
     if root.join(".claude-plugin").join("plugin.json").is_file() {
-        return Ok((vec![Candidate { name: String::new(), folder: root.to_path_buf(), subpath: None, entry: None }], Vec::new()));
+        return Ok((vec![Candidate { name: String::new(), folder: root.to_path_buf(), subpath: None, entry: None }], Vec::new(), None));
     }
     let market_path = root.join(".claude-plugin").join("marketplace.json");
     if !market_path.is_file() {
@@ -657,24 +708,36 @@ fn find_plugins(root: &Path) -> Result<(Vec<Candidate>, Vec<String>), String> {
     }
     let market = read_json(&market_path, "marketplace.json")?;
     let plugins = market.get("plugins").and_then(Value::as_array).ok_or("marketplace.json lists no plugins.")?;
-    if plugins.len() > MAX_MARKETPLACE_PLUGINS {
-        return Err(format!("marketplace.json lists more than {MAX_MARKETPLACE_PLUGINS} plugins."));
+    if only.is_none() && plugins.len() > MAX_MARKETPLACE_PLUGINS {
+        return Err(format!("This marketplace lists {} plugins, too many to install at once. Type the name of the one you want.", plugins.len()));
     }
     let base = market.pointer("/metadata/pluginRoot").and_then(Value::as_str).unwrap_or("").trim_end_matches('/').to_string();
     let mut found = Vec::new();
     let mut skipped = Vec::new();
+    let mut remote = None;
     for p in plugins {
         let Some(entry) = p.as_object() else { continue };
         let name = entry.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+        if only.is_some_and(|o| o != name) {
+            continue;
+        }
         if !valid_name(&name) {
             skipped.push(format!("\"{name}\" isn't a valid plugin name."));
             continue;
         }
+        if let Some(r) = remote_source(&name, entry) {
+            match r {
+                Ok(r) if only.is_some() => remote = Some(r),
+                Ok(_) => skipped.push(format!("{name} comes from another repository; type its name to install it on its own.")),
+                Err(e) => skipped.push(e),
+            }
+            continue;
+        }
         let Some(source) = entry.get("source").and_then(Value::as_str) else {
-            skipped.push(format!("{name} comes from another repository."));
+            skipped.push(format!("{name} has a source LemonLime doesn't understand."));
             continue;
         };
-        if source.contains("://") || (source.contains('@') && source.contains(':')) {
+        if source.contains('@') && source.contains(':') {
             skipped.push(format!("{name} comes from another repository."));
             continue;
         }
@@ -692,7 +755,12 @@ fn find_plugins(root: &Path) -> Result<(Vec<Candidate>, Vec<String>), String> {
         }
         found.push(Candidate { name, folder, subpath: Some(rel), entry: Some(entry.clone()) });
     }
-    Ok((found, skipped))
+    if let Some(o) = only {
+        if found.is_empty() && remote.is_none() && skipped.is_empty() {
+            return Err(format!("This marketplace doesn't list a plugin called {o}."));
+        }
+    }
+    Ok((found, skipped, remote))
 }
 
 /// Stage one candidate as a checked plugin folder inside `scratch`. Returns the staged path
@@ -712,10 +780,9 @@ fn stage(scratch: &Path, c: &Candidate) -> Result<(PathBuf, Manifest), String> {
         fs::create_dir_all(manifest.parent().unwrap()).map_err(|e| e.to_string())?;
         fs::write(&manifest, serde_json::to_string_pretty(&Value::Object(m)).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
+    // A marketplace may list a plugin under another name than its plugin.json gives
+    // (common for plugins kept in other repositories); it installs under its own name.
     let (m, _, _) = inspect(&staged)?;
-    if !c.name.is_empty() && c.entry.is_some() && m.name != c.name {
-        return Err(format!("{} calls itself {} in its plugin.json.", c.name, m.name));
-    }
     Ok((staged, m))
 }
 
@@ -730,14 +797,18 @@ pub struct InstallResult {
 /// Install every plugin `source_root` holds into `dir`. One plugin is turned on straight away;
 /// several from a marketplace are installed off, for the user to pick from.
 fn install_from(dir: &Path, source_root: &Path, source: &str, git_ref: Option<String>, commit: Option<String>) -> Result<InstallResult, String> {
+    let (candidates, skipped, _) = find_plugins(source_root, None)?;
+    install_candidates(dir, &candidates, skipped, source, git_ref, commit)
+}
+
+fn install_candidates(dir: &Path, candidates: &[Candidate], mut skipped: Vec<String>, source: &str, git_ref: Option<String>, commit: Option<String>) -> Result<InstallResult, String> {
     let scratch = Scratch::new(dir)?;
-    let (candidates, mut skipped) = find_plugins(source_root)?;
     let single = candidates.len() == 1 && skipped.is_empty();
     let _guard = lock();
     let mut reg = read_registry(dir)?;
     let mut installed = Vec::new();
     let mut errors = Vec::new();
-    for c in &candidates {
+    for c in candidates {
         let result = stage(&scratch.0, c).and_then(|(staged, m)| {
             if reg.plugins.iter().any(|p| p.name == m.name) || dir.join(&m.name).exists() {
                 return Err(format!("You already have a plugin called {}. Update or remove it first.", m.name));
@@ -856,17 +927,54 @@ fn clone(url: &str, git_ref: Option<&str>, into: &Path) -> Result<String, String
     Ok(git(&["rev-parse", "HEAD"], Some(into))?.trim().to_string())
 }
 
-pub fn install_git_into(dir: &Path, url: &str, git_ref: Option<String>) -> Result<InstallResult, String> {
+/// Move a fresh shallow clone to the commit a marketplace pins, if it isn't there already.
+fn pin(checkout: &Path, sha: &str, head: String) -> Result<String, String> {
+    if head.eq_ignore_ascii_case(sha) {
+        return Ok(head);
+    }
+    git(&["fetch", "--quiet", "--depth", "1", "origin", sha], Some(checkout))?;
+    git(&["checkout", "--quiet", "--detach", "FETCH_HEAD"], Some(checkout))?;
+    Ok(git(&["rev-parse", "HEAD"], Some(checkout))?.trim().to_string())
+}
+
+/// Install from a git repository: the plugin it is, every plugin its marketplace lists from
+/// its own folders, or with `only` just the named one (which may live in another repository).
+pub fn install_git_into(dir: &Path, url: &str, git_ref: Option<String>, only: Option<String>) -> Result<InstallResult, String> {
     let url = url.trim();
     valid_git_url(url)?;
     let git_ref = git_ref.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
     if git_ref.as_deref().is_some_and(|r| !valid_ref(r)) {
         return Err("That branch or tag name isn't valid.".into());
     }
+    let only = only.map(|o| o.trim().to_string()).filter(|o| !o.is_empty());
     let scratch = Scratch::new(dir)?;
     let checkout = scratch.0.join("clone");
     let commit = clone(url, git_ref.as_deref(), &checkout)?;
-    install_from(dir, &checkout, url, git_ref, Some(commit))
+    let Some(name) = only else {
+        return install_from(dir, &checkout, url, git_ref, Some(commit));
+    };
+    let (found, skipped, remote) = find_plugins(&checkout, Some(&name))?;
+    if !found.is_empty() {
+        return install_candidates(dir, &found, skipped, url, git_ref, Some(commit));
+    }
+    let Some(r) = remote else {
+        return Err(skipped.join(" "));
+    };
+    let elsewhere = scratch.0.join("remote");
+    let head = clone(&r.url, r.git_ref.as_deref(), &elsewhere)?;
+    let head = match &r.sha {
+        Some(sha) => pin(&elsewhere, sha, head)?,
+        None => head,
+    };
+    let folder = match &r.path {
+        Some(p) => elsewhere.join(p),
+        None => elsewhere.clone(),
+    };
+    if !folder.is_dir() {
+        return Err(format!("{}'s folder isn't in {}.", r.name, r.url));
+    }
+    let c = Candidate { name: r.name.clone(), folder, subpath: r.path.clone(), entry: Some(r.entry) };
+    install_candidates(dir, &[c], Vec::new(), &r.url, r.git_ref, Some(head))
 }
 
 #[derive(Serialize, Debug)]
@@ -906,11 +1014,22 @@ pub fn update_in(dir: &Path, name: &str) -> Result<UpdateResult, String> {
         }
         (folder, None)
     };
-    let (candidates, _) = find_plugins(&root)?;
-    let c = candidates
-        .into_iter()
-        .find(|c| c.subpath.as_deref().filter(|p| *p != ".") == rec.path.as_deref() || c.name == rec.name)
-        .ok_or("The plugin is no longer in its source.")?;
+    let in_folder = rec.path.as_deref().map(|p| root.join(p)).filter(|f| f.is_dir() && !f.join(".claude-plugin").join("marketplace.json").is_file());
+    let c = match in_folder {
+        // A plugin from inside a repository (a marketplace's folder, or another repository's
+        // subfolder): its folder, with the manifest it was installed with if it has none.
+        Some(folder) if folder.join(".claude-plugin").join("plugin.json").is_file() || !root.join(".claude-plugin").join("marketplace.json").is_file() => {
+            let installed = read_json(&dir.join(&rec.name).join(".claude-plugin").join("plugin.json"), "plugin.json").ok();
+            Candidate { name: rec.name.clone(), folder, subpath: rec.path.clone(), entry: installed.and_then(|v| v.as_object().cloned()) }
+        }
+        _ => {
+            let (candidates, _, _) = find_plugins(&root, None)?;
+            candidates
+                .into_iter()
+                .find(|c| c.subpath.as_deref().filter(|p| *p != ".") == rec.path.as_deref() || c.name == rec.name)
+                .ok_or("The plugin is no longer in its source.")?
+        }
+    };
     let (staged, m) = stage(&scratch.0, &c)?;
     if m.name != rec.name {
         return Err(format!("Its plugin.json now calls it {}; remove it and install it again.", m.name));
@@ -1021,8 +1140,8 @@ pub async fn read_plugin(name: String) -> Result<PluginDetail, String> {
 }
 
 #[tauri::command]
-pub async fn install_plugin_from_git(url: String, git_ref: Option<String>) -> Result<InstallResult, String> {
-    blocking(move || install_git_into(&require_dir()?, &url, git_ref)).await
+pub async fn install_plugin_from_git(url: String, git_ref: Option<String>, plugin: Option<String>) -> Result<InstallResult, String> {
+    blocking(move || install_git_into(&require_dir()?, &url, git_ref, plugin)).await
 }
 
 #[tauri::command]
@@ -1217,11 +1336,16 @@ mod tests {
     fn installs_from_a_real_repository() {
         let Ok(url) = std::env::var("LEMONLIME_PLUGIN_TEST_URL") else { return };
         let home = TempDir::new("git");
-        let result = install_git_into(&home.0, &url, None).unwrap();
+        let only = std::env::var("LEMONLIME_PLUGIN_TEST_NAME").ok();
+        let result = install_git_into(&home.0, &url, None, only).unwrap();
         assert!(!result.installed.is_empty());
         assert!(result.installed[0].commit.as_deref().is_some_and(|c| c.len() == 40));
         let checks = check_updates_in(&home.0).unwrap();
-        assert!(checks.iter().all(|c| !c.has_update && c.error.is_none()));
+        assert!(checks.iter().all(|c| c.error.is_none()), "{checks:?}");
+        // Updating fetches it again from wherever it came from.
+        let name = result.installed[0].name.clone();
+        update_in(&home.0, &name).unwrap();
+        assert!(read_in(&home.0, &name).is_ok());
     }
 
     #[test]
@@ -1252,5 +1376,46 @@ mod tests {
         write(&src.0.join("plugins/two/commands/bye.md"), "Bye.\n");
         update_in(&home.0, "two").unwrap();
         assert_eq!(read_in(&home.0, "two").unwrap().summary.contents.commands, vec!["bye", "hello"]);
+    }
+
+    #[test]
+    fn picks_one_plugin_by_name_including_ones_kept_elsewhere() {
+        let src = TempDir::new("pick");
+        make_plugin(&src.0.join("plugins/one"), "one");
+        let mut entries = vec![
+            r#"{"name":"one","source":"./plugins/one"}"#.to_string(),
+            r#"{"name":"sub","source":{"source":"git-subdir","url":"https://github.com/a/b.git","path":"plugins/sub","ref":"v1","sha":"0123456789abcdef0123456789abcdef01234567"}}"#.to_string(),
+            r#"{"name":"whole","source":{"source":"url","url":"https://github.com/a/whole.git"}}"#.to_string(),
+            r#"{"name":"gh","source":{"source":"github","repo":"a/gh"}}"#.to_string(),
+            r#"{"name":"cmd","source":{"source":"command","command":"rm -rf /"}}"#.to_string(),
+            r#"{"name":"bad","source":{"source":"url","url":"http://insecure.example/x.git"}}"#.to_string(),
+            r#"{"name":"escape","source":{"source":"git-subdir","url":"https://github.com/a/b.git","path":"../up"}}"#.to_string(),
+        ];
+        // A big marketplace: too many to install at once, fine to pick from.
+        for i in 0..120 {
+            entries.push(format!(r#"{{"name":"extra{i}","source":"./plugins/extra{i}"}}"#));
+        }
+        write(&src.0.join(".claude-plugin/marketplace.json"), &format!(r#"{{"name":"big","plugins":[{}]}}"#, entries.join(",")));
+
+        let all = find_plugins(&src.0, None).err().unwrap();
+        assert!(all.contains("127 plugins"), "{all}");
+
+        let (found, _, remote) = find_plugins(&src.0, Some("one")).unwrap();
+        assert_eq!(found.len(), 1);
+        assert!(remote.is_none());
+
+        let (found, _, remote) = find_plugins(&src.0, Some("sub")).unwrap();
+        assert!(found.is_empty());
+        let r = remote.unwrap();
+        assert_eq!((r.url.as_str(), r.path.as_deref(), r.git_ref.as_deref()), ("https://github.com/a/b.git", Some("plugins/sub"), Some("v1")));
+        assert_eq!(r.sha.as_deref(), Some("0123456789abcdef0123456789abcdef01234567"));
+
+        assert_eq!(find_plugins(&src.0, Some("whole")).unwrap().2.unwrap().path, None);
+        assert_eq!(find_plugins(&src.0, Some("gh")).unwrap().2.unwrap().url, "https://github.com/a/gh.git");
+        for refused in ["cmd", "bad", "escape"] {
+            let (found, skipped, remote) = find_plugins(&src.0, Some(refused)).unwrap();
+            assert!(found.is_empty() && remote.is_none() && skipped.len() == 1, "{refused} should be refused");
+        }
+        assert!(find_plugins(&src.0, Some("nope")).err().unwrap().contains("doesn't list"));
     }
 }

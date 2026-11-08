@@ -35,11 +35,15 @@ and underscores.
 ### Marketplaces
 
 A repository with `.claude-plugin/marketplace.json` instead of `plugin.json` lists several
-plugins. LemonLime installs each one whose `source` is a folder in the same repository
-(`"./plugins/name"`, or a bare name under `metadata.pluginRoot`). Entries whose source is
-another repository are listed as not installed. A listed plugin without its own
-`plugin.json` uses its marketplace entry as its manifest. Plugins from a marketplace start
-turned off, so you pick the ones you want.
+plugins. Leave **Plugin** empty and LemonLime installs each one whose `source` is a folder
+in the same repository (`"./plugins/name"`, or a bare name under `metadata.pluginRoot`), up
+to 100. Type a plugin's name to install just that one; it may then also live in another
+repository: a `url` source (a whole repository), a `git-subdir` source (a folder in one),
+or a `github` source (`owner/name`), following the entry's `ref` and pinned `sha` when it
+has them. `https://` only; `command` sources are never run. A listed plugin without its own
+`plugin.json` uses its marketplace entry as its manifest, and a plugin installs under the
+name its own `plugin.json` gives. Plugins from a marketplace start turned off unless you
+picked one by name.
 
 ## Installing
 
@@ -85,7 +89,8 @@ Each plugin is checked before it is installed and again every time a thread star
 ```
 
 `source` is an `https://` git URL or a folder path. Git plugins may also have `ref` (the
-branch or tag they follow) and `path` (their folder inside a marketplace repository).
+branch or tag they follow) and `path` (their folder inside the repository). A plugin picked
+from a marketplace but kept in another repository records that other repository.
 
 **Update** fetches the source again (a fresh shallow clone, or a fresh copy of the folder),
 checks it, and swaps it in; the plugin stays on or off as it was. The Updates tab asks

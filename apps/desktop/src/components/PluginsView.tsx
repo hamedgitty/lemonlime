@@ -388,6 +388,7 @@ function PluginRow({
 function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onInstalled: (r: PluginInstallResult) => void }) {
   const [url, setUrl] = useState("");
   const [ref, setRef] = useState("");
+  const [plugin, setPlugin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = async (e: FormEvent) => {
@@ -397,7 +398,7 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onIns
     setBusy(true);
     setError(null);
     try {
-      onInstalled(await installPluginFromGit(url, ref));
+      onInstalled(await installPluginFromGit(url, ref, plugin));
     } catch (err) {
       setError(message(err));
     } finally {
@@ -410,6 +411,7 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onIns
         <h2 className="font-sans text-[18px] font-semibold tracking-normal">Install from a Git URL</h2>
         <p className="mt-1 text-[14px] text-ink-soft">
           A repository with a <code className="font-mono text-[12.5px] text-ink">.claude-plugin/plugin.json</code>, or a marketplace that lists several plugins.
+          For a marketplace, name the plugin you want, or leave it empty to install every plugin it keeps in its own folders.
         </p>
       </div>
       <label className="block">
@@ -429,6 +431,12 @@ function GitInstallForm({ onCancel, onInstalled }: { onCancel: () => void; onIns
           Branch or tag <span className="font-normal text-ink-faint">Optional</span>
         </span>
         <TextInput className="font-mono text-[13px]" placeholder="main" value={ref} onChange={e => setRef(e.target.value)} />
+      </label>
+      <label className="block">
+        <span className="mb-1 flex items-baseline gap-2 text-[13.5px] font-medium">
+          Plugin <span className="font-normal text-ink-faint">Optional, for a marketplace</span>
+        </span>
+        <TextInput className="font-mono text-[13px]" placeholder="code-review" value={plugin} onChange={e => setPlugin(e.target.value)} />
       </label>
       {error && (
         <p role="alert" className="text-[13.5px] text-danger">

@@ -159,6 +159,22 @@ describe("DaytonaProvider", () => {
     expect(calls[4]!.body).toEqual({ command: runner.command, runAsync: true });
   });
 
+  it("uses the snapshot for the thread's size, falling back to the shared one", async () => {
+    const started = () => [
+      json({ id: "sb9", state: "started", toolboxProxyUrl: "https://proxy.example/toolbox" }),
+      json({ cmdId: "c1" }),
+      json({ cmdId: "c2" }),
+      json({ sandboxId: "sb9", url: "https://preview.example", token: "t" }),
+    ];
+    const opts = { snapshot: "shared-snap", snapshots: { large: "large-snap" } };
+    const large = scriptedFetch(started());
+    await make(large.fetch, opts).create({ threadId: "t9", size: "large", runner });
+    expect((large.calls[0]!.body as { snapshot?: string }).snapshot).toBe("large-snap");
+    const small = scriptedFetch(started());
+    await make(small.fetch, opts).create({ threadId: "t9", size: "small", runner });
+    expect((small.calls[0]!.body as { snapshot?: string }).snapshot).toBe("shared-snap");
+  });
+
   it("creates from a snapshot without resources and looks up the toolbox URL when missing", async () => {
     const { fetch, calls } = scriptedFetch([
       json({ id: "sb2", state: "started" }),

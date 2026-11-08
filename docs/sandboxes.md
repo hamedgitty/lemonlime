@@ -42,13 +42,18 @@ started, or the runner could not be launched), that sandbox is deleted again.
 ## Daytona
 
 Settings: `DAYTONA_API_KEY` (required), `DAYTONA_API_URL` (default
-`https://app.daytona.io/api`), and optionally `DAYTONA_SNAPSHOT`.
+`https://app.daytona.io/api`), and optionally `DAYTONA_SNAPSHOT_SMALL`,
+`DAYTONA_SNAPSHOT_LARGE` or `DAYTONA_SNAPSHOT`.
 
 - Without `DAYTONA_SNAPSHOT`, each sandbox is built from
   `LEMONLIME_SANDBOX_IMAGE` with the CPU, memory and disk of its size. The image
   must be pullable by your Daytona organisation.
-- With `DAYTONA_SNAPSHOT`, sandboxes start from that snapshot (create it from the
-  same image). Resources then come from the snapshot.
+- With `DAYTONA_SNAPSHOT_SMALL` / `DAYTONA_SNAPSHOT_LARGE`, each size starts from
+  its own snapshot of the same image, with that size's CPU, memory and disk. Make
+  both with `DAYTONA_API_KEY=... node scripts/daytona-snapshots.mjs`, which prints
+  the two names to set.
+- With `DAYTONA_SNAPSHOT`, every size starts from that one snapshot and gets its
+  resources. A size-specific snapshot wins when both are set.
 
 Requests, all with `Authorization: Bearer <DAYTONA_API_KEY>`:
 

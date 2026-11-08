@@ -38,6 +38,7 @@ export function createSandboxProvider(env: Record<string, string | undefined>): 
         apiUrl: env.DAYTONA_API_URL,
         image,
         snapshot: env.DAYTONA_SNAPSHOT || undefined,
+        snapshots: { small: env.DAYTONA_SNAPSHOT_SMALL || undefined, large: env.DAYTONA_SNAPSHOT_LARGE || undefined },
       });
     case "e2b":
       return new E2BProvider({

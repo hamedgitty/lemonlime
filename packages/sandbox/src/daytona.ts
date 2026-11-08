@@ -1,4 +1,4 @@
-import { SANDBOX_RESOURCES } from "@lemonlime/protocol";
+import { SANDBOX_RESOURCES, type SandboxSize } from "@lemonlime/protocol";
 import { defaultFetch, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
 import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
 
@@ -9,10 +9,13 @@ export interface DaytonaProviderOptions {
   /** Image with the runner and agent CLIs installed. */
   image: string;
   /**
-   * Optional Daytona snapshot built from that image. When set, sandboxes start
-   * from the snapshot (faster) and take their resources from it.
+   * Optional Daytona snapshot built from that image, used for every size. When set,
+   * sandboxes start from the snapshot (faster) and take their resources from it, so
+   * prefer `snapshots`, which keeps each size's CPU and memory.
    */
   snapshot?: string;
+  /** Optional Daytona snapshot per sandbox size (see `scripts/daytona-snapshots.mjs`). Wins over `snapshot`. */
+  snapshots?: Partial<Record<SandboxSize, string>>;
   /**
    * Provider-side safety net, in minutes. The control plane already pauses idle
    * threads after 5 minutes; this only catches sandboxes the control plane lost
@@ -61,8 +64,9 @@ export class DaytonaProvider implements SandboxProvider {
 
   async create(o: CreateSandboxOptions): Promise<SandboxInfo> {
     const res = SANDBOX_RESOURCES[o.size];
-    const source = this.opts.snapshot
-      ? { snapshot: this.opts.snapshot }
+    const snapshot = this.opts.snapshots?.[o.size] || this.opts.snapshot;
+    const source = snapshot
+      ? { snapshot }
       : {
           // What the Daytona SDK sends for `image: "<name>"`: a one-line Dockerfile.
           buildInfo: { dockerfileContent: `FROM ${this.opts.image}\n` },

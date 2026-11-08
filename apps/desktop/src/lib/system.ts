@@ -125,3 +125,25 @@ export async function saveTextFile(defaultName: string, content: string, filter:
   await invoke("save_text_file", { path, content });
   return true;
 }
+
+/**
+ * The folder a local thread works in: its own git worktree, where the runner puts it
+ * (~/.lemonlime/worktrees/<repo>-<hash>/<thread>, see worktreePathFor in the runner).
+ */
+export async function threadFolder(repoPath: string, threadId: string): Promise<string> {
+  const { homeDir, join } = await import("@tauri-apps/api/path");
+  const name = (repoPath.split(/[\\/]/).filter(Boolean).pop() ?? "").replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(repoPath.replace(/[\\/]+$/, "")));
+  const hash = [...new Uint8Array(digest)]
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 8);
+  return join(await homeDir(), ".lemonlime", "worktrees", `${name}-${hash}`, threadId);
+}
+
+/** Opens a folder in the chosen editor, or the file manager when none is chosen. */
+export async function openFolder(path: string, editor: string): Promise<void> {
+  if (editor) return openInEditor(editor, path);
+  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+  await revealItemInDir(path);
+}

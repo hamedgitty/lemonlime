@@ -7,18 +7,19 @@ import {
   Ellipsis,
   ExternalLink,
   FileDiff,
+  FolderOpen,
   GitBranch,
-  KeyRound,
   Globe,
+  KeyRound,
   Laptop,
+  MessagesSquare,
+  Monitor,
   PanelRight,
+  Paperclip,
   Pause,
   Play,
   Power,
   RotateCw,
-  MessagesSquare,
-  Monitor,
-  Paperclip,
   Shrink,
   SquareTerminal,
   Trash2,
@@ -52,6 +53,8 @@ export interface ThreadViewProps {
   /** Called when the agent starts waiting for an approval. */
   onNeedsInput?: (title: string) => void;
   notifyWhenFocused?: boolean;
+  /** Opens the thread's folder (local threads) in the editor from Settings. */
+  onOpenFolder?: () => void;
   entry: ThreadEntry;
   runnerUp: boolean;
   runnerPath: string;
@@ -104,6 +107,7 @@ function ThreadSessionView({
   foldFinished = false,
   onNeedsInput,
   notifyWhenFocused = false,
+  onOpenFolder,
 }: ThreadViewProps & { target: SessionTarget }) {
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
@@ -368,6 +372,11 @@ function ThreadSessionView({
                     options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
                   />
                 </SubMenu>
+              )}
+              {entry.mode === "local" && onOpenFolder && (
+                <MenuItem icon={<FolderOpen />} onSelect={onOpenFolder}>
+                  Open in editor
+                </MenuItem>
               )}
               {entry.mode === "local" && (
                 <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>

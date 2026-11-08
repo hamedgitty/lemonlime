@@ -1,10 +1,10 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ArchiveRestore, ArrowDown, ArrowUp, FolderGit2, Plus, Search, Trash2 } from "lucide-react";
+import { ArchiveRestore, ArrowDown, ArrowUp, ExternalLink, FolderGit2, Plus, Search, Trash2 } from "lucide-react";
 import type { ThreadEvent } from "@lemonlime/protocol";
 import { AGENT_LABELS, relativeTime, repoName } from "../../lib/format.ts";
 import { inDesktopShell, inspectRepo, pickFolder } from "../../lib/native.ts";
 import { loadEvents } from "../../lib/storage.ts";
-import { saveTextFile } from "../../lib/system.ts";
+import { openFolder, saveTextFile } from "../../lib/system.ts";
 import type { ThreadSummary } from "../../lib/threads.ts";
 import { Button, IconButton, Spinner, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
@@ -90,6 +90,9 @@ function ProjectsTab({ ctx }: { ctx: SettingsCtx }) {
             </>
           }
         >
+          <IconButton label={`Open ${repoName(path)}`} onClick={() => void openFolder(path, ctx.prefs.editor).catch(e => setError(String(e)))}>
+            <ExternalLink aria-hidden="true" className="size-4" />
+          </IconButton>
           <IconButton label={`Move ${repoName(path)} up`} disabled={i === 0} onClick={() => move(i, -1)}>
             <ArrowUp aria-hidden="true" className="size-4" />
           </IconButton>

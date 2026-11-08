@@ -17,7 +17,7 @@ import { Button, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
 import { matchShortcut } from "./lib/shortcuts.ts";
-import { detectAgents, localRunnerStatuses, notify, setKeepAwake, type AgentInstall } from "./lib/system.ts";
+import { detectAgents, localRunnerStatuses, notify, openFolder, setKeepAwake, threadFolder, type AgentInstall } from "./lib/system.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -832,6 +832,16 @@ export function App() {
                 onRunnersChanged={refreshRunners}
                 {...(cloudConfigured || selectedEntry.mode === "cloud" ? { onMove: moveThread } : {})}
                 followUp={prefs.followUp}
+                {...(selectedEntry.mode === "local" && inDesktopShell()
+                  ? {
+                      onOpenFolder: () => {
+                        const m = selectedEntry.meta;
+                        void threadFolder(m.repoPath, m.id)
+                          .then(dir => openFolder(dir, prefs.editor))
+                          .catch(err => console.warn("Couldn't open the thread's folder", err));
+                      },
+                    }
+                  : {})}
                 foldFinished={prefs.collapseFinished}
                 notifyWhenFocused={prefs.notifications.whenFocused}
                 {...(prefs.notifications.enabled && prefs.notifications.needsInput

@@ -1,4 +1,5 @@
-import type { ReactElement, ReactNode } from "react";
+import type { KeyboardEvent, ReactElement, ReactNode } from "react";
+import { ContextMenu as BaseContextMenu } from "@base-ui/react/context-menu";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { Popover as BasePopover } from "@base-ui/react/popover";
 import { Switch as BaseSwitch } from "@base-ui/react/switch";
@@ -48,21 +49,51 @@ export function Menu({
   );
 }
 
+/**
+ * A menu opened by right-clicking `children` (or a long press), at the pointer. Shift+F10
+ * and the context-menu key open it on the focused element inside, below it. The items are
+ * the same MenuItem, MenuSeparator and SubMenu as a dropdown's.
+ */
+export function ContextMenu({ children, menu, disabled }: { children: ReactElement; menu: ReactNode; disabled?: boolean }) {
+  return (
+    <BaseContextMenu.Root {...(disabled ? { disabled } : {})}>
+      <BaseContextMenu.Trigger render={children} onKeyDown={openFromKeyboard} />
+      <BaseContextMenu.Portal>
+        <BaseContextMenu.Positioner className="z-50">
+          <BaseContextMenu.Popup className={POPUP}>{menu}</BaseContextMenu.Popup>
+        </BaseContextMenu.Positioner>
+      </BaseContextMenu.Portal>
+    </BaseContextMenu.Root>
+  );
+}
+
+/** Shift+F10 or the context-menu key: open the menu as a right-click on the focused element would. */
+function openFromKeyboard(e: KeyboardEvent<HTMLElement>) {
+  if (!((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu")) return;
+  const target = e.target as HTMLElement;
+  e.preventDefault();
+  const r = target.getBoundingClientRect();
+  target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + Math.min(24, r.width / 2), clientY: r.bottom }));
+}
+
 export function MenuItem({
   icon,
   children,
   onSelect,
   disabled,
   hint,
+  danger = false,
 }: {
   icon?: ReactNode;
   children: ReactNode;
   onSelect?: () => void;
   disabled?: boolean;
   hint?: ReactNode;
+  /** Removes something: red text. */
+  danger?: boolean;
 }) {
   return (
-    <BaseMenu.Item className={ITEM} onClick={onSelect} disabled={disabled}>
+    <BaseMenu.Item className={cx(ITEM, danger && "text-danger [&_svg]:!text-danger")} onClick={onSelect} disabled={disabled}>
       {icon}
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {hint && <span className="text-[12.5px] text-ink-faint">{hint}</span>}

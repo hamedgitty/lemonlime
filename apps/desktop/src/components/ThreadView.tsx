@@ -2,10 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpCircle,
   Cloud,
-  CloudUpload,
   Ellipsis,
   ExternalLink,
-  FolderOpen,
   GitBranch,
   KeyRound,
   Laptop,
@@ -17,8 +15,6 @@ import {
   Power,
   RotateCw,
   Server,
-  Shrink,
-  Trash2,
   X,
 } from "lucide-react";
 import { useMachines } from "../lib/machines.ts";
@@ -66,7 +62,10 @@ import { saveDraft } from "../lib/storage.ts";
 import { loadPanelState, openFile, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
-import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
+import { MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
+import { RenameField, ThreadMenu, type AppThreadMenu, type ThreadMenuHandlers } from "./ThreadMenu.tsx";
+import { childRowKey, REVEAL_CHILD_EVENT, rememberPullRequest, removeThreadText, takeRevealChild } from "../lib/threadMenu.ts";
+import { flashItem } from "../lib/findInThread.ts";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 import { PaneButton, PaneHeader, type PaneControls } from "./SplitView.tsx";
 
@@ -123,6 +122,8 @@ export interface ThreadViewProps {
   onLocalAgent?: (id: string, agent: { kind: AgentKind; model?: string | undefined }) => void;
   /** Switch these other local threads to an account too (they stopped on the same limit). */
   onSwitchOthers?: (threadIds: string[], accountId: string) => Promise<number>;
+  /** The thread menu's items the app handles (pin, unread, split, fork, archive, rename). */
+  threadMenu?: AppThreadMenu;
 }
 
 /** Below this width a pane's side panel lies over the conversation, and only in the active pane. */
@@ -175,6 +176,7 @@ function ThreadSessionView({
   agents,
   onLocalAgent,
   onSwitchOthers,
+  threadMenu,
 }: ThreadViewProps & { target: SessionTarget }) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -297,11 +299,7 @@ function ThreadSessionView({
     });
 
   const removeLocal = async () => {
-    const ok = await confirmAction(
-      machine
-        ? `Remove “${summary.title}” from LemonLime? The runner on ${machine} is stopped, and the thread's worktree and history there are removed. Your project there and the ${summary.branch} branch are not touched.`
-        : `Remove “${summary.title}” from LemonLime? The runner is stopped and the history cached in this app is cleared. Your repository and the ${summary.branch} branch are not touched.`,
-    );
+    const ok = await confirmAction(removeThreadText(summary, machine));
     if (ok) onRemoveLocal(summary.id);
   };
 
@@ -333,6 +331,26 @@ function ThreadSessionView({
     return () => window.removeEventListener("lemonlime:find", open);
   }, []);
   const timelineRef = useRef<HTMLDivElement>(null);
+  // Opened from a subagent in the sidebar: scroll to the row it started from.
+  const [revealChild, setRevealChild] = useState<string | null>(() => takeRevealChild(summary.id));
+  useEffect(() => {
+    const on = (e: Event) => {
+      const id = takeRevealChild(summary.id);
+      if (id && (e as CustomEvent<{ threadId: string }>).detail.threadId === summary.id) setRevealChild(id);
+    };
+    window.addEventListener(REVEAL_CHILD_EVENT, on);
+    return () => window.removeEventListener(REVEAL_CHILD_EVENT, on);
+  }, [summary.id]);
+  useEffect(() => {
+    if (!revealChild) return;
+    const key = childRowKey(session.events, revealChild);
+    // Not in the history yet: wait for it, unless the thread is already up to date.
+    if (!key) return void (session.state === "live" && setRevealChild(null));
+    const node = timelineRef.current?.querySelector<HTMLElement>(`[data-timeline-key="${key}"]`);
+    node?.scrollIntoView({ block: "center" });
+    flashItem(node);
+    setRevealChild(null);
+  }, [revealChild, session.events, session.state]);
   const [moving, setMoving] = useState<string | null>(null);
   const [showSignIn, setShowSignIn] = useState(false);
   // The cloud agent said it isn't signed in (and the user hasn't finished signing it in since).
@@ -555,9 +573,58 @@ function ThreadSessionView({
           };
 
   const compact = paneControls !== undefined;
-  const optionsMenu = (entry.mode === "local" || entry.mode === "cloud" || summary.agent.kind === "claude-code") && (
-    <Menu
-      align="end"
+  const [renaming, setRenaming] = useState(false);
+  const pr = git.pullRequest;
+  useEffect(() => rememberPullRequest(summary.id, pr?.url ?? null), [summary.id, pr?.url]);
+  const canPr = git.available && (git.status !== null || entry.mode === "cloud");
+  const noRemote = entry.mode === "local" && !git.status?.hasRemote;
+  const menuActions: ThreadMenuHandlers = {
+    ...threadMenu?.actions,
+    ...(threadMenu?.onRename && !compact ? { rename: () => setRenaming(true) } : {}),
+    ...(onOpenFolder ? { openFolder: onOpenFolder } : machine ? { openFolder: () => undefined } : {}),
+    ...(pr ? { pullRequest: () => void openExternal(pr.url) } : canPr ? { pullRequest: () => void git.openPullRequest() } : {}),
+    ...(AGENT_CAPABILITIES[summary.agent.kind].compact ? { compact: session.compact } : {}),
+    ...(onMove ? { move: () => void move() } : {}),
+    ...(entry.mode === "local" ? { remove: () => void removeLocal() } : {}),
+  };
+  const optionsMenu = (
+    <ThreadMenu
+      thread={summary}
+      state={{
+        mode: entry.mode,
+        pinned: threadMenu?.pinned ?? false,
+        unread: threadMenu?.unread ?? false,
+        archived: false,
+        inSplit: threadMenu?.inSplit ?? false,
+        editor: threadMenu?.editor ?? false,
+        pullRequest: pr ? "view" : canPr ? "open" : null,
+        disabled: {
+          ...(session.state !== "live" || working ? { compact: "" } : {}),
+          ...(!session.connection || working || moving !== null ? { move: "" } : {}),
+          ...(machine ? { "open-folder": "This computer only" } : {}),
+          ...(!pr && canPr && (noRemote || git.busy !== null) ? { "pull-request": noRemote ? "No remote" : "" } : {}),
+        },
+      }}
+      actions={menuActions}
+      extra={
+        entry.mode === "cloud" ? (
+          <>
+            {(summary.agent.kind === "claude-code" || summary.agent.kind === "codex") && (
+              <MenuItem icon={<KeyRound />} disabled={session.state !== "live"} onSelect={() => setShowSignIn(true)}>
+                Sign the agent in…
+              </MenuItem>
+            )}
+            <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
+              <MenuLabel>What the agent may do on this computer</MenuLabel>
+              <MenuChoice
+                value={computerLevel}
+                onChange={onComputerLevel}
+                options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
+              />
+            </SubMenu>
+          </>
+        ) : undefined
+      }
       trigger={
         <button
           type="button"
@@ -570,52 +637,7 @@ function ThreadSessionView({
           <Ellipsis aria-hidden="true" className={compact ? "size-3.5" : "size-4"} />
         </button>
       }
-    >
-      {summary.agent.kind === "claude-code" && (
-        <MenuItem icon={<Shrink />} disabled={session.state !== "live" || working} onSelect={session.compact}>
-          Compact conversation
-        </MenuItem>
-      )}
-      {onMove && (
-        <MenuItem
-          icon={entry.mode === "local" ? <CloudUpload /> : <Laptop />}
-          disabled={!session.connection || working || moving !== null}
-          onSelect={() => void move()}
-        >
-          {entry.mode === "local" ? "Move to the cloud" : "Move to this computer"}
-        </MenuItem>
-      )}
-      {entry.mode === "cloud" && (summary.agent.kind === "claude-code" || summary.agent.kind === "codex") && (
-        <MenuItem icon={<KeyRound />} disabled={session.state !== "live"} onSelect={() => setShowSignIn(true)}>
-          Sign the agent in…
-        </MenuItem>
-      )}
-      {entry.mode === "cloud" && (
-        <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
-          <MenuLabel>What the agent may do on this computer</MenuLabel>
-          <MenuChoice
-            value={computerLevel}
-            onChange={onComputerLevel}
-            options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
-          />
-        </SubMenu>
-      )}
-      {entry.mode === "local" && onOpenFolder && (
-        <MenuItem icon={<FolderOpen />} onSelect={onOpenFolder}>
-          Open in editor
-        </MenuItem>
-      )}
-      {machine && (
-        <MenuItem icon={<FolderOpen />} disabled hint="This computer only">
-          Open in editor
-        </MenuItem>
-      )}
-      {entry.mode === "local" && (
-        <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
-          Remove thread
-        </MenuItem>
-      )}
-    </Menu>
+    />
   );
   const panelToggle = (
     <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
@@ -655,7 +677,23 @@ function ThreadSessionView({
           <header data-tauri-drag-region className="@container/head flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
             {/* The title always keeps some room; buttons drop their words first (see @max-…/head). */}
             <div data-tauri-drag-region className="flex min-w-[120px] flex-1 items-center gap-2.5">
-              <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
+              {renaming && threadMenu?.onRename ? (
+                <RenameField
+                  className="max-w-[420px] text-[15px] font-semibold"
+                  initial={summary.title}
+                  onDone={title => {
+                    setRenaming(false);
+                    if (title && title !== summary.title) threadMenu.onRename?.(title);
+                  }}
+                />
+              ) : (
+                <h1
+                  className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink"
+                  onDoubleClick={threadMenu?.onRename ? () => setRenaming(true) : undefined}
+                >
+                  {summary.title}
+                </h1>
+              )}
               <span
                 className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex @max-[640px]/head:hidden"
                 title={summary.repo}

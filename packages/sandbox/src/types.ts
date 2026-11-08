@@ -49,6 +49,17 @@ export function launchCommand(runner: RunnerLaunch): string {
   return `sh -c ${quote(script)}`;
 }
 
+/**
+ * The runner's launch, wrapped so a root keeper keeps the thread secret and starts the
+ * setup script and the runner as `agentUser` without it (`lemonlime-runner keeper`). The
+ * command must start as root for this.
+ */
+export function keeperLaunch(threadId: string, agentUser: string, runner: RunnerLaunch): string {
+  if (!/^[a-z0-9][a-z0-9-]{5,63}$/.test(threadId)) throw new Error("That isn't a thread id.");
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(agentUser)) throw new Error(`"${agentUser}" isn't a user name the keeper can use.`);
+  return `lemonlime-runner keeper --thread ${threadId} --agent-user ${agentUser} -- sh -c ${quote(launchCommand(runner))}`;
+}
+
 export interface CreateSandboxOptions {
   threadId: string;
   size: SandboxSize;

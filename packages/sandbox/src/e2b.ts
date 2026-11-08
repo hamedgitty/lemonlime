@@ -1,8 +1,21 @@
 import type { SandboxSize } from "@lemonlime/protocol";
 import { defaultFetch, isStatus, requestJson, trimSlash, type FetchLike } from "./http.ts";
-import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
+import {
+  keeperLaunch,
+  launchCommand,
+  type CreateSandboxOptions,
+  type RunnerLaunch,
+  type SandboxInfo,
+  type SandboxProvider,
+  type SandboxState,
+} from "./types.ts";
 
 export interface E2BProviderOptions {
+  /**
+   * Run the agent as this user (the template's `agent`), apart from the thread secret: the
+   * runner is started as root through a keeper that starts it as this user.
+   */
+  agentUser?: string;
   apiKey: string;
   /**
    * E2B sets CPU and memory per template, so each size maps to a template you build
@@ -77,7 +90,8 @@ export class E2BProvider implements SandboxProvider {
       if (compareVersions(sandbox.envdVersion, "0.1.0") < 0) {
         throw new Error(`E2B template "${this.opts.templates[o.size]}" is too old (envd ${sandbox.envdVersion}); rebuild it`);
       }
-      await this.startCommand(sandbox, launchCommand(o.runner), o.runner.env);
+      const command = this.opts.agentUser ? keeperLaunch(o.threadId, this.opts.agentUser, o.runner) : launchCommand(o.runner);
+      await this.startCommand(sandbox, command, o.runner.env, this.opts.agentUser ? "root" : undefined);
     } catch (err) {
       // The caller never learns this id, so clean up rather than leave it running.
       await this.destroy(id).catch(() => undefined);
@@ -138,7 +152,7 @@ export class E2BProvider implements SandboxProvider {
    * `commands.run(cmd, { background: true })` followed by a disconnect: closing the
    * stream does not stop the process.
    */
-  private async startCommand(sandbox: E2BSandbox, command: string, envs: Record<string, string>): Promise<number> {
+  private async startCommand(sandbox: E2BSandbox, command: string, envs: Record<string, string>, asUser?: string): Promise<number> {
     const id = sandbox.sandboxID;
     const url = `https://${ENVD_PORT}-${id}.${sandbox.domain || this.domain}/process.Process/Start`;
     const headers: Record<string, string> = {
@@ -152,6 +166,8 @@ export class E2BProvider implements SandboxProvider {
     if (sandbox.envdAccessToken) headers["X-Access-Token"] = sandbox.envdAccessToken;
     // envd before 0.4.0 needs the user named; later versions default to the template's user.
     if (compareVersions(sandbox.envdVersion, "0.4.0") < 0) headers.Authorization = `Basic ${btoa("user:")}`;
+    // envd starts the process as the user named here (the keeper needs root).
+    if (asUser) headers.Authorization = `Basic ${btoa(`${asUser}:`)}`;
 
     const message = { process: { cmd: "/bin/bash", args: ["-l", "-c", command], envs }, stdin: false };
     const controller = new AbortController();

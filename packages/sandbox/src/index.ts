@@ -40,11 +40,13 @@ export function createSandboxProvider(env: Record<string, string | undefined>): 
         image,
         snapshot: env.DAYTONA_SNAPSHOT || undefined,
         snapshots: { small: env.DAYTONA_SNAPSHOT_SMALL || undefined, large: env.DAYTONA_SNAPSHOT_LARGE || undefined },
+        agentUser: env.DAYTONA_AGENT_USER || undefined,
       });
     case "e2b":
       return new E2BProvider({
         apiKey: need("E2B_API_KEY"),
         templates: { small: env.E2B_TEMPLATE_SMALL ?? image, large: env.E2B_TEMPLATE_LARGE ?? image },
+        agentUser: env.E2B_AGENT_USER || undefined,
       });
     default:
       throw new Error(`Unknown sandbox provider "${name}". Use docker, daytona or e2b.`);

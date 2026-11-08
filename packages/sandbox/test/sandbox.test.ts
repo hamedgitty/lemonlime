@@ -9,6 +9,8 @@ import {
   mapE2BState,
   runnerWsUrl,
   type RunnerLaunch,
+  keeperLaunch,
+  launchCommand,
 } from "../src/index.ts";
 import { envelope } from "../src/e2b.ts";
 
@@ -438,5 +440,59 @@ describe("E2BProvider", () => {
     await p.destroy("ib1");
     await p.destroy("gone");
     expect(calls.map(c => `${c.method} ${c.url}`)).toEqual([`DELETE ${API}/sandboxes/ib1`, `DELETE ${API}/sandboxes/gone`]);
+  });
+});
+
+describe("running the agent as its own user (keeper)", () => {
+  const API = "https://app.daytona.io/api";
+
+  it("hands the runner's command through a shell to the keeper unchanged", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const bin = mkdtempSync(join(tmpdir(), "fake-runner-"));
+    // A stand-in lemonlime-runner that prints the arguments it got, one per line.
+    writeFileSync(join(bin, "lemonlime-runner"), '#!/bin/sh\nfor a in "$@"; do printf "%s\\n---\\n" "$a"; done\n');
+    chmodSync(join(bin, "lemonlime-runner"), 0o755);
+    const tricky: RunnerLaunch = { ...runner, command: `lemonlime-runner --thread thread-k1 --repo 'it'"'"'s here' $HOME`, setupScript: "echo 'hi'; true" };
+    const out = execFileSync("sh", ["-c", keeperLaunch("thread-k1", "agent", tricky)], {
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    }).toString();
+    const args = out.split("\n---\n").filter(Boolean);
+    expect(args.slice(0, 7)).toEqual(["keeper", "--thread", "thread-k1", "--agent-user", "agent", "--", "sh"]);
+    expect(args[7]).toBe("-c");
+    expect(args[8]).toBe(launchCommand(tricky));
+  });
+
+  it("refuses names that would need quoting", () => {
+    expect(() => keeperLaunch("thread-k1", "agent; rm -rf /", runner)).toThrow();
+    expect(() => keeperLaunch("$(id)", "agent", runner)).toThrow();
+  });
+
+  it("Daytona: creates the sandbox as root and starts the runner through the keeper", async () => {
+    const { fetch, calls } = scriptedFetch([
+      json({ id: "sb9", state: "started", toolboxProxyUrl: "https://proxy.example/toolbox", labels: { "lemonlime.thread": "thread-k1" } }),
+      json({ sessionId: "lemonlime-runner" }),
+      json({ cmdId: "c1" }),
+      json({ sandboxId: "sb9", url: "https://7420-sb9.proxy.example", token: "t" }),
+    ]);
+    const p = new DaytonaProvider({ apiKey: "dk", image: "img", pollIntervalMs: 1, fetch, agentUser: "agent" });
+    await p.create({ threadId: "thread-k1", size: "small", runner });
+    expect(calls[0]!.body).toMatchObject({ user: "root" });
+    expect(calls[0]!.url).toBe(`${API}/sandbox`);
+    expect((calls[2]!.body as { command: string }).command).toBe(keeperLaunch("thread-k1", "agent", runner));
+  });
+
+  it("E2B: starts the keeper as root through envd", async () => {
+    const { fetch, calls } = scriptedFetch([
+      json({ sandboxID: "ib9", envdVersion: "0.5.4", envdAccessToken: "envd-tok", domain: null }, 201),
+      () => connectStream([{ message: { event: { start: { pid: 9 } } } }]),
+    ]);
+    const p = new E2BProvider({ apiKey: "ek", templates: { small: "s", large: "l" }, fetch, agentUser: "agent" });
+    await p.create({ threadId: "thread-k1", size: "small", runner });
+    expect(calls[1]!.headers.authorization).toBe(`Basic ${btoa("root:")}`);
+    expect(calls[1]!.headers["x-access-token"]).toBe("envd-tok");
+    expect(JSON.stringify(calls[1]!.body)).toContain("lemonlime-runner keeper --thread thread-k1 --agent-user agent");
   });
 });

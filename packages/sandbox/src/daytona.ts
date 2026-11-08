@@ -1,6 +1,14 @@
 import { SANDBOX_RESOURCES, type SandboxSize } from "@lemonlime/protocol";
 import { defaultFetch, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
-import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
+import {
+  keeperLaunch,
+  launchCommand,
+  type CreateSandboxOptions,
+  type RunnerLaunch,
+  type SandboxInfo,
+  type SandboxProvider,
+  type SandboxState,
+} from "./types.ts";
 
 export interface DaytonaProviderOptions {
   apiKey: string;
@@ -14,6 +22,11 @@ export interface DaytonaProviderOptions {
    * prefer `snapshots`, which keeps each size's CPU and memory.
    */
   snapshot?: string;
+  /**
+   * Run the agent as this user (the image's `agent`), apart from the thread secret: the
+   * sandbox's processes start as root and a keeper starts the runner as this user.
+   */
+  agentUser?: string;
   /** Optional Daytona snapshot per sandbox size (see `scripts/daytona-snapshots.mjs`). Wins over `snapshot`. */
   snapshots?: Partial<Record<SandboxSize, string>>;
   /**
@@ -44,6 +57,12 @@ interface DaytonaSandbox {
 }
 
 const DEFAULT_API_URL = "https://app.daytona.io/api";
+
+function threadOf(sandbox: DaytonaSandbox): string {
+  const id = sandbox.labels?.["lemonlime.thread"];
+  if (!id) throw new Error(`Daytona sandbox ${sandbox.id} has no thread label, so its keeper can't start`);
+  return id;
+}
 const RUNNER_SESSION = "lemonlime-runner";
 const RUNNER_PORT_LABEL = "lemonlime.runner-port";
 const FAILED_STATES = new Set(["error", "build_failed"]);
@@ -76,6 +95,8 @@ export class DaytonaProvider implements SandboxProvider {
         };
     let sandbox = await this.api<DaytonaSandbox>("POST", "/sandbox", {
       ...source,
+      // The keeper needs to start as root (see agentUser).
+      ...(this.opts.agentUser ? { user: "root" } : {}),
       env: o.runner.env,
       labels: { "lemonlime.thread": o.threadId, ...o.labels },
       // The runner checks a signed token on every connection, so the port can be public.
@@ -142,7 +163,7 @@ export class DaytonaProvider implements SandboxProvider {
     // The session survives between calls; creating it again just fails, which is fine.
     await this.request("POST", `${base}/process/session`, { sessionId: RUNNER_SESSION }).catch(() => undefined);
     await this.request("POST", `${base}/process/session/${enc(RUNNER_SESSION)}/exec`, {
-      command: launchCommand(runner),
+      command: this.opts.agentUser ? keeperLaunch(threadOf(sandbox), this.opts.agentUser, runner) : launchCommand(runner),
       runAsync: true,
     });
   }

@@ -33,7 +33,10 @@ back (still `no-new-privileges`), and runs `lemonlime-runner keeper --thread <id
 script and the runner as `agent` without it. The runner asks the keeper over a local socket
 to check tokens and to sign its own short runner tokens; the keeper never signs a token for
 the user's apps. As root, the keeper's memory and environment are out of the agent's reach,
-and so is the secret. Daytona and E2B don't use this yet.
+and so is the secret. Daytona (`DAYTONA_AGENT_USER=agent`: the sandbox is created with
+`user: "root"`) and E2B (`E2B_AGENT_USER=agent`: envd starts the keeper as root) have the
+same switch and start the runner through the keeper the same way. Those two haven't been
+tried on a real sandbox yet, so try one thread before turning it on for everyone.
 
 ## Lifecycle
 

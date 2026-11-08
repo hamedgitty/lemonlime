@@ -5,8 +5,8 @@ import type { AutomationInfo, AutomationRun, CloudApi } from "../lib/cloud.ts";
 import { AGENT_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { CopyButton } from "../lib/markdown.tsx";
 import { confirmAction } from "../lib/native.ts";
-import { Tabs } from "./settings/parts.tsx";
-import { Button, SegmentedControl, Spinner, TextInput, cx } from "./ui.tsx";
+import { PageTabs } from "./primitives.tsx";
+import { Button, SegmentedControl, SkeletonRows, TextInput, cx } from "./ui.tsx";
 
 const PRESETS = [
   { label: "Weekdays 9:00", cron: "0 9 * * 1-5" },
@@ -331,18 +331,17 @@ function Header({
           </Button>
         )}
       </div>
-      <div className="-mb-px [&>div]:mb-0 [&>div]:border-b-0">
-        <Tabs
-          value={tab}
-          onChange={onTab}
-          tabs={[
-            { id: "overview", label: "Overview" },
-            { id: "review", label: "Review", ...(toReview ? { count: toReview } : {}) },
-            { id: "templates", label: "Templates", count: TEMPLATES.length },
-            ...(hasScans ? [{ id: "scans" as const, label: "Scans" }] : []),
-          ]}
-        />
-      </div>
+      <PageTabs
+        label="Automations"
+        value={tab}
+        onChange={onTab}
+        tabs={[
+          { id: "overview", label: "Overview" },
+          { id: "review", label: "Review", ...(toReview ? { count: toReview, attention: true } : {}) },
+          { id: "templates", label: "Templates", count: TEMPLATES.length },
+          ...(hasScans ? [{ id: "scans" as const, label: "Scans" }] : []),
+        ]}
+      />
     </header>
   );
 }
@@ -366,12 +365,7 @@ function Overview({
   cloudApi: CloudApi;
   onChanged: (id: string, patch: Partial<AutomationInfo>) => void;
 }) {
-  if (list === null)
-    return (
-      <p className="flex items-center gap-2 text-[14px] text-ink-soft">
-        <Spinner /> Loading…
-      </p>
-    );
+  if (list === null) return <SkeletonRows rows={4} label="Loading automations" />;
   if (list.length === 0)
     return (
       <div className="rounded-2xl border border-dashed border-line-strong px-6 py-10 text-center">
@@ -650,11 +644,7 @@ function Review({
           Mark all reviewed
         </Button>
       </div>
-      {list === null && (
-        <p className="flex items-center gap-2 text-[14px] text-ink-soft">
-          <Spinner /> Loading…
-        </p>
-      )}
+      {list === null && <SkeletonRows rows={4} label="Loading runs" />}
       {list !== null && runs.length === 0 && (
         <div className="rounded-2xl border border-dashed border-line-strong px-6 py-10 text-center">
           <p className="text-[15px] font-medium">{show === "todo" ? "All caught up" : "Nothing yet"}</p>

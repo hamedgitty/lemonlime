@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { AGENT_CAPABILITIES, ReasoningLevel, type AgentKind, type RunnerCapabilities } from "@lemonlime/protocol";
+import { AGENT_CAPABILITIES, ReasoningLevel, type AgentKind, type PermissionMode, type RunnerCapabilities } from "@lemonlime/protocol";
 import { ATTACHMENT_CHUNK_BYTES, MAX_FILE_BYTES, MAX_IMAGE_BYTES } from "./attachments.ts";
 
 /** Codex keeps the models the account can use in a cache; read it when it's there. */
@@ -34,7 +34,10 @@ export function codexModels(
   }
 }
 
-export function capabilitiesFor(kind: AgentKind, opts: { agentVersion: string | null; model?: string; reasoning?: string }): RunnerCapabilities {
+export function capabilitiesFor(
+  kind: AgentKind,
+  opts: { agentVersion: string | null; model?: string; reasoning?: string; permission?: PermissionMode },
+): RunnerCapabilities {
   const base = AGENT_CAPABILITIES[kind];
   const codex = kind === "codex" ? codexModels() : null;
   const reasoning = ReasoningLevel.safeParse(opts.reasoning);
@@ -47,5 +50,9 @@ export function capabilitiesFor(kind: AgentKind, opts: { agentVersion: string | 
     compact: base.compact,
     model: opts.model ?? null,
     reasoningLevel: reasoning.success ? reasoning.data : null,
+    permission: opts.permission ?? "edits",
+    permissions: base.permissions,
+    live: base.live,
+    questions: base.questions,
   };
 }

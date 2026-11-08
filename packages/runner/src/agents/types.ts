@@ -1,14 +1,24 @@
-import type { AgentCommand, AgentKind, NewEvent } from "@lemonlime/protocol";
+import type { AgentCommand, AgentKind, NewEvent, Question } from "@lemonlime/protocol";
 import type { McpServerConfig } from "../agent-plugins.ts";
 import type { ApprovalDecision, ApprovalRequest } from "../approvals.ts";
 
 /**
- * How much the agent may do without asking.
- * - full:  run any command and edit any file (use inside isolated sandboxes)
- * - edits: edit files freely, but the agent's own safety rules apply to commands
+ * How much the agent may do without asking (the permission modes, plus `read`).
+ * - full:  anything (use inside isolated sandboxes)
+ * - edits: edits files freely, asks before the rest (most importantly, running commands)
+ * - ask:   asks before editing files too
+ * - plan:  looks around and proposes a plan; changes nothing
+ * - read:  looks, never changes anything, and nobody is asked (side chats)
  */
-/** `full`: anything. `edits`: edits files, asks before the rest. `read`: looks, never changes anything (side chats). */
-export type Autonomy = "full" | "edits" | "read";
+export type Autonomy = "full" | "edits" | "ask" | "plan" | "read";
+
+/** What can change between turns of one agent session (see AgentSession.setOptions). */
+export interface SessionChange {
+  /** null: the agent's own default. */
+  model?: string | null;
+  reasoning?: string | null;
+  autonomy?: Autonomy;
+}
 
 export interface SessionOptions {
   cwd: string;
@@ -43,6 +53,11 @@ export interface TurnContext {
    * time or the turn ends first. Without it, anything that needs asking is denied.
    */
   requestApproval?(req: ApprovalRequest): Promise<ApprovalDecision>;
+  /**
+   * Ask the user multiple-choice questions and wait. Resolves to one list of answers per
+   * question (picked labels, or typed text), or null if nobody answered or the turn ended.
+   */
+  askQuestions?(questions: Question[]): Promise<string[][] | null>;
 }
 
 export interface AgentSession {
@@ -50,6 +65,11 @@ export interface AgentSession {
   runTurn(ctx: TurnContext): Promise<void>;
   /** State worth persisting so a restarted runner can continue the same agent session. */
   saveState(): Record<string, string>;
+  /**
+   * Use a different model, reasoning level or autonomy from the next turn, in the same
+   * conversation. Sessions without it are started again (from their saved state) instead.
+   */
+  setOptions?(change: SessionChange): void;
   dispose(): Promise<void>;
   /** Slash commands the agent said it understands, if it says (shown in the composer's `/` menu). */
   commands?(): AgentCommand[];
@@ -140,6 +160,50 @@ export function turnFailure(reason: string | null, processError?: unknown, known
     return new AgentError(reason, code, resetAt ?? undefined);
   }
   return processError instanceof Error ? processError : processError === undefined ? null : new AgentError(String(processError));
+}
+
+/** Apply a change to a session's options in place. */
+export function applyChange(opts: SessionOptions, change: SessionChange): void {
+  if (change.model !== undefined) {
+    if (change.model === null) delete opts.model;
+    else opts.model = change.model;
+  }
+  if (change.reasoning !== undefined) {
+    if (change.reasoning === null) delete opts.reasoning;
+    else opts.reasoning = change.reasoning;
+  }
+  if (change.autonomy) opts.autonomy = change.autonomy;
+}
+
+/** What agents without a plan mode of their own are told in plan mode. */
+export const PLAN_INSTRUCTIONS =
+  "You are in plan mode: don't change any files and don't run anything that changes something. Look around as much as you need, then reply with your plan as Markdown: the steps you'd take and the files you'd change. The user reads it and tells you when to go ahead.";
+
+/**
+ * In plan mode the agent's last message is its plan. Passes events through, holding back
+ * each whole agent message until something follows it; at the end of a turn that finished,
+ * the one still held becomes a `plan_proposal`.
+ */
+export class PlanHold {
+  private held: NewEvent | null = null;
+  constructor(private readonly emit: (e: NewEvent) => void) {}
+
+  push(e: NewEvent): void {
+    if (e.type === "agent_message" && e.partial) return; // plans arrive whole
+    if (this.held) this.emit(this.held);
+    this.held = null;
+    if (e.type === "agent_message") this.held = e;
+    else this.emit(e);
+  }
+
+  /** `finished`: the turn ended normally, so the held message is the plan. */
+  end(finished: boolean): void {
+    const held = this.held;
+    this.held = null;
+    if (!held || held.type !== "agent_message") return;
+    if (finished && held.text.trim()) this.emit({ type: "plan_proposal", plan: held.text.trim() });
+    else this.emit(held);
+  }
 }
 
 /** Notice for an output line the agent printed that was too long to keep. */

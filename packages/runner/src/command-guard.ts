@@ -1,7 +1,8 @@
 /**
  * Blocks the few shell commands that destroy a computer rather than a project: deleting
- * the root or home folder, wiping or reformatting a disk, and fork bombs. Everything else
- * is the agent's business. Used as a Claude Code PreToolUse hook
+ * the root or home folder, wiping or reformatting a disk, and fork bombs. Also deleting a
+ * whole GitHub repository, which no branch or backup brings back. Everything else is the
+ * agent's business. Used as a Claude Code PreToolUse hook
  * (`lemonlime-runner command-guard`); a thread can turn it off.
  */
 
@@ -47,6 +48,9 @@ export function dangerousCommand(command: string): string | null {
       (name === "diskutil" && /^(eraseDisk|eraseVolume|reformat|zeroDisk|randomDisk|secureErase|partitionDisk)$/i.test(args[0] ?? ""))
     ) {
       return "Formatting or erasing a disk is blocked.";
+    }
+    if (name === "gh" && args.filter(a => !a.startsWith("-"))[0] === "repo" && args.filter(a => !a.startsWith("-"))[1] === "delete") {
+      return "Deleting a GitHub repository is blocked: it can't be undone.";
     }
     if (name === "dd" && args.some(a => /^of=\/dev\/(?!null$|zero$|stdout$|stderr$)/.test(a))) return "Writing straight to a disk device is blocked.";
     if (/^(shred|wipefs)$/.test(name) && args.some(a => a.startsWith("/dev/"))) return "Wiping a disk device is blocked.";

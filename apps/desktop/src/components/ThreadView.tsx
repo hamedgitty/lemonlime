@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpCircle,
-  Bot,
   Cloud,
   CloudUpload,
   Ellipsis,
@@ -25,7 +24,15 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
+import {
+  agentLoopState,
+  AGENT_CAPABILITIES,
+  IMPLEMENT_PLAN_PROMPT,
+  modeAfterPlan,
+  type PolicyDenied,
+  type ThreadOptions,
+  type ThreadStatus,
+} from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
@@ -49,6 +56,7 @@ import { DiffView } from "./DiffView.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
 import { clampPanelWidth, loadPanelWidth, saveDraft, savePanelWidth, THREAD_PANEL } from "../lib/storage.ts";
+import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
@@ -129,8 +137,8 @@ function ThreadSessionView({
   });
   const summary = summarize(entry, runnerUp);
   const items = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
-  // The agent is waiting on an approval: tell the person if they aren't looking.
-  const waiting = items.filter(i => i.kind === "approval" && i.state === "waiting").map(i => i.key);
+  // The agent is waiting on an approval or a question: tell the person if they aren't looking.
+  const waiting = items.filter(i => (i.kind === "approval" || i.kind === "question") && i.state === "waiting").map(i => i.key);
   const told = useRef(new Set<string>());
   const waitingKey = waiting.join(",");
   useEffect(() => {
@@ -153,6 +161,14 @@ function ThreadSessionView({
   // While connected the runner is the source of truth; otherwise the control plane (cloud) is.
   const liveStatus: ThreadStatus | null = entry.mode === "cloud" ? (connected ? (session.status ?? entry.thread.status) : entry.thread.status) : session.status;
   const working = liveStatus === "running" && connected;
+  // To-dos, an open question, the context meter and the thread's current options.
+  const loop = useMemo(() => agentLoopState(session.events), [session.events]);
+  const threadOptions: ThreadOptions = session.options ??
+    loop.options ?? { model: summary.agent.model ?? null, reasoning: summary.agent.reasoning ?? null, permission: entry.mode === "cloud" ? "full" : "edits" };
+  const implementPlan = () => {
+    session.setOptions({ permission: modeAfterPlan(threadOptions) });
+    session.send(IMPLEMENT_PLAN_PROMPT);
+  };
   // The runner says the installed agent is older than the version LemonLime is tested with.
   const outdated = useMemo(() => {
     const e = [...session.events].reverse().find(x => x.type === "notice" && x.code === "agent_older_than_tested");
@@ -526,6 +542,7 @@ function ThreadSessionView({
             onApprove={session.approve}
             onEditQueued={session.editQueued}
             onRewind={rewindTo}
+            onImplementPlan={session.state === "live" ? implementPlan : undefined}
           />
           {find !== null && <FindBar root={timelineRef} version={items} focusNonce={find} onClose={() => setFind(null)} />}
           <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} />
@@ -550,6 +567,14 @@ function ThreadSessionView({
           }}
         >
           <div ref={composerWrap} className="mx-auto max-w-[760px]">
+            {loop.question && (
+              <QuestionCard
+                key={loop.question.requestId}
+                request={loop.question}
+                onAnswer={session.state === "live" ? answers => session.answerQuestion(loop.question!.requestId, answers) : undefined}
+              />
+            )}
+            {loop.todos && <TodoCard items={loop.todos} />}
             {git.available && <GitStrip git={git} onOpenChanges={showChanges} />}
             {files.items.length > 0 && (
               <ul aria-label="Attached files" className="mb-2 flex flex-wrap gap-1.5">
@@ -599,7 +624,7 @@ function ThreadSessionView({
               working={working}
               disabled={composerDisabled}
               tools={
-                <span className="flex min-w-0 items-center gap-3 px-1 text-[13.5px] text-ink-soft">
+                <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[13.5px] text-ink-soft">
                   <Tip label="Attach files (or drop or paste them)">
                     <button
                       type="button"
@@ -611,15 +636,34 @@ function ThreadSessionView({
                       <Paperclip aria-hidden="true" className="size-4" />
                     </button>
                   </Tip>
-                  <span className="inline-flex items-center gap-1.5">
-                    <Bot aria-hidden="true" className="size-4" />
-                    {AGENT_LABELS[summary.agent.kind]}
-                    {summary.agent.model ? <span className="text-ink-faint">{summary.agent.model}</span> : null}
-                  </span>
+                  <ModelPicker
+                    kind={summary.agent.kind}
+                    options={threadOptions}
+                    working={working}
+                    disabled={session.state !== "live"}
+                    onChange={session.setOptions}
+                  />
+                  <PermissionPicker
+                    kind={summary.agent.kind}
+                    value={threadOptions.permission}
+                    working={working}
+                    disabled={session.state !== "live"}
+                    onChange={permission => session.setOptions({ permission })}
+                  />
                   <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[12.5px]">
                     <GitBranch aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />
                     <span className="truncate">{summary.branch}</span>
                   </span>
+                  {loop.usage && (
+                    <span className="ml-auto">
+                      <ContextMeter
+                        usage={loop.usage}
+                        canCompact={AGENT_CAPABILITIES[summary.agent.kind].compact}
+                        compactDisabled={session.state !== "live" || working}
+                        onCompact={session.compact}
+                      />
+                    </span>
+                  )}
                 </span>
               }
               disabledReason={

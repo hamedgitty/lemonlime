@@ -80,8 +80,42 @@ async function argsFor(kind: "claude-code" | "codex", session: Record<string, un
   runner.sendMessage("hello");
   await runner.settled();
   await runner.close();
-  return JSON.parse(readFileSync(out, "utf8")) as { args: string[]; gitConfig: string | null };
+  return JSON.parse(readFileSync(out, "utf8")) as { args: string[]; stdin: string | null; gitConfig: string | null };
 }
+
+describe("prompts", () => {
+  it("reach Claude Code and Codex on stdin, never as a flag", async () => {
+    for (const kind of ["claude-code", "codex"] as const) {
+      const out = join(temp(), "args.json");
+      const runner = new ThreadRunner({
+        thread: thread(`prompt-${kind}-1`, kind),
+        workdir: temp(),
+        dataDir: null,
+        adapter: adapterFor(kind),
+        session: { autonomy: "full", command: ["node", join(here, "fixtures", "print-args.mjs")], env: { ARGS_OUT: out }, subagents: false },
+        git: false,
+        bundledSkills: false,
+      });
+      await runner.init();
+      runner.sendMessage("--help me fix the build");
+      await runner.settled();
+      const first = JSON.parse(readFileSync(out, "utf8")) as { args: string[]; stdin: string | null };
+      expect(first.stdin, kind).toBe("--help me fix the build");
+      expect(first.args, kind).not.toContain("--help me fix the build");
+      if (kind === "codex") expect(first.args.at(-1)).toBe("-");
+      else expect(first.args[first.args.indexOf("-p") + 1]).toBe("--output-format");
+
+      // Far past what one command-line argument may hold on Linux (128 KiB).
+      const long = `- ${"word ".repeat(60_000)}`;
+      runner.sendMessage(long);
+      await runner.settled();
+      const second = JSON.parse(readFileSync(out, "utf8")) as { args: string[]; stdin: string | null };
+      expect(second.stdin?.length, kind).toBe(long.length);
+      expect(second.args.join(" ").length, kind).toBeLessThan(20_000);
+      await runner.close();
+    }
+  });
+});
 
 describe("custom instructions", () => {
   it("join Claude Code's system prompt and Codex's developer instructions", async () => {

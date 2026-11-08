@@ -28,21 +28,26 @@ function summarize(tool: string, input: Json): string {
 async function ask(url: string, token: string, args: { tool_name?: unknown; input?: unknown } | undefined) {
   const tool = String(args?.tool_name ?? "tool");
   const input = (args?.input && typeof args.input === "object" ? args.input : {}) as Json;
-  let decision = "deny";
+  let reply: { decision?: string; updatedInput?: unknown; message?: unknown } = { decision: "deny" };
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ tool, input, summary: summarize(tool, input) }),
     });
-    if (res.ok) decision = ((await res.json()) as { decision?: string }).decision === "allow" ? "allow" : "deny";
+    if (res.ok) reply = (await res.json()) as typeof reply;
   } catch {
-    decision = "deny";
+    reply = { decision: "deny" };
   }
+  // The runner may fill in the input (a question's answers) or say why it was refused.
+  const updated = reply.updatedInput && typeof reply.updatedInput === "object" ? reply.updatedInput : input;
   const answer =
-    decision === "allow"
-      ? { behavior: "allow", updatedInput: input }
-      : { behavior: "deny", message: "The user did not allow this. Ask them, or try another way." };
+    reply.decision === "allow"
+      ? { behavior: "allow", updatedInput: updated }
+      : {
+          behavior: "deny",
+          message: typeof reply.message === "string" && reply.message ? reply.message : "The user did not allow this. Ask them, or try another way.",
+        };
   return { content: [{ type: "text", text: JSON.stringify(answer) }] };
 }
 

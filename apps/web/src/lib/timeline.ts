@@ -9,7 +9,11 @@ export type TimelineItem =
   | { kind: "status"; key: string; event: EventOf<"status_change"> }
   | { kind: "error"; key: string; event: EventOf<"error"> }
   | { kind: "notice"; key: string; event: EventOf<"notice"> }
-  | { kind: "approval"; key: string; request: EventOf<"approval_request">; result: EventOf<"approval_result"> | null };
+  | { kind: "approval"; key: string; request: EventOf<"approval_request">; result: EventOf<"approval_result"> | null }
+  /** A plan from plan mode; `open` while nothing has been sent after it. */
+  | { kind: "plan"; key: string; event: EventOf<"plan_proposal">; open: boolean }
+  /** The agent's questions (answered in the form above the composer) and what came of them. */
+  | { kind: "question"; key: string; request: EventOf<"question_request">; result: EventOf<"question_result"> | null };
 
 export interface PendingMessage {
   clientMsgId: string;
@@ -30,6 +34,8 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   const tools = new Map<string, Extract<TimelineItem, { kind: "tool" }>>();
   const echoed = new Set<string>();
   const approvals = new Map<string, Extract<TimelineItem, { kind: "approval" }>>();
+  const questions = new Map<string, Extract<TimelineItem, { kind: "question" }>>();
+  let lastPlan: Extract<TimelineItem, { kind: "plan" }> | null = null;
   let streaming: Extract<TimelineItem, { kind: "agent" }> | null = null;
 
   let queue: EventOf<"queue_update">["queue"] = [];
@@ -39,9 +45,12 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
       queue = e.queue;
       continue;
     }
+    // Neither do these, which show around the composer rather than in the timeline.
+    if (e.type === "todo_snapshot" || e.type === "context_usage" || e.type === "options_change") continue;
     if (e.type !== "agent_message") streaming = null;
     switch (e.type) {
       case "user_message":
+        if (lastPlan) lastPlan.open = false;
         if (e.clientMsgId) echoed.add(e.clientMsgId);
         items.push({ kind: "user", key: `e${e.seq}`, text: e.text, at: e.at });
         break;
@@ -103,6 +112,22 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
       }
       case "approval_result": {
         const item = approvals.get(e.requestId);
+        if (item) item.result = e;
+        break;
+      }
+      case "plan_proposal":
+        if (lastPlan) lastPlan.open = false;
+        lastPlan = { kind: "plan", key: `e${e.seq}`, event: e, open: true };
+        items.push(lastPlan);
+        break;
+      case "question_request": {
+        const item = { kind: "question" as const, key: `e${e.seq}`, request: e, result: null as EventOf<"question_result"> | null };
+        questions.set(e.requestId, item);
+        items.push(item);
+        break;
+      }
+      case "question_result": {
+        const item = questions.get(e.requestId);
         if (item) item.result = e;
         break;
       }

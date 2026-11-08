@@ -1,4 +1,4 @@
-import { rewindMessage, withoutRewound, type EventOf, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
+import { rewindMessage, withoutRewound, type EventOf, type Question, type ThreadEvent, type ThreadOptions, type ThreadStatus } from "@lemonlime/protocol";
 
 /** A message the user sent that the runner has not echoed back yet. */
 export interface PendingMessage {
@@ -56,7 +56,22 @@ export type TimelineItem =
       /** "waiting" until the user (or a timeout) decides. */
       state: "waiting" | "allowed" | "denied";
       by?: "user" | "timeout" | "interrupted" | "expired";
-    };
+    }
+  /** A plan from plan mode; `open` while no message has followed it. */
+  | { kind: "plan"; key: string; seq: number; at: string; plan: string; open: boolean }
+  /** The agent's questions; answered in the form above the composer, recorded here. */
+  | {
+      kind: "question";
+      key: string;
+      seq: number;
+      at: string;
+      requestId: string;
+      questions: Question[];
+      answers: string[][] | null;
+      state: "waiting" | "answered" | "declined";
+      by?: "user" | "timeout" | "interrupted" | "expired";
+    }
+  | { kind: "options"; key: string; seq: number; at: string; options: ThreadOptions };
 
 /**
  * Turns an event history into what the thread view shows:
@@ -73,6 +88,9 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   const items: TimelineItem[] = [];
   const toolIndex = new Map<string, number>();
   const approvalIndex = new Map<string, number>();
+  const questionIndex = new Map<string, number>();
+  let lastPlan = -1;
+  let lastUserSeq = 0;
   const confirmed = new Set<string>();
   let queue: EventOf<"queue_update">["queue"] = [];
   let lastSeq = 0;
@@ -101,6 +119,8 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
       queue = ev.queue;
       continue;
     }
+    // Neither do the to-do list and the context meter, which show above the composer.
+    if (ev.type === "todo_snapshot" || ev.type === "context_usage") continue;
 
     // Any other event ends a streaming message.
     if (openAgent >= 0) {
@@ -111,6 +131,7 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
 
     switch (ev.type) {
       case "user_message":
+        lastUserSeq = ev.seq;
         if (ev.clientMsgId) confirmed.add(ev.clientMsgId);
         items.push({
           kind: "user",
@@ -213,6 +234,36 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         }
         break;
       }
+      case "plan_proposal":
+        lastPlan = items.length;
+        items.push({ kind: "plan", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, plan: ev.plan, open: false });
+        break;
+      case "question_request":
+        questionIndex.set(ev.requestId, items.length);
+        items.push({
+          kind: "question",
+          key: `e${ev.seq}`,
+          seq: ev.seq,
+          at: ev.at,
+          requestId: ev.requestId,
+          questions: ev.questions,
+          answers: null,
+          state: "waiting",
+        });
+        break;
+      case "question_result": {
+        const i = questionIndex.get(ev.requestId);
+        const item = i === undefined ? undefined : items[i];
+        if (item?.kind === "question") {
+          item.state = ev.answers ? "answered" : "declined";
+          item.answers = ev.answers;
+          item.by = ev.by;
+        }
+        break;
+      }
+      case "options_change":
+        items.push({ kind: "options", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, options: ev.options });
+        break;
       case "error":
         items.push({
           kind: "error",
@@ -226,6 +277,10 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         break;
     }
   }
+
+  // Only the latest plan can still be approved, and only until the user replies.
+  const plan = lastPlan >= 0 ? items[lastPlan] : undefined;
+  if (plan?.kind === "plan") plan.open = plan.seq > lastUserSeq;
 
   const queuedIds = new Set<string>();
   const waiting = queue.filter(q => !confirmed.has(q.clientMsgId));
@@ -330,7 +385,8 @@ export function foldFinishedTurns(items: readonly TimelineItem[]): Array<Timelin
       break;
     }
     const lastAgent = turn.map(it => it.kind).lastIndexOf("agent");
-    const keep = (it: TimelineItem, i: number) => i === 0 || i === lastAgent || it.kind === "error" || it.kind === "approval";
+    const keep = (it: TimelineItem, i: number) =>
+      i === 0 || i === lastAgent || it.kind === "error" || it.kind === "approval" || it.kind === "plan" || it.kind === "question";
     const folded = turn.filter((it, i) => !keep(it, i));
     out.push(turn[0]!);
     if (folded.length > 1) out.push({ kind: "fold", key: `fold:${turn[0]!.key}`, items: folded });

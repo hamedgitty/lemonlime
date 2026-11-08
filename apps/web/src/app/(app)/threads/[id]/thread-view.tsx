@@ -4,7 +4,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { RunnerClient, type ConnectionState } from "@lemonlime/client";
-import type { PolicyDenied, Thread, ThreadEvent, ThreadHistoryResponse } from "@lemonlime/protocol";
+import {
+  agentLoopState,
+  AGENT_CAPABILITIES,
+  IMPLEMENT_PLAN_PROMPT,
+  modeAfterPlan,
+  type PolicyDenied,
+  type Thread,
+  type ThreadEvent,
+  type ThreadHistoryResponse,
+  type ThreadOptions,
+} from "@lemonlime/protocol";
 import { DeniedNotice } from "@/components/denied-notice.tsx";
 import { AGENT_LABELS, StatusPill, repoName } from "@/components/status-pill.tsx";
 import { apiFetch } from "@/lib/api-client.ts";
@@ -12,6 +22,7 @@ import type { ThreadResponse } from "@/lib/threads.ts";
 import { addEvent, buildTimeline, type PendingMessage } from "@/lib/timeline.ts";
 import { SignInPanel, type LoginUpdate } from "./sign-in-panel.tsx";
 import { Timeline } from "./timeline.tsx";
+import { ContextMeter, OptionsControls, QuestionForm, TodoCard } from "./agent-loop.tsx";
 
 type Conn = ConnectionState | "offline";
 
@@ -41,6 +52,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   const [draft, setDraft] = useState("");
   const [login, setLogin] = useState<LoginUpdate | null>(null);
   const [showSignIn, setShowSignIn] = useState(false);
+  const [options, setOptions] = useState<ThreadOptions | null>(null);
 
   const clientRef = useRef<RunnerClient | null>(null);
   const tokenRef = useRef<{ token: string; expiresAt: string } | null>(
@@ -91,8 +103,12 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
         eventsRef.current = addEvent(eventsRef.current, event);
         setEvents(eventsRef.current);
         if (event.type === "status_change") setThread(t => ({ ...t, status: event.to }));
+        if (event.type === "options_change") setOptions(event.options);
       },
-      onWelcome: runnerThread => setThread(t => ({ ...t, status: runnerThread.status })),
+      onWelcome: (runnerThread, _latestSeq, current) => {
+        setThread(t => ({ ...t, status: runnerThread.status }));
+        if (current) setOptions(current);
+      },
       onState: state => {
         setConn(state);
         if (state !== "live") return;
@@ -228,6 +244,19 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   }
 
   const items = useMemo(() => buildTimeline(events, pending), [events, pending]);
+  // To-dos, an open question, the context meter and the thread's current options.
+  const loop = useMemo(() => agentLoopState(events), [events]);
+  const threadOptions: ThreadOptions = options ??
+    loop.options ?? { model: thread.agent.model ?? null, reasoning: thread.agent.reasoning ?? null, permission: isCloud ? "full" : "edits" };
+  const live = conn === "live";
+  function implementPlan() {
+    const client = clientRef.current;
+    if (!client) return;
+    client.setOptions({ permission: modeAfterPlan(threadOptions) });
+    const clientMsgId = crypto.randomUUID();
+    setPending(p => [...p, { clientMsgId, text: IMPLEMENT_PLAN_PROMPT, at: new Date().toISOString() }]);
+    client.send(IMPLEMENT_PLAN_PROMPT, clientMsgId);
+  }
   // The agent isn't signed in: offer the sign-in panel.
   const needsSignIn = isCloud && events.some(e => e.type === "error" && e.code === "auth_required") && login?.state !== "done";
 
@@ -350,13 +379,21 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
             {items.length === 0 ? (
               <EmptyState status={thread.status} connected={conn === "live"} />
             ) : (
-              <Timeline items={items} onApprove={(id, d) => clientRef.current?.approve(id, d)} />
+              <Timeline items={items} onApprove={(id, d) => clientRef.current?.approve(id, d)} onImplementPlan={live ? implementPlan : undefined} />
             )}
             <div ref={bottomRef} />
           </section>
 
           {!closed && (
             <form onSubmit={send} className="sticky bottom-0 -mx-5 border-t border-line bg-cream/95 px-5 pb-5 pt-3 backdrop-blur">
+              {loop.question && (
+                <QuestionForm
+                  key={loop.question.requestId}
+                  request={loop.question}
+                  onAnswer={live ? answers => clientRef.current?.answerQuestion(loop.question!.requestId, answers) : undefined}
+                />
+              )}
+              {loop.todos && <TodoCard items={loop.todos} />}
               <label htmlFor="composer" className="sr-only">
                 Message the agent
               </label>
@@ -374,7 +411,26 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
                   {canResume ? "Resume and send" : "Send"}
                 </button>
               </div>
-              <p className="mt-1.5 px-1 text-xs text-muted">Enter to send, Shift+Enter for a new line.</p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 px-1">
+                <OptionsControls
+                  kind={thread.agent.kind}
+                  options={threadOptions}
+                  working={isRunning}
+                  disabled={!live}
+                  onChange={change => clientRef.current?.setOptions(change)}
+                />
+                <p className="text-xs text-muted">Enter to send, Shift+Enter for a new line.</p>
+                {loop.usage && (
+                  <div className="ml-auto">
+                    <ContextMeter
+                      usage={loop.usage}
+                      canCompact={AGENT_CAPABILITIES[thread.agent.kind].compact}
+                      compactDisabled={!live || isRunning}
+                      onCompact={() => clientRef.current?.compact()}
+                    />
+                  </div>
+                )}
+              </div>
             </form>
           )}
         </>

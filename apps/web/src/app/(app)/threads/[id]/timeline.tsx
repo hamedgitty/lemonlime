@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { EventOf } from "@lemonlime/protocol";
 import { diffLines, type DiffLineKind, type TimelineItem } from "@/lib/timeline.ts";
+import { PlanCard, QuestionRecord } from "./agent-loop.tsx";
 
 const MAX_OUTPUT_CHARS = 20_000;
 
@@ -38,12 +39,12 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-di
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
 
-export function Timeline({ items, onApprove }: { items: TimelineItem[]; onApprove?: ApproveFn }) {
+export function Timeline({ items, onApprove, onImplementPlan }: { items: TimelineItem[]; onApprove?: ApproveFn; onImplementPlan?: (() => void) | undefined }) {
   return (
     <ol className="space-y-4">
       {items.map(item => (
         <li key={item.key}>
-          <Item item={item} onApprove={onApprove} />
+          <Item item={item} onApprove={onApprove} onImplementPlan={onImplementPlan} />
         </li>
       ))}
     </ol>
@@ -93,8 +94,12 @@ function Approval({ item, onApprove }: { item: Extract<TimelineItem, { kind: "ap
   );
 }
 
-function Item({ item, onApprove }: { item: TimelineItem; onApprove?: ApproveFn | undefined }) {
+function Item({ item, onApprove, onImplementPlan }: { item: TimelineItem; onApprove?: ApproveFn | undefined; onImplementPlan?: (() => void) | undefined }) {
   switch (item.kind) {
+    case "plan":
+      return <PlanCard plan={item.event.plan} open={item.open} onImplement={onImplementPlan} />;
+    case "question":
+      return <QuestionRecord request={item.request} result={item.result} />;
     case "user":
       return (
         <div className="flex flex-col items-end">

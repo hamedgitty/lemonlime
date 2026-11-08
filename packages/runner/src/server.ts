@@ -204,7 +204,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       }
       authed = true;
       clearTimeout(helloTimer);
-      send({ type: "welcome", thread, latestSeq: thread.latestSeq, runnerVersion: opts.version });
+      send({ type: "welcome", thread, latestSeq: thread.latestSeq, runnerVersion: opts.version, options: runner.currentOptions });
       // Subscribe before replaying so nothing appended in between is lost; the
       // client drops anything at or below the seq it already has.
       const buffered: ServerMessage[] = [];
@@ -297,6 +297,18 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       case "approve":
         runner.answerApproval(msg.requestId, msg.decision);
         break;
+      case "answer_question":
+        runner.answerQuestion(msg.requestId, msg.answers);
+        break;
+      case "set_options": {
+        const r = runner.setOptions({
+          ...(msg.model !== undefined ? { model: msg.model } : {}),
+          ...(msg.reasoning !== undefined ? { reasoning: msg.reasoning } : {}),
+          ...(msg.permission !== undefined ? { permission: msg.permission } : {}),
+        });
+        if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+        break;
+      }
       case "start_login":
         runner.startLogin();
         break;
@@ -543,13 +555,15 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
   }
   if (path === "/capabilities" && req.method === "GET") {
     const agent = runner.thread.agent;
+    const now = runner.currentOptions;
     return reply(
       res,
       200,
       capabilitiesFor(agent.kind, {
         agentVersion: runner.agentVersion ?? null,
-        ...(agent.model ? { model: agent.model } : {}),
-        ...(agent.reasoning ? { reasoning: agent.reasoning } : {}),
+        ...(now.model ? { model: now.model } : {}),
+        ...(now.reasoning ? { reasoning: now.reasoning } : {}),
+        permission: now.permission,
       }),
     );
   }

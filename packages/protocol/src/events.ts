@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ThreadOptions } from "./capabilities.ts";
 import { ThreadId, ThreadStatus } from "./thread.ts";
 
 /** Fields every event carries. `seq` starts at 1 and increases by 1 per thread. */
@@ -161,6 +162,74 @@ export const PreviewUpdateEvent = z.object({
   previews: z.array(Preview),
 });
 
+/** The thread's model, reasoning or permission mode changed (see `set_options`). */
+export const OptionsChangeEvent = z.object({
+  ...base,
+  type: z.literal("options_change"),
+  options: ThreadOptions,
+});
+
+export const TodoItem = z.object({
+  text: z.string(),
+  status: z.enum(["pending", "in_progress", "completed"]),
+});
+export type TodoItem = z.infer<typeof TodoItem>;
+
+/** The agent's own to-do list, whole, each time it changes. Apps show the latest. */
+export const TodoSnapshotEvent = z.object({
+  ...base,
+  type: z.literal("todo_snapshot"),
+  items: z.array(TodoItem),
+});
+
+export const Question = z.object({
+  question: z.string(),
+  /** A short label for the question, e.g. "Database". */
+  header: z.string().optional(),
+  options: z.array(z.object({ label: z.string(), description: z.string().optional() })),
+  /** More than one option can be picked. */
+  multiSelect: z.boolean().default(false),
+});
+export type Question = z.infer<typeof Question>;
+
+/**
+ * The agent asks the user one or more multiple-choice questions and waits, like an
+ * approval, until a `question_result` with the same `requestId` follows.
+ */
+export const QuestionRequestEvent = z.object({
+  ...base,
+  type: z.literal("question_request"),
+  requestId: z.string(),
+  questions: z.array(Question).min(1),
+});
+
+export const QuestionResultEvent = z.object({
+  ...base,
+  type: z.literal("question_result"),
+  requestId: z.string(),
+  /** For each question, the picked option labels and any typed answer. null: not answered. */
+  answers: z.array(z.array(z.string())).nullable(),
+  by: z.enum(["user", "timeout", "interrupted", "expired"]),
+});
+
+/** How full the agent's context window is, in tokens, after its latest reply. */
+export const ContextUsageEvent = z.object({
+  ...base,
+  type: z.literal("context_usage"),
+  used: z.number().int().nonnegative(),
+  window: z.number().int().positive(),
+});
+
+/**
+ * In plan mode, the agent's finished plan (Markdown). The user approves it by switching
+ * back to a working mode and telling the agent to go ahead.
+ */
+export const PlanProposalEvent = z.object({
+  ...base,
+  type: z.literal("plan_proposal"),
+  plan: z.string(),
+});
+
 export const ThreadEvent = z.discriminatedUnion("type", [
   UserMessageEvent,
   AgentMessageEvent,
@@ -175,6 +244,12 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   ApprovalResultEvent,
   RewindEvent,
   PreviewUpdateEvent,
+  OptionsChangeEvent,
+  TodoSnapshotEvent,
+  QuestionRequestEvent,
+  QuestionResultEvent,
+  ContextUsageEvent,
+  PlanProposalEvent,
 ]);
 export type ThreadEvent = z.infer<typeof ThreadEvent>;
 export type ThreadEventType = ThreadEvent["type"];

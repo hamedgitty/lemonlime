@@ -43,6 +43,8 @@ createInterface({ input: process.stdin }).on("line", async line => {
         status: "completed",
         content: [{ type: "content", content: { type: "text", text: `permission=${perm.outcome.optionId}` } }],
       });
+      // A closing message after the tool, e.g. a plan.
+      if (process.env.FAKE_ACP_CLOSING) update(sid, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: process.env.FAKE_ACP_CLOSING } });
       return send({ id: msg.id, result: { stopReason: "end_turn" } });
     }
     default:

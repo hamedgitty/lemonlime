@@ -21,6 +21,8 @@ describe("command guard", () => {
       ":(){ :|:& };:",
       "chmod -R 777 /",
       "FOO=1 rm -rf ~",
+      "gh repo delete acme/site --yes",
+      "cd x && gh repo delete --yes",
     ]) {
       expect(dangerousCommand(cmd), cmd).not.toBeNull();
     }
@@ -38,6 +40,8 @@ describe("command guard", () => {
       "git clean -fdx",
       "chmod -R u+w ./src",
       "pnpm test",
+      "gh repo view acme/site",
+      "gh pr create --fill",
     ]) {
       expect(dangerousCommand(cmd), cmd).toBeNull();
     }

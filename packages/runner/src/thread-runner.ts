@@ -2,7 +2,16 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { installCoauthorHooks } from "./coauthors.ts";
-import { withoutRewound, type NewEvent, type Preview, type QueuedMessage, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
+import {
+  withoutRewound,
+  type AgentCommand,
+  type NewEvent,
+  type Preview,
+  type QueuedMessage,
+  type Thread,
+  type ThreadEvent,
+  type ThreadStatus,
+} from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
 import { SideChats } from "./side-chats.ts";
@@ -17,6 +26,7 @@ import { type AgentCredential, LoginSession, type LoginUpdate } from "./login.ts
 import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
 import { installPluginsIntoThread, loadEnabledPlugins } from "./agent-plugins.ts";
+import { listCommands } from "./composer.ts";
 
 export interface ThreadRunnerOptions {
   /** Shortest wait before continuing after a usage limit (default 5 s; tests use less). */
@@ -272,6 +282,11 @@ export class ThreadRunner {
 
   get workdir(): string {
     return this.opts.workdir;
+  }
+
+  /** Slash commands for the composer's `/` menu: what the agent reported, plus command files and skills. */
+  get agentCommands(): AgentCommand[] {
+    return listCommands({ kind: this.opts.adapter.kind, workdir: this.opts.workdir, reported: this.session?.commands?.() ?? [] });
   }
 
   get thread(): Thread {

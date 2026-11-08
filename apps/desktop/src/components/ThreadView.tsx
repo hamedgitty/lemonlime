@@ -29,6 +29,8 @@ import type { PolicyDenied, ThreadStatus } from "@lemonlime/protocol";
 import { buildTimeline } from "../lib/timeline.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
+import { useComposerSources } from "../lib/composerData.ts";
+import { uniquePrompts } from "../lib/promptHistory.ts";
 import { COMPUTER_LEVELS, type ComputerLevel } from "../lib/computer.ts";
 import type { ThreadEntry } from "../lib/threads.ts";
 import { summarize } from "../lib/threads.ts";
@@ -36,6 +38,8 @@ import { AGENT_LABELS, STATUS_LABELS, repoName } from "../lib/format.ts";
 import { CloudError, type CloudApi } from "../lib/cloud.ts";
 import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
+import { FindBar } from "./FindBar.tsx";
+import { SelectionQuote } from "./SelectionQuote.tsx";
 import { Composer, type ComposerHandle } from "./Composer.tsx";
 import { TerminalPanel } from "./TerminalPanel.tsx";
 import { SideChatPanel } from "./SideChatPanel.tsx";
@@ -229,6 +233,14 @@ function ThreadSessionView({
     window.addEventListener("lemonlime:toggle-panel", toggle);
     return () => window.removeEventListener("lemonlime:toggle-panel", toggle);
   }, []);
+  // Find in thread (⌘F, handled by the app): pressing it again focuses the bar.
+  const [find, setFind] = useState<number | null>(null);
+  useEffect(() => {
+    const open = () => setFind(n => (n ?? 0) + 1);
+    window.addEventListener("lemonlime:find", open);
+    return () => window.removeEventListener("lemonlime:find", open);
+  }, []);
+  const timelineRef = useRef<HTMLDivElement>(null);
   const [moving, setMoving] = useState<string | null>(null);
   const [showSignIn, setShowSignIn] = useState(false);
   // The cloud agent said it isn't signed in (and the user hasn't finished signing it in since).
@@ -260,6 +272,13 @@ function ThreadSessionView({
   const composerRef = useRef<ComposerHandle>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const files = useAttachments(session.connection);
+  const suggestions = useComposerSources(session.connection, summary.agent.kind);
+  const composerSuggestions = useMemo(
+    () => ({ commands: suggestions.commands, onCommandsOpen: suggestions.refreshCommands, searchFiles: suggestions.searchFiles }),
+    [suggestions.commands, suggestions.refreshCommands, suggestions.searchFiles],
+  );
+  // Earlier prompts, for Up and Down in the composer.
+  const prompts = useMemo(() => uniquePrompts(session.events.flatMap(e => (e.type === "user_message" ? [e.text] : []))), [session.events]);
   const sendWithFiles = (text: string) => {
     if (files.uploading) {
       setActionError("Wait for the attached files to finish uploading.");
@@ -456,15 +475,19 @@ function ThreadSessionView({
               <SignInPanel agentLabel={AGENT_LABELS[summary.agent.kind]} login={session.login} onClose={() => setShowSignIn(false)} />
             </div>
           )}
-        <Timeline
-          foldFinished={foldFinished}
-          items={items}
-          working={working && items[items.length - 1]?.kind !== "agent"}
-          empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
-          onApprove={session.approve}
-          onEditQueued={session.editQueued}
-          onRewind={rewindTo}
-        />
+        <div ref={timelineRef} className="relative flex min-h-0 flex-1 flex-col">
+          <Timeline
+            foldFinished={foldFinished}
+            items={items}
+            working={working && items[items.length - 1]?.kind !== "agent"}
+            empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
+            onApprove={session.approve}
+            onEditQueued={session.editQueued}
+            onRewind={rewindTo}
+          />
+          {find !== null && <FindBar root={timelineRef} version={items} focusNonce={find} onClose={() => setFind(null)} />}
+          <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} />
+        </div>
 
         <div
           className="shrink-0 px-6 pt-2 pb-5"
@@ -526,6 +549,9 @@ function ThreadSessionView({
             <Composer
               ref={composerRef}
               onSend={sendWithFiles}
+              suggestions={composerSuggestions}
+              history={prompts}
+              draftKey={summary.id}
               onInterrupt={session.interrupt}
               working={working}
               disabled={composerDisabled}

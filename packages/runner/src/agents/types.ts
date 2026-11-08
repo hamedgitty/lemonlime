@@ -1,4 +1,4 @@
-import type { AgentKind, NewEvent } from "@lemonlime/protocol";
+import type { AgentCommand, AgentKind, NewEvent } from "@lemonlime/protocol";
 import type { McpServerConfig } from "../agent-plugins.ts";
 import type { ApprovalDecision, ApprovalRequest } from "../approvals.ts";
 
@@ -51,6 +51,8 @@ export interface AgentSession {
   /** State worth persisting so a restarted runner can continue the same agent session. */
   saveState(): Record<string, string>;
   dispose(): Promise<void>;
+  /** Slash commands the agent said it understands, if it says (shown in the composer's `/` menu). */
+  commands?(): AgentCommand[];
 }
 
 export interface AgentAdapter {

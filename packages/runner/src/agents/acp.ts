@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { AgentKind, NewEvent } from "@lemonlime/protocol";
+import type { AgentCommand, AgentKind, NewEvent } from "@lemonlime/protocol";
 import { summarizeToolInput, type ApprovalDecision } from "../approvals.ts";
+import { commandsFromAcp } from "../composer.ts";
 import { dangerousCommand } from "../command-guard.ts";
 import { lineSplitter } from "./lines.ts";
 import { GROUPS, killGently, track, tryJson } from "./process.ts";
@@ -56,6 +57,8 @@ class AcpSession implements AgentSession {
   private disposed = false;
   /** The conversation was just started (not loaded), so it hasn't seen the user's instructions yet. */
   private needsInstructions = false;
+  /** From the agent's latest `available_commands_update`. */
+  private available: AgentCommand[] = [];
 
   constructor(private readonly opts: SessionOptions & { command: string[] }) {
     this.sessionId = opts.saved?.sessionId;
@@ -148,6 +151,10 @@ class AcpSession implements AgentSession {
     return this.sessionId ? { sessionId: this.sessionId } : {};
   }
 
+  commands(): AgentCommand[] {
+    return this.available;
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true;
     if (this.child) killGently(this.child);
@@ -210,6 +217,11 @@ class AcpSession implements AgentSession {
       return;
     }
     // Notification.
+    if (msg.method === "session/update") {
+      // Agents often list their commands right after the session starts, before any turn.
+      const update = (msg.params as Json | undefined)?.update as Json | undefined;
+      if (update?.sessionUpdate === "available_commands_update") this.available = commandsFromAcp(update.availableCommands);
+    }
     if (msg.method === "session/update" && this.turn) {
       const update = (msg.params as Json | undefined)?.update as Json | undefined;
       if (update) this.translator.update(update).forEach(e => this.turn!.emit(e));

@@ -21,7 +21,8 @@ import type { EditQueuedFn } from "../lib/useThreadSession.ts";
 import { Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
 import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
 import { DiffView } from "./DiffView.tsx";
-import { Button, LogoMark, Spinner, cx } from "./ui.tsx";
+import { AgentMessage } from "./AgentMessage.tsx";
+import { Button, Spinner, cx } from "./ui.tsx";
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
 /** Go back to the user message at `seq` (its text goes back in the composer). */
@@ -440,50 +441,6 @@ function resetsWhen(iso: string): string {
 
 const ordinal = (n: number) =>
   `${n}${n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th"}`;
-
-function AgentMessage({ text, streaming }: { text: string; streaming: boolean }) {
-  return (
-    <div className="flex gap-3">
-      <div className="mt-0.5">
-        <LogoMark size={22} />
-      </div>
-      <div className="prose-agent min-w-0 flex-1 text-[14.5px] leading-relaxed text-ink">
-        <RichText text={text} />
-        {streaming && <span aria-hidden="true" className="ml-0.5 inline-block h-4 w-[3px] translate-y-0.5 animate-pulse-soft rounded-sm bg-leaf" />}
-      </div>
-    </div>
-  );
-}
-
-/** Minimal formatting for agent text: fenced code blocks and inline code. */
-function RichText({ text }: { text: string }) {
-  const parts = text.split(/```/);
-  return (
-    <>
-      {parts.map((part, i) => {
-        if (i % 2 === 1) {
-          const nl = part.indexOf("\n");
-          const code = nl >= 0 && /^[\w+-]*$/.test(part.slice(0, nl).trim()) ? part.slice(nl + 1) : part;
-          return (
-            <pre key={i}>
-              <code>{code.replace(/\n$/, "")}</code>
-            </pre>
-          );
-        }
-        // Drop the line breaks that only separate prose from a code block.
-        let prose = part;
-        if (i > 0) prose = prose.replace(/^\n/, "");
-        if (i < parts.length - 1) prose = prose.replace(/\n$/, "");
-        return <InlineCode key={i} text={prose} />;
-      })}
-    </>
-  );
-}
-
-function InlineCode({ text }: { text: string }) {
-  const bits = text.split(/`([^`\n]+)`/);
-  return <>{bits.map((b, i) => (i % 2 === 1 ? <code key={i}>{b}</code> : b))}</>;
-}
 
 function ToolCall({ name, input, result }: { name: string; input: unknown; result: { output: unknown; isError: boolean } | null }) {
   const [open, setOpen] = useState(false);

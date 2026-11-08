@@ -1,5 +1,10 @@
-import { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { ArrowUp, Square } from "lucide-react";
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { ArrowUp, BookOpen, FileText, Puzzle, Square, SquareSlash } from "lucide-react";
+import { fuzzyFilter, fuzzyMatchPath, type AgentCommand, type FuzzyMatch } from "@lemonlime/protocol";
+import { applyPick, detectTrigger, insertQuote, type Trigger } from "../lib/composerTriggers.ts";
+import { HISTORY_IDLE, loadDraft, saveDraft, stepHistory, type HistoryState } from "../lib/promptHistory.ts";
+import { caretCoordinates } from "../lib/caret.ts";
+import { Highlighted } from "./Highlighted.tsx";
 import { Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 
@@ -7,12 +12,29 @@ export interface ComposerHandle {
   /** Put text in the box (e.g. a one-click prompt) and focus it. */
   fill(text: string): void;
   focus(): void;
+  /** Add `text` as a `>` quote at the end of what's there, and focus. */
+  quote(text: string): void;
 }
+
+/** Where the `/` and `@` menus get their entries (a thread's runner); leave out for no menus. */
+export interface ComposerSuggestions {
+  commands: AgentCommand[];
+  /** Called when the `/` menu opens, to ask the runner again. */
+  onCommandsOpen?: () => void;
+  searchFiles?: (query: string, signal?: AbortSignal) => Promise<string[]>;
+}
+
+type Option = { id: string; kind: "command"; command: AgentCommand; match: FuzzyMatch } | { id: string; kind: "file"; path: string; match: FuzzyMatch };
+
+const MENU_WIDTH = 380;
 
 /**
  * The message card: a growing text box with a toolbar inside it. `tools` sits bottom-left
  * (agent and model pickers); the round send button turns lime once there's something
  * to send. Used on the home screen and docked under a thread.
+ *
+ * In a thread it also has typeahead (`/` for the agent's commands at the start, `@` for
+ * files anywhere), Up and Down through earlier prompts, and a draft kept per thread.
  */
 export const Composer = forwardRef<
   ComposerHandle,
@@ -28,21 +50,52 @@ export const Composer = forwardRef<
     /** Keep the text after sending (e.g. while a thread is being created). */
     busy?: boolean;
     autoFocus?: boolean;
+    suggestions?: ComposerSuggestions;
+    /** Earlier prompts in this thread, oldest first, for Up and Down. */
+    history?: readonly string[];
+    /** Keep unsent text under this key (a thread id) across switches and restarts. */
+    draftKey?: string;
   }
->(function Composer({ onSend, onInterrupt, working = false, disabled = false, disabledReason, placeholder, tools, busy = false, autoFocus }, handle) {
-  const [text, setText] = useState("");
+>(function Composer(
+  { onSend, onInterrupt, working = false, disabled = false, disabledReason, placeholder, tools, busy = false, autoFocus, suggestions, history = [], draftKey },
+  handle,
+) {
+  const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
   const ref = useRef<HTMLTextAreaElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const historyState = useRef<HistoryState>(HISTORY_IDLE);
+
+  const setCaret = (at: number) =>
+    requestAnimationFrame(() => {
+      ref.current?.focus();
+      ref.current?.setSelectionRange(at, at);
+    });
 
   useImperativeHandle(handle, () => ({
     fill(t: string) {
       setText(t);
-      requestAnimationFrame(() => {
-        ref.current?.focus();
-        ref.current?.setSelectionRange(t.length, t.length);
-      });
+      setCaret(t.length);
     },
     focus: () => ref.current?.focus(),
+    quote(selected: string) {
+      setText(cur => {
+        const next = insertQuote(cur, selected);
+        setCaret(next.length);
+        return next;
+      });
+    },
   }));
+
+  // Drafts: saved shortly after typing stops, and when the composer goes away.
+  const textRef = useRef(text);
+  textRef.current = text;
+  useEffect(() => {
+    if (!draftKey) return;
+    const t = setTimeout(() => saveDraft(draftKey, text), 300);
+    return () => clearTimeout(t);
+  }, [draftKey, text]);
+  useEffect(() => () => void (draftKey && saveDraft(draftKey, textRef.current)), [draftKey]);
 
   // Grow with the content up to a limit. Measure again when the width changes (the first
   // layout can happen before the column has its final width, which wraps the placeholder).
@@ -65,16 +118,145 @@ export const Composer = forwardRef<
     return () => ro.disconnect();
   }, [text]);
 
+  // ── Typeahead ──
+  const [trigger, setTrigger] = useState<Trigger | null>(null);
+  /** The trigger the user closed with Escape stays closed until they type a new one. */
+  const [dismissedAt, setDismissedAt] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const [files, setFiles] = useState<{ query: string; paths: string[] } | null>(null);
+  const [filesError, setFilesError] = useState(false);
+  const readTrigger = () => {
+    const el = ref.current;
+    if (!el || !suggestions) return setTrigger(null);
+    const t = detectTrigger(el.value, el.selectionStart, el.selectionEnd);
+    if (t && t.kind === "file" && !suggestions.searchFiles) return setTrigger(null);
+    setTrigger(prev => (prev && t && prev.kind === t.kind && prev.start === t.start && prev.query === t.query && prev.end === t.end ? prev : t));
+  };
+  const menuTrigger = trigger && trigger.start !== dismissedAt && !disabled ? trigger : null;
+  const kind = menuTrigger?.kind ?? null;
+
+  const { onCommandsOpen, searchFiles } = suggestions ?? {};
+  useEffect(() => {
+    if (kind === "command") onCommandsOpen?.();
+  }, [kind, onCommandsOpen]);
+
+  const fileQuery = menuTrigger?.kind === "file" ? menuTrigger.query : null;
+  useEffect(() => {
+    if (fileQuery === null || !searchFiles) return;
+    const ctl = new AbortController();
+    const t = setTimeout(
+      () =>
+        void searchFiles(fileQuery, ctl.signal).then(
+          paths => {
+            setFilesError(false);
+            setFiles({ query: fileQuery, paths });
+          },
+          () => !ctl.signal.aborted && setFilesError(true),
+        ),
+      fileQuery ? 60 : 0,
+    );
+    return () => {
+      clearTimeout(t);
+      ctl.abort();
+    };
+  }, [fileQuery, searchFiles]);
+
+  const commands = suggestions?.commands;
+  const options: Option[] = useMemo(() => {
+    if (!menuTrigger) return [];
+    if (menuTrigger.kind === "command")
+      return fuzzyFilter(commands ?? [], menuTrigger.query, c => c.name, { limit: 50 }).map(r => ({
+        id: `c:${r.item.name}`,
+        kind: "command" as const,
+        command: r.item,
+        match: r.match,
+      }));
+    return (files?.paths ?? []).map(path => ({
+      id: `f:${path}`,
+      kind: "file" as const,
+      path,
+      match: fuzzyMatchPath(menuTrigger.query, path) ?? { score: 0, positions: [] },
+    }));
+  }, [menuTrigger, commands, files]);
+  const open = menuTrigger !== null;
+  useEffect(() => setActive(0), [kind, menuTrigger?.query]);
+  const activeIndex = Math.min(active, Math.max(0, options.length - 1));
+  const optionId = (i: number) => `${listId}-opt-${i}`;
+
+  const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const wrap = wrapRef.current;
+    if (!open || !el || !wrap || !menuTrigger) return setMenuPos(null);
+    const c = caretCoordinates(el, menuTrigger.start);
+    const er = el.getBoundingClientRect();
+    const wr = wrap.getBoundingClientRect();
+    const left = Math.max(0, Math.min(er.left - wr.left + c.left - 8, wr.width - MENU_WIDTH));
+    const caretTop = er.top - wr.top + Math.max(0, c.top);
+    setMenuPos({ left, bottom: wr.height - caretTop + 6 });
+  }, [open, menuTrigger]);
+
+  // Keep the highlighted option in view.
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    listRef.current?.querySelector(`#${CSS.escape(optionId(activeIndex))}`)?.scrollIntoView({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeIndex]);
+
+  const pick = (o: Option) => {
+    if (!menuTrigger) return;
+    const next = applyPick(text, menuTrigger, o.kind === "command" ? o.command.name : o.path);
+    setText(next.text);
+    setTrigger(null);
+    setCaret(next.caret);
+  };
+
   const canSend = !disabled && !busy && text.trim().length > 0;
   const submit = () => {
     if (!canSend) return;
     onSend(text.trim());
     setText("");
+    historyState.current = HISTORY_IDLE;
+    setTrigger(null);
+    if (draftKey) saveDraft(draftKey, "");
     ref.current?.focus();
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+    if (e.nativeEvent.isComposing) return;
+    if (open) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDismissedAt(menuTrigger!.start);
+        return;
+      }
+      if (options.length > 0) {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const step = e.key === "ArrowDown" ? 1 : -1;
+          setActive((activeIndex + step + options.length) % options.length);
+          return;
+        }
+        if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+          e.preventDefault();
+          pick(options[activeIndex]!);
+          return;
+        }
+      }
+    }
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      const el = e.currentTarget;
+      const step = stepHistory(history, historyState.current, e.key === "ArrowUp" ? "up" : "down", { text, caret: el.selectionStart });
+      if (step) {
+        e.preventDefault();
+        historyState.current = step.state;
+        setText(step.text);
+        setCaret(e.key === "ArrowUp" ? 0 : step.text.length);
+        return;
+      }
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
     }
@@ -85,66 +267,208 @@ export const Composer = forwardRef<
   };
 
   return (
-    <div
-      className={cx(
-        "rounded-xl border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",
-        "focus-within:border-line-strong focus-within:shadow-[0_1px_2px_rgb(23_32_14/0.04),0_6px_20px_rgb(23_32_14/0.07)]",
-      )}
-    >
-      <label htmlFor="composer" className="sr-only">
-        Message the agent
-      </label>
-      <textarea
-        id="composer"
-        ref={ref}
-        rows={2}
-        value={text}
-        autoFocus={autoFocus}
-        onChange={e => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={disabled}
-        placeholder={
-          disabled ? (disabledReason ?? "Not connected") : (placeholder ?? (working ? "Add to the conversation…" : "Ask the agent to build anything…"))
-        }
-        className="block max-h-[260px] min-h-[56px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed"
-      />
-      <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-        <div className="flex min-w-0 flex-1 items-center gap-0.5">{tools}</div>
-        {working && onInterrupt && (
-          <Tip
-            label={
-              <>
-                Stop the agent <span className="font-normal opacity-75">Esc</span>
-              </>
-            }
-          >
-            <button
-              type="button"
-              onClick={onInterrupt}
-              aria-label="Stop the agent"
-              className="inline-flex size-[34px] items-center justify-center rounded-full border border-line-strong bg-paper text-ink hover:bg-cream"
-            >
-              <Square aria-hidden="true" className="size-3 fill-current" />
-            </button>
-          </Tip>
+    <div ref={wrapRef} className="relative">
+      <div
+        className={cx(
+          "rounded-xl border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",
+          "focus-within:border-line-strong focus-within:shadow-[0_1px_2px_rgb(23_32_14/0.04),0_6px_20px_rgb(23_32_14/0.07)]",
         )}
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!canSend}
-          aria-label="Send message"
-          title="Send (Enter)"
-          className={cx(
-            "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full transition-colors duration-150",
-            canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
+      >
+        <label htmlFor="composer" className="sr-only">
+          Message the agent
+        </label>
+        <textarea
+          id="composer"
+          ref={ref}
+          rows={2}
+          value={text}
+          autoFocus={autoFocus}
+          onChange={e => {
+            setText(e.target.value);
+            historyState.current = HISTORY_IDLE;
+            if (dismissedAt !== null && !detectTrigger(e.target.value, e.target.selectionStart)) setDismissedAt(null);
+            readTrigger();
+          }}
+          onSelect={readTrigger}
+          onBlur={() => setTrigger(null)}
+          onKeyDown={onKeyDown}
+          disabled={disabled}
+          placeholder={
+            disabled ? (disabledReason ?? "Not connected") : (placeholder ?? (working ? "Add to the conversation…" : "Ask the agent to build anything…"))
+          }
+          {...(suggestions
+            ? {
+                role: "combobox",
+                "aria-autocomplete": "list" as const,
+                "aria-expanded": open,
+                "aria-controls": open ? listId : undefined,
+                "aria-activedescendant": open && options.length > 0 ? optionId(activeIndex) : undefined,
+              }
+            : {})}
+          className="block max-h-[260px] min-h-[56px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed"
+        />
+        <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">{tools}</div>
+          {working && onInterrupt && (
+            <Tip
+              label={
+                <>
+                  Stop the agent <span className="font-normal opacity-75">Esc</span>
+                </>
+              }
+            >
+              <button
+                type="button"
+                onClick={onInterrupt}
+                aria-label="Stop the agent"
+                className="inline-flex size-[34px] items-center justify-center rounded-full border border-line-strong bg-paper text-ink hover:bg-cream"
+              >
+                <Square aria-hidden="true" className="size-3 fill-current" />
+              </button>
+            </Tip>
           )}
-        >
-          <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />
-        </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!canSend}
+            aria-label="Send message"
+            title="Send (Enter)"
+            className={cx(
+              "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full transition-colors duration-150",
+              canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
+            )}
+          >
+            <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />
+          </button>
+        </div>
       </div>
+      {open && menuPos && (
+        <SuggestionMenu
+          id={listId}
+          listRef={listRef}
+          kind={menuTrigger!.kind}
+          options={options}
+          active={activeIndex}
+          optionId={optionId}
+          onActive={setActive}
+          onPick={pick}
+          loading={menuTrigger!.kind === "file" && !filesError && files?.query !== menuTrigger!.query}
+          failed={menuTrigger!.kind === "file" && filesError}
+          style={{ left: menuPos.left, bottom: menuPos.bottom, width: MENU_WIDTH }}
+        />
+      )}
     </div>
   );
 });
+
+const SOURCE_LABEL: Record<AgentCommand["source"], string> = {
+  agent: "",
+  project: "Project",
+  user: "Yours",
+  skill: "Skill",
+  plugin: "Plugin",
+};
+
+/** The `/` or `@` list. Opens instantly (it follows typing); focus stays in the text box. */
+function SuggestionMenu({
+  id,
+  listRef,
+  kind,
+  options,
+  active,
+  optionId,
+  onActive,
+  onPick,
+  loading,
+  failed,
+  style,
+}: {
+  id: string;
+  listRef: React.RefObject<HTMLDivElement | null>;
+  kind: "command" | "file";
+  options: Option[];
+  active: number;
+  optionId: (i: number) => string;
+  onActive: (i: number) => void;
+  onPick: (o: Option) => void;
+  loading: boolean;
+  failed: boolean;
+  style: React.CSSProperties;
+}) {
+  const empty = failed
+    ? "Couldn't list the files. Is the runner connected?"
+    : loading
+      ? "Looking for files…"
+      : kind === "file"
+        ? "No matching files"
+        : "No matching commands. The agent lists its own after its first reply.";
+  return (
+    <div className="absolute z-40 overflow-hidden rounded-[10px] border border-line bg-paper text-[14px] text-ink shadow-pop" style={style}>
+      <p className="border-b border-line px-3 py-1.5 text-[12.5px] font-medium text-ink-faint">{kind === "file" ? "Files" : "Commands"}</p>
+      <div ref={listRef} id={id} role="listbox" aria-label={kind === "file" ? "Files" : "Commands"} className="scroll-thin max-h-[280px] overflow-y-auto p-1">
+        {options.length === 0 ? (
+          <p className="px-2.5 py-2 text-[13.5px] text-ink-soft">{empty}</p>
+        ) : (
+          options.map((o, i) => {
+            const selected = i === active;
+            return (
+              <div
+                key={o.id}
+                id={optionId(i)}
+                role="option"
+                aria-selected={selected}
+                onMouseDown={e => e.preventDefault()}
+                onMouseMove={() => !selected && onActive(i)}
+                onClick={() => onPick(o)}
+                className={cx("flex h-8 cursor-default items-center gap-2.5 rounded-[7px] px-2.5", selected && "bg-cream-deep")}
+              >
+                {o.kind === "command" ? <CommandRow command={o.command} match={o.match} /> : <FileRow path={o.path} match={o.match} />}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CommandRow({ command, match }: { command: AgentCommand; match: FuzzyMatch }) {
+  const Icon = command.source === "skill" ? BookOpen : command.source === "plugin" ? Puzzle : SquareSlash;
+  const tag = SOURCE_LABEL[command.source];
+  return (
+    <>
+      <Icon aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+      <span className="shrink-0 font-mono text-[13px]">
+        /<Highlighted text={command.name} positions={match.positions} />
+      </span>
+      {command.hint && <span className="shrink-0 font-mono text-[12.5px] text-ink-faint">{command.hint}</span>}
+      <span className="min-w-0 flex-1 truncate text-[13px] text-ink-soft">{command.description}</span>
+      {tag && <span className="shrink-0 text-[12.5px] text-ink-faint">{tag}</span>}
+    </>
+  );
+}
+
+function FileRow({ path, match }: { path: string; match: FuzzyMatch }) {
+  const slash = path.lastIndexOf("/");
+  const name = path.slice(slash + 1);
+  const dir = slash >= 0 ? path.slice(0, slash) : "";
+  return (
+    <>
+      <FileText aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+      <span className="shrink-0 truncate">
+        <Highlighted text={name} positions={match.positions} offset={slash + 1} />
+      </span>
+      {dir && (
+        <span className="min-w-0 flex-1 truncate text-[13px] text-ink-faint" dir="rtl">
+          {/* rtl keeps the end of a long folder path visible; the bidi isolate keeps it in order. */}
+          <bdi>
+            <Highlighted text={dir} positions={match.positions.filter(p => p < slash)} />
+          </bdi>
+        </span>
+      )}
+    </>
+  );
+}
 
 /** A quiet pill in the composer toolbar or under it: icon, label, chevron. */
 export const PickerButton = forwardRef<

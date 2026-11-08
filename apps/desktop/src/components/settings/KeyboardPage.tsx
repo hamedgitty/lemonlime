@@ -102,7 +102,7 @@ export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
       <Section title="Always">
         <dl className="grid grid-cols-[1fr_auto] gap-x-6 gap-y-3">
           {FIXED_SHORTCUTS.filter(([, what]) => what.toLowerCase().includes(q)).map(([keys, what]) => (
-            <div key={keys} className="contents">
+            <div key={`${keys} ${what}`} className="contents">
               <dt className="text-[15px]">{what}</dt>
               <dd className="flex gap-1">
                 {keys.split(" ").map(k => (

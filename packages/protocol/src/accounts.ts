@@ -35,6 +35,27 @@ export const ON_LIMIT_LABELS: Record<OnLimit, string> = {
 export const AccountRef = z.object({ id: AccountId, label: z.string().max(80) });
 export type AccountRef = z.infer<typeof AccountRef>;
 
+/**
+ * One of a plan's usage limits, as the agent itself reports it: Codex through its own
+ * app-server (`account/rateLimits/read`), Claude Code in the rate-limit events it prints
+ * on every turn. Never estimated, never fetched by LemonLime from the provider.
+ */
+export const UsageWindow = z.object({
+  kind: z.enum(["five_hour", "seven_day", "other"]),
+  /** Short label for the bar: "5h", "7d", or the agent's own name for another window. */
+  label: z.string().max(40),
+  usedPercent: z.number().min(0).max(100),
+  resetsAt: z.string().datetime().optional(),
+});
+export type UsageWindow = z.infer<typeof UsageWindow>;
+
+export const AccountUsage = z.object({
+  windows: z.array(UsageWindow).max(8),
+  /** When the agent reported it (Claude Code's comes from its last turn on this account). */
+  observedAt: z.string().datetime(),
+});
+export type AccountUsage = z.infer<typeof AccountUsage>;
+
 /** One account in `lemonlime-runner accounts list`. Never holds a token. */
 export const AgentAccount = z.object({
   id: AccountId,
@@ -48,6 +69,8 @@ export const AgentAccount = z.object({
   /** As the agent reports it, where it does. */
   email: z.string().max(200).optional(),
   plan: z.string().max(80).optional(),
+  /** The plan's usage limits, where the agent reports them. */
+  usage: AccountUsage.optional(),
 });
 export type AgentAccount = z.infer<typeof AgentAccount>;
 

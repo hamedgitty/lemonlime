@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -9,11 +9,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   hasAccounts,
   OnLimit,
+  AccountUsage,
   type AccountAgent,
   type AccountRef,
   type AccountsList,
   type AgentAccount,
   type AgentKind,
+  type UsageWindow,
 } from "@lemonlime/protocol";
 import { findRollout } from "./agents/codex.ts";
 
@@ -239,6 +241,109 @@ function run(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs = 15
   });
 }
 
+// ── Plan usage, as the agents report it ─────────────────────────────
+
+function usageFile(home: string, agent: AccountAgent, id: string): string {
+  if (!AccountId.safeParse(id).success) throw new Error(`"${id}" is not an account id`);
+  return join(accountsRoot(home), "usage", `${agent}-${id}.json`);
+}
+
+/** Keep the latest usage an agent reported for an account (Claude Code reports it each turn). */
+export function saveAccountUsage(home: string, agent: AccountAgent, id: string, windows: UsageWindow[], now = new Date()): void {
+  if (!windows.length) return;
+  const file = usageFile(home, agent, id);
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ windows, observedAt: now.toISOString() } satisfies AccountUsage));
+  renameSync(tmp, file);
+}
+
+export function readAccountUsage(home: string, agent: AccountAgent, id: string): AccountUsage | null {
+  try {
+    const r = AccountUsage.safeParse(JSON.parse(readFileSync(usageFile(home, agent, id), "utf8")));
+    return r.success ? r.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Codex's `account/rateLimits/read` answer as bars (primary: the 5-hour window, secondary: the week). */
+export function codexUsageWindows(result: unknown): UsageWindow[] {
+  const limits = (result as { rateLimits?: { primary?: unknown; secondary?: unknown } } | null)?.rateLimits;
+  if (!limits) return [];
+  const out: UsageWindow[] = [];
+  for (const w of [limits.primary, limits.secondary]) {
+    const v = w as { usedPercent?: unknown; windowDurationMins?: unknown; resetsAt?: unknown } | null;
+    if (!v || typeof v.usedPercent !== "number" || !Number.isFinite(v.usedPercent)) continue;
+    const mins = typeof v.windowDurationMins === "number" ? v.windowDurationMins : null;
+    const kind: UsageWindow["kind"] = mins === 300 ? "five_hour" : mins === 10_080 ? "seven_day" : "other";
+    const label =
+      kind === "five_hour" ? "5h" : kind === "seven_day" ? "7d" : mins ? (mins % 1440 === 0 ? `${mins / 1440}d` : `${Math.round(mins / 60)}h`) : "Limit";
+    const at = typeof v.resetsAt === "number" && Number.isFinite(v.resetsAt) ? new Date(v.resetsAt * 1000) : null;
+    out.push({
+      kind,
+      label,
+      usedPercent: Math.min(100, Math.max(0, v.usedPercent)),
+      ...(at && !Number.isNaN(at.getTime()) ? { resetsAt: at.toISOString() } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * Ask Codex itself where an account's plan limits stand: its app-server answers
+ * `account/rateLimits/read` from the account's own sign-in, without running a model.
+ * Null when Codex isn't there, isn't signed in, or doesn't answer in time.
+ */
+export function codexUsage(dir: string | null, timeoutMs = 12_000): Promise<UsageWindow[] | null> {
+  return new Promise(resolve => {
+    const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
+    if (dir) env.CODEX_HOME = dir;
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn("codex", ["app-server"], { env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+    } catch {
+      return resolve(null);
+    }
+    let done = false;
+    const finish = (v: UsageWindow[] | null) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      child.kill();
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    const send = (m: object) => child.stdin?.write(`${JSON.stringify(m)}\n`);
+    let buf = "";
+    child.on("error", () => finish(null));
+    child.on("exit", () => finish(null));
+    child.stdout?.on("data", (d: Buffer) => {
+      buf += d.toString();
+      if (buf.length > 1024 * 1024) return finish(null);
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        let m: { id?: unknown; result?: unknown; error?: unknown };
+        try {
+          m = JSON.parse(line) as typeof m;
+        } catch {
+          continue;
+        }
+        if (m.id === 0) {
+          send({ method: "initialized" });
+          send({ method: "account/rateLimits/read", id: 1 });
+        } else if (m.id === 1) {
+          const windows = m.error ? [] : codexUsageWindows(m.result);
+          finish(windows.length ? windows : null);
+        }
+      }
+    });
+    send({ method: "initialize", id: 0, params: { clientInfo: { name: "lemonlime", version: "1" } } });
+  });
+}
+
 /** What the agent itself says about an account: signed in, and as whom where it says. */
 export async function accountStatus(agent: AccountAgent, dir: string | null): Promise<Pick<AgentAccount, "signedIn" | "email" | "plan">> {
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
@@ -282,13 +387,18 @@ export async function listAccounts(home: string): Promise<AccountsList> {
   await Promise.all(
     ACCOUNT_AGENTS.map(async kind => {
       agents[kind] = await Promise.all(
-        accountsOf(data, kind).map(async a => ({
-          id: a.id,
-          label: a.label,
-          builtIn: a.builtIn,
-          isDefault: a.isDefault,
-          ...(await accountStatus(kind, accountDir(home, kind, a.id))),
-        })),
+        accountsOf(data, kind).map(async a => {
+          const dir = accountDir(home, kind, a.id);
+          const status = await accountStatus(kind, dir);
+          // Codex says where the limits stand whenever asked; Claude Code only during a turn,
+          // so its bars show what it last reported on this account.
+          if (kind === "codex" && status.signedIn !== false) {
+            const live = await codexUsage(dir);
+            if (live) saveAccountUsage(home, kind, a.id, live);
+          }
+          const usage = status.signedIn === false ? null : readAccountUsage(home, kind, a.id);
+          return { id: a.id, label: a.label, builtIn: a.builtIn, isDefault: a.isDefault, ...status, ...(usage ? { usage } : {}) };
+        }),
       );
     }),
   );

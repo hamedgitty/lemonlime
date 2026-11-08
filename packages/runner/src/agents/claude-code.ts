@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentCommand, NewEvent, Question, TodoItem } from "@lemonlime/protocol";
+import type { AgentCommand, NewEvent, Question, TodoItem, UsageWindow } from "@lemonlime/protocol";
 import { ApprovalBridge, type ApprovalAnswer, type ApprovalDecision, type ApprovalRequest } from "../approvals.ts";
 import { commandsFromNames } from "../composer.ts";
 import { selfCommand } from "../self.ts";
@@ -140,6 +140,7 @@ class ClaudeCodeSession implements AgentSession {
         if (parsed.failure) failure = parsed.failure;
         if (parsed.limitResetAt) limitReset = parsed.limitResetAt;
         if (parsed.commands) this.reported = parsed.commands;
+        if (parsed.usage) ctx.reportUsage?.(parsed.usage);
         parsed.events.forEach(e => ctx.emit(e));
       },
       onOversize: bytes => ctx.emit(oversizeNotice(bytes)),
@@ -224,6 +225,8 @@ export interface ParsedLine {
   limitResetAt?: string;
   /** Slash commands listed in the init message. */
   commands?: AgentCommand[];
+  /** Where the plan's usage limits stand, as Claude Code reported them. */
+  usage?: UsageWindow[];
 }
 
 type ContentBlock =
@@ -281,6 +284,33 @@ function todoEvent(name: string, id: string, input: unknown, state: ClaudeParseS
 }
 
 /** Translate one stream-json line into LemonLime events. Unknown lines are ignored. */
+const CLAUDE_WINDOWS: Record<string, { kind: UsageWindow["kind"]; label: string }> = {
+  five_hour: { kind: "five_hour", label: "5h" },
+  seven_day: { kind: "seven_day", label: "7d" },
+};
+
+/**
+ * The usage windows in Claude Code's `rate_limit_event` (`unifiedWindows`: name to
+ * `{ utilization 0–1, resetsAt seconds }`), as bars. Unknown windows keep their own name.
+ */
+export function claudeUsageWindows(raw: unknown): UsageWindow[] {
+  if (!raw || typeof raw !== "object") return [];
+  const out: UsageWindow[] = [];
+  for (const [name, w] of Object.entries(raw as Record<string, unknown>).slice(0, 8)) {
+    const v = w as { utilization?: unknown; resetsAt?: unknown } | null;
+    if (!v || typeof v.utilization !== "number" || !Number.isFinite(v.utilization)) continue;
+    const known = CLAUDE_WINDOWS[name];
+    const at = typeof v.resetsAt === "number" && Number.isFinite(v.resetsAt) ? new Date(v.resetsAt * 1000) : null;
+    out.push({
+      kind: known?.kind ?? "other",
+      label: known?.label ?? name.replace(/_/g, " ").slice(0, 40),
+      usedPercent: Math.min(100, Math.max(0, Math.round(v.utilization * 1000) / 10)),
+      ...(at && !Number.isNaN(at.getTime()) ? { resetsAt: at.toISOString() } : {}),
+    });
+  }
+  return out;
+}
+
 export function parseClaudeLine(line: string, state: ClaudeParseState = newClaudeParseState()): ParsedLine {
   const msg = tryJson(line) as Record<string, unknown> | null;
   if (!msg || typeof msg !== "object") return { events: [] };
@@ -291,11 +321,13 @@ export function parseClaudeLine(line: string, state: ClaudeParseState = newClaud
     return { events, ...(sessionId ? { sessionId } : {}), ...(commands.length ? { commands } : {}) };
   }
   if (msg.type === "rate_limit_event") {
-    const info = msg.rate_limit_info as { status?: string; resetsAt?: number } | undefined;
+    const info = msg.rate_limit_info as { status?: string; resetsAt?: number; unifiedWindows?: unknown } | undefined;
+    const usage = claudeUsageWindows(info?.unifiedWindows);
+    const extra = usage.length ? { usage } : {};
     if (info?.status === "rejected" && typeof info.resetsAt === "number") {
-      return { events, ...(sessionId ? { sessionId } : {}), limitResetAt: new Date(info.resetsAt * 1000).toISOString() };
+      return { events, ...(sessionId ? { sessionId } : {}), ...extra, limitResetAt: new Date(info.resetsAt * 1000).toISOString() };
     }
-    return { events, ...(sessionId ? { sessionId } : {}) };
+    return { events, ...(sessionId ? { sessionId } : {}), ...extra };
   }
 
   if (msg.type === "assistant" || msg.type === "user") {

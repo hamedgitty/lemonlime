@@ -172,6 +172,7 @@ export function AccountsTab({ initialAgent }: { initialAgent?: AgentKind | undef
               {a.isDefault && a.signedIn !== true && <p className="text-[13.5px] text-ink-soft">{describe(a)}</p>}
               {a.plan && a.signedIn && <p className="text-[13.5px] text-ink-soft">{a.plan} plan</p>}
             </div>
+            {a.usage && <UsageBars agent={agent} usage={a.usage} />}
             <div className="mt-auto flex flex-wrap items-center gap-2">
               {a.signedIn === false && (
                 <Button size="sm" variant="primary" disabled={login !== null || busy !== null} onClick={() => void signIn(agent, a.id, a.label)}>
@@ -317,4 +318,57 @@ function LoginProgress({ login, onClose }: { login: Login; onClose: () => void }
       </div>
     </div>
   );
+}
+
+/**
+ * Where the plan's limits stand, as the agent itself reported them: one thin bar per
+ * window (5h, 7d). Claude Code only reports during a turn, so its bars say when.
+ */
+function UsageBars({ agent, usage }: { agent: AccountAgent; usage: NonNullable<AgentAccount["usage"]> }) {
+  const seen = usageSeen(usage.observedAt);
+  return (
+    <div className="flex flex-col gap-2" aria-label="Plan usage">
+      {usage.windows.map(w => {
+        const pct = Math.round(w.usedPercent);
+        const resets = w.resetsAt ? resetText(w.resetsAt) : null;
+        return (
+          <div key={`${w.kind}:${w.label}`} className="grid grid-cols-[28px_1fr_40px] items-center gap-2.5 text-[13px]" title={resets ?? undefined}>
+            <span className="text-ink-soft">{w.label}</span>
+            <span
+              role="meter"
+              aria-label={`${w.label} limit used${resets ? `, ${resets.toLowerCase()}` : ""}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={pct}
+              className="h-1.5 overflow-hidden rounded-full bg-cream-deep"
+            >
+              <span className={cx("block h-full rounded-full", pct >= 90 ? "bg-danger" : pct >= 70 ? "bg-lemon-2" : "bg-leaf")} style={{ width: `${pct}%` }} />
+            </span>
+            <span className="text-right text-ink tabular-nums">{pct}%</span>
+          </div>
+        );
+      })}
+      {agent === "claude-code" && seen && <p className="text-[12.5px] text-ink-faint">As of the last turn, {seen}</p>}
+    </div>
+  );
+}
+
+/** "3 minutes ago", "yesterday", from when the agent last reported. */
+export function usageSeen(iso: string, now = Date.now()): string | null {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const mins = Math.max(0, Math.round((now - t) / 60_000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "yesterday" : `${days} days ago`;
+}
+
+function resetText(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return `Resets ${sameDay ? "at" : "on"} ${d.toLocaleString([], sameDay ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
 }

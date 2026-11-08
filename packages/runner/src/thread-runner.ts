@@ -22,6 +22,7 @@ import {
   type ThreadEvent,
   type ThreadOptions,
   type ThreadStatus,
+  type UsageWindow,
 } from "@lemonlime/protocol";
 import { capabilitiesFor } from "./capabilities.ts";
 import { randomUUID } from "node:crypto";
@@ -37,6 +38,7 @@ import {
   loadAccounts,
   looksSignedIn,
   nextAccount,
+  saveAccountUsage,
   signedInAgents,
   usualAgentDir,
 } from "./accounts.ts";
@@ -1450,7 +1452,18 @@ export class ThreadRunner {
       const askQuestions = (questions: Question[]): Promise<string[][] | null> => waitFor(() => this.askQuestions(questions, abort.signal));
       const recap = this.recap;
       this.recap = null;
-      await this.session.runTurn({ prompt: recap ? `${recap}\n\n${prompt}` : prompt, signal: abort.signal, emit, requestApproval, askQuestions });
+      // Usage the agent reports goes with the account it ran on (computers with accounts only).
+      const reportUsage = (windows: UsageWindow[]): void => {
+        const home = this.accountsHome;
+        const kind = this.adapter.kind;
+        if (!home || !hasAccounts(kind)) return;
+        try {
+          saveAccountUsage(home, kind, this.account ?? DEFAULT_ACCOUNT_ID, windows);
+        } catch {
+          /* best effort: the bars just stay as they were */
+        }
+      };
+      await this.session.runTurn({ prompt: recap ? `${recap}\n\n${prompt}` : prompt, signal: abort.signal, emit, requestApproval, askQuestions, reportUsage });
       this.crashes = 0;
     } catch (err) {
       const code = (err as { code?: string }).code;

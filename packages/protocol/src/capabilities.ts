@@ -118,9 +118,8 @@ export const AGENT_CAPABILITIES: Record<AgentKind, AgentCapabilities> = {
     permissions: ["edits", "full", "plan"],
     live: { model: true, reasoning: true },
     questions: false,
-    // Codex has a fast mode, but which service tier turns it on isn't confirmed (an unknown
-    // value is silently ignored), so the switch stays hidden until it is.
-    fast: false,
+    // Fast mode is Codex's "fast" service tier (`service_tier = "fast"`).
+    fast: true,
   },
   // Its models come from its own CLI (`opencode models`); it switches between turns over ACP.
   opencode: {

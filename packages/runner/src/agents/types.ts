@@ -1,4 +1,4 @@
-import type { AgentCommand, AgentKind, NewEvent, Question } from "@lemonlime/protocol";
+import type { AgentCommand, AgentKind, NewEvent, Question, UsageWindow } from "@lemonlime/protocol";
 import type { McpServerConfig } from "../agent-plugins.ts";
 import type { ApprovalDecision, ApprovalRequest } from "../approvals.ts";
 
@@ -61,6 +61,8 @@ export interface TurnContext {
    * question (picked labels, or typed text), or null if nobody answered or the turn ended.
    */
   askQuestions?(questions: Question[]): Promise<string[][] | null>;
+  /** The agent reported where its plan's usage limits stand (kept with the account). */
+  reportUsage?(windows: UsageWindow[]): void;
 }
 
 export interface AgentSession {

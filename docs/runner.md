@@ -211,6 +211,11 @@ request, and when to stop and ask. The copies are listed in the repository's loc
 Skills in `~/.lemonlime/skills` (or `$LEMONLIME_HOME/skills`) are always copied too; the
 desktop app's **Settings → Skills** adds and removes them there.
 
+With `--plugins-dir <dir>` (the desktop app passes `~/.lemonlime/plugins`), the enabled
+agent plugins listed in `<dir>/plugins.json` are added too: skills for every agent,
+commands and subagents for Claude Code, MCP servers for Claude Code and Codex. Plugin
+hooks are never run. See [Agent plugins](plugins.md).
+
 ## Approvals
 
 At autonomy `edits` (the default for local threads) agents edit files freely but ask

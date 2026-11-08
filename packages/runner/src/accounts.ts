@@ -400,7 +400,7 @@ export function parseClaudeStatus(stdout: string): Pick<AgentAccount, "signedIn"
     return {
       signedIn: o.loggedIn,
       ...(o.loggedIn && typeof o.email === "string" && o.email ? { email: o.email.slice(0, 200) } : {}),
-      ...(o.loggedIn && typeof o.subscriptionType === "string" && o.subscriptionType ? { plan: o.subscriptionType.slice(0, 80) } : {}),
+      ...(o.loggedIn && planName(o.subscriptionType) ? { plan: planName(o.subscriptionType)! } : {}),
     };
   } catch {
     return null;

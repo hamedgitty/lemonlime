@@ -171,11 +171,11 @@ export function GitActionsButton({ git, mode }: { git: GitState; mode: "local" |
         type="button"
         onClick={main.run}
         disabled={disabled}
-        title={mode === "local" && !canPush && !pr ? "This repository has no remote named origin." : undefined}
+        title={mode === "local" && !canPush && !pr ? "This repository has no remote named origin." : main.label}
         className={cx(SPLIT, "rounded-l-lg border-r-0 px-2.5")}
       >
         {git.busy === "pr" ? <Spinner /> : main.icon}
-        {main.label}
+        <span className="@max-[640px]/head:sr-only">{main.label}</span>
       </button>
       <BaseMenu.Root>
         <BaseMenu.Trigger

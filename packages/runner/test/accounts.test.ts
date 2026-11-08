@@ -155,7 +155,7 @@ describe("account folders", () => {
     expect(parseClaudeStatus(JSON.stringify({ loggedIn: true, email: "me@example.com", subscriptionType: "max", authMethod: "claude.ai" }))).toEqual({
       signedIn: true,
       email: "me@example.com",
-      plan: "max",
+      plan: "Max",
     });
     expect(parseClaudeStatus(JSON.stringify({ loggedIn: false }))).toEqual({ signedIn: false });
     expect(parseClaudeStatus("not json")).toBeNull();

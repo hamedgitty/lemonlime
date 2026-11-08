@@ -143,6 +143,8 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         items.push({ kind: "diff", key: `e${e.seq}`, event: e });
         break;
       case "status_change":
+        // The runner coming up (or a sandbox waking) isn't the agent finishing anything.
+        if (e.to === "idle" && e.from !== "running") break;
         if (e.to === "running") closeLimit();
         items.push({ kind: "status", key: `e${e.seq}`, event: e, ...(worked.has(e.seq) ? { workedMs: worked.get(e.seq)! } : {}) });
         break;

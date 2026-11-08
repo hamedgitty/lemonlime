@@ -652,8 +652,9 @@ function ThreadSessionView({
             {panelToggle}
           </PaneHeader>
         ) : (
-          <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
-            <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2.5">
+          <header data-tauri-drag-region className="@container/head flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+            {/* The title always keeps some room; buttons drop their words first (see @max-…/head). */}
+            <div data-tauri-drag-region className="flex min-w-[120px] flex-1 items-center gap-2.5">
               <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
               <span className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex" title={summary.repo}>
                 {machine ? (
@@ -678,9 +679,9 @@ function ThreadSessionView({
             ) : (
               <ConnectionBadge state={session.state} status={liveStatus} />
             )}
-            <Button size="sm" variant="ghost" onClick={runAction.onClick} disabled={runAction.disabled}>
+            <Button size="sm" variant="ghost" onClick={runAction.onClick} disabled={runAction.disabled} title={runAction.label}>
               {runAction.icon}
-              {runAction.label}
+              <span className="@max-[640px]/head:sr-only">{runAction.label}</span>
             </Button>
             {optionsMenu}
             {outdated && (
@@ -843,6 +844,7 @@ function ThreadSessionView({
               suggestions={composerSuggestions}
               history={prompts}
               draftKey={summary.id}
+              placeholder="Add to the conversation…"
               suggestion={suggestion}
               onInterrupt={session.interrupt}
               working={working}
@@ -1030,10 +1032,10 @@ function ConnectionBadge({ state, status }: { state: SessionState; status: Threa
       )}
       role="status"
       aria-live="polite"
-      title={`Connection: ${STATE_LABEL[state]}`}
+      title={`Connection: ${STATE_LABEL[state]}. ${label}`}
     >
       {dot}
-      {label}
+      <span className="@max-[640px]/head:sr-only">{label}</span>
     </span>
   );
 }

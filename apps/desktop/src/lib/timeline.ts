@@ -274,6 +274,8 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         });
         break;
       case "status_change":
+        // The runner coming up (or a sandbox waking) isn't the agent finishing anything.
+        if (ev.to === "idle" && ev.from !== "running") break;
         // A new turn carries the thread on past the limit.
         if (ev.to === "running" && openLimit) {
           openLimit.open = false;

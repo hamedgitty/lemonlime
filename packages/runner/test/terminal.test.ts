@@ -81,7 +81,8 @@ function open(port: number, hello: { resumeFrom?: number; shell?: number; token?
   return { ws, got, text: () => text, ready, send: (m: unknown) => ws.send(JSON.stringify(m)), closeCode: () => closeCode };
 }
 
-const until = async (ok: () => boolean, ms = 8000) => {
+// Generous: the whole suite runs in parallel, and a busy machine slows the sockets down.
+const until = async (ok: () => boolean, ms = 20_000) => {
   const end = Date.now() + ms;
   while (!ok()) {
     if (Date.now() > end) throw new Error("timed out");

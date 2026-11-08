@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { AgentIcon } from "./AgentIcon.tsx";
 import { Check, Cloud, Copy, RefreshCw, X } from "lucide-react";
 import { GithubMark } from "./icons.tsx";
 import type { CloudApi } from "../lib/cloud.ts";
@@ -202,6 +203,7 @@ function AgentStep({ agents, refreshAgents, prefs, onPrefs, onNext, ready }: Set
                     onChange={() => onPrefs({ lastAgent: t.kind })}
                     className="size-4 accent-[var(--color-leaf)]"
                   />
+                  <AgentIcon kind={t.kind} color className="size-5" />
                   <span className="min-w-0">
                     <span className="block text-[15px] font-medium">{AGENT_LABELS[t.kind]}</span>
                     <span className="block text-[13px] text-ink-soft">

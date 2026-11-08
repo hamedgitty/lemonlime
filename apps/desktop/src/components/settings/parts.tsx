@@ -132,7 +132,7 @@ export function Tabs<T extends string>({ value, onChange, tabs }: { value: T; on
   };
   return (
     // oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take the focus
-    <div role="tablist" aria-label="Sections" onKeyDown={onKeyDown} className="mb-6 flex flex-wrap gap-1 border-b border-line">
+    <div role="tablist" aria-label="Sections" onKeyDown={onKeyDown} className="mb-6 flex gap-1 overflow-x-auto border-b border-line [scrollbar-width:none]">
       {tabs.map(t => (
         <button
           key={t.id}
@@ -143,7 +143,7 @@ export function Tabs<T extends string>({ value, onChange, tabs }: { value: T; on
           tabIndex={value === t.id ? 0 : -1}
           onClick={() => onChange(t.id)}
           className={cx(
-            "-mb-px inline-flex h-9 items-center gap-1.5 border-b-2 px-2.5 text-[14px] transition-colors duration-100",
+            "-mb-px inline-flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[14px] whitespace-nowrap transition-colors duration-100",
             value === t.id ? "border-ink font-medium text-ink" : "border-transparent text-ink-soft hover:text-ink",
           )}
         >

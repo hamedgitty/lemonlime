@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { ExternalLink, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { ACCOUNT_AGENTS, hasAccounts, type AccountAgent, type AccountsList, type AgentAccount, type AgentKind } from "@lemonlime/protocol";
-import { accountLoginInput, addAccount, cancelAccountLogin, listAccounts, removeAccount, setDefaultAccount, signInAccount } from "../../lib/accounts.ts";
+import {
+  accountLoginInput,
+  addAccount,
+  cancelAccountLogin,
+  lastAccounts,
+  listAccounts,
+  removeAccount,
+  setDefaultAccount,
+  signInAccount,
+} from "../../lib/accounts.ts";
 import { AGENT_LABELS } from "../../lib/format.ts";
 import { confirmAction, inDesktopShell } from "../../lib/native.ts";
 import type { LoginUpdate } from "../../lib/useThreadSession.ts";
@@ -31,7 +40,7 @@ function describe(a: AgentAccount): string {
  */
 export function AccountsTab({ initialAgent }: { initialAgent?: AgentKind | undefined }) {
   const shell = inDesktopShell();
-  const [list, setList] = useState<AccountsList | null>(null);
+  const [list, setList] = useState<AccountsList | null>(() => lastAccounts());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);

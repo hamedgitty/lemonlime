@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { codexUsageWindows, readAccountUsage, saveAccountUsage } from "../src/accounts.ts";
+import { codexAccountFrom, codexUsageWindows, readAccountUsage, saveAccountUsage } from "../src/accounts.ts";
 import { claudeUsageWindows, parseClaudeLine } from "../src/agents/claude-code.ts";
 
 const dirs: string[] = [];
@@ -59,6 +59,12 @@ describe("plan usage, as the agents report it", () => {
       { kind: "other", label: "1d", usedPercent: 50 },
     ]);
     expect(codexUsageWindows({})).toEqual([]);
+  });
+
+  it("reads who is signed in to Codex, and on which plan", () => {
+    expect(codexAccountFrom({ account: { type: "chatgpt", email: "me@example.com", planType: "plus" } })).toEqual({ email: "me@example.com", plan: "Plus" });
+    expect(codexAccountFrom({ account: null, requiresOpenaiAuth: true })).toBeNull();
+    expect(codexAccountFrom({ account: { type: "apiKey" } })).toEqual({});
   });
 
   it("keeps the latest report per account, and refuses odd account ids", () => {

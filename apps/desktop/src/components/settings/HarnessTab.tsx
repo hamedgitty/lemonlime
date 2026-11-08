@@ -348,17 +348,32 @@ function SignInCommand({ kind, unknown = false }: { kind: HarnessRow["kind"]; un
       align="end"
       className="w-[300px] p-3"
       trigger={
-        <button
-          type="button"
-          aria-label={unknown ? `How to sign ${AGENT_LABELS[kind]} in` : `Sign ${AGENT_LABELS[kind]} in`}
-          className="h-7 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-leaf hover:bg-cream-deep hover:text-leaf-deep"
-        >
-          Sign in
-        </button>
+        unknown ? (
+          // Installed, and it may well work signed out (OpenCode's free models do): a quiet
+          // check that opens how to sign in, rather than a call to action.
+          <button
+            type="button"
+            aria-label={`${AGENT_LABELS[kind]} is installed. How to sign it in`}
+            title="Installed. Click for how to sign in."
+            className="inline-flex size-7 items-center justify-center rounded-md hover:bg-cream-deep"
+          >
+            <CircleCheck aria-hidden="true" className="size-[18px] text-ink-faint" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label={`Sign ${AGENT_LABELS[kind]} in`}
+            className="h-7 rounded-md px-2 text-[13px] font-medium whitespace-nowrap text-leaf hover:bg-cream-deep hover:text-leaf-deep"
+          >
+            Sign in
+          </button>
+        )
       }
     >
       <p className="text-[13.5px] text-ink-soft">
-        {unknown ? `LemonLime can't tell whether ${AGENT_LABELS[kind]} is signed in. If it isn't, run this in a terminal:` : "Run this in a terminal:"}
+        {unknown
+          ? `${AGENT_LABELS[kind]} is installed. LemonLime can't tell whether it's signed in; it may work without (OpenCode's free models do). To sign in, run this in a terminal:`
+          : "Run this in a terminal:"}
       </p>
       <div className="mt-2 flex items-center gap-2 rounded-lg border border-line bg-cream px-2.5 py-1.5">
         <code className={cx(code, "min-w-0 flex-1 truncate")}>{command}</code>

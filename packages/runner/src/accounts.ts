@@ -290,12 +290,34 @@ export function codexUsageWindows(result: unknown): UsageWindow[] {
   return out;
 }
 
+export interface CodexAccountInfo {
+  /** null: Codex answered that no one is signed in. */
+  account: { email?: string; plan?: string } | null;
+  windows: UsageWindow[];
+}
+
+/** "plus" → "Plus", as Codex names the plan. */
+function planName(raw: unknown): string | undefined {
+  if (typeof raw !== "string" || !raw.trim()) return undefined;
+  const p = raw.trim().slice(0, 80);
+  return p.charAt(0).toUpperCase() + p.slice(1);
+}
+
+/** Codex's `account/read` answer: who is signed in and on which plan. */
+export function codexAccountFrom(result: unknown): CodexAccountInfo["account"] {
+  const a = (result as { account?: { email?: unknown; planType?: unknown } | null } | null)?.account;
+  if (!a) return null;
+  const plan = planName(a.planType);
+  return { ...(typeof a.email === "string" && a.email ? { email: a.email.slice(0, 200) } : {}), ...(plan ? { plan } : {}) };
+}
+
 /**
- * Ask Codex itself where an account's plan limits stand: its app-server answers
- * `account/rateLimits/read` from the account's own sign-in, without running a model.
- * Null when Codex isn't there, isn't signed in, or doesn't answer in time.
+ * Ask Codex itself about an account, through its app-server: who is signed in and on
+ * which plan (`account/read`), and where the plan's limits stand (`account/rateLimits/read`),
+ * from the account's own sign-in, without running a model. Null when Codex isn't there or
+ * doesn't answer in time.
  */
-export function codexUsage(dir: string | null, timeoutMs = 12_000): Promise<UsageWindow[] | null> {
+export function codexAccountInfo(dir: string | null, timeoutMs = 12_000): Promise<CodexAccountInfo | null> {
   return new Promise(resolve => {
     const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
     if (dir) env.CODEX_HOME = dir;
@@ -306,18 +328,20 @@ export function codexUsage(dir: string | null, timeoutMs = 12_000): Promise<Usag
       return resolve(null);
     }
     let done = false;
-    const finish = (v: UsageWindow[] | null) => {
+    let account: CodexAccountInfo["account"] | undefined;
+    let windows: UsageWindow[] | undefined;
+    const finish = (v: CodexAccountInfo | null) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       child.kill();
       resolve(v);
     };
-    const timer = setTimeout(() => finish(null), timeoutMs);
+    const timer = setTimeout(() => finish(account !== undefined ? { account, windows: windows ?? [] } : null), timeoutMs);
     const send = (m: object) => child.stdin?.write(`${JSON.stringify(m)}\n`);
     let buf = "";
     child.on("error", () => finish(null));
-    child.on("exit", () => finish(null));
+    child.on("exit", () => finish(account !== undefined ? { account, windows: windows ?? [] } : null));
     child.stdout?.on("data", (d: Buffer) => {
       buf += d.toString();
       if (buf.length > 1024 * 1024) return finish(null);
@@ -333,15 +357,26 @@ export function codexUsage(dir: string | null, timeoutMs = 12_000): Promise<Usag
         }
         if (m.id === 0) {
           send({ method: "initialized" });
-          send({ method: "account/rateLimits/read", id: 1 });
+          send({ method: "account/read", id: 1, params: { refreshToken: false } });
+          send({ method: "account/rateLimits/read", id: 2 });
         } else if (m.id === 1) {
-          const windows = m.error ? [] : codexUsageWindows(m.result);
-          finish(windows.length ? windows : null);
+          account = m.error ? null : codexAccountFrom(m.result);
+          // Signed out: there are no limits to ask about.
+          if (account === null) windows = [];
+        } else if (m.id === 2) {
+          windows = m.error ? [] : codexUsageWindows(m.result);
         }
+        if (account !== undefined && windows !== undefined) finish({ account, windows });
       }
     });
     send({ method: "initialize", id: 0, params: { clientInfo: { name: "lemonlime", version: "1" } } });
   });
+}
+
+/** Just the plan limits (see codexAccountInfo). */
+export async function codexUsage(dir: string | null, timeoutMs?: number): Promise<UsageWindow[] | null> {
+  const info = await codexAccountInfo(dir, timeoutMs);
+  return info?.windows.length ? info.windows : null;
 }
 
 /** What the agent itself says about an account: signed in, and as whom where it says. */
@@ -389,13 +424,16 @@ export async function listAccounts(home: string): Promise<AccountsList> {
       agents[kind] = await Promise.all(
         accountsOf(data, kind).map(async a => {
           const dir = accountDir(home, kind, a.id);
-          const status = await accountStatus(kind, dir);
-          // Codex says where the limits stand whenever asked; Claude Code only during a turn,
-          // so its bars show what it last reported on this account.
-          if (kind === "codex" && status.signedIn !== false) {
-            const live = await codexUsage(dir);
-            if (live) saveAccountUsage(home, kind, a.id, live);
-          }
+          // Codex answers who, which plan and where the limits stand in one go; Claude Code
+          // says who and which plan, and reports its limits only during a turn, so its bars
+          // show what it last reported on this account.
+          const info = kind === "codex" ? await codexAccountInfo(dir) : null;
+          const status: Pick<AgentAccount, "signedIn" | "email" | "plan"> = info
+            ? info.account
+              ? { signedIn: true, ...info.account }
+              : { signedIn: false }
+            : await accountStatus(kind, dir);
+          if (info?.windows.length) saveAccountUsage(home, kind, a.id, info.windows);
           const usage = status.signedIn === false ? null : readAccountUsage(home, kind, a.id);
           return { id: a.id, label: a.label, builtIn: a.builtIn, isDefault: a.isDefault, ...status, ...(usage ? { usage } : {}) };
         }),

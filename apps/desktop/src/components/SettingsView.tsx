@@ -151,7 +151,7 @@ export function SettingsView({ page, ctx, importTab }: { page: SettingsPage; ctx
       <header data-tauri-drag-region className="flex h-[52px] items-center border-b border-line px-6">
         <h1 className="font-sans text-[15px] font-semibold tracking-normal">Settings</h1>
       </header>
-      <div className="mx-auto w-full max-w-[760px] px-6 pt-7 pb-16">
+      <div className="mx-auto w-full max-w-[880px] px-6 pt-7 pb-16">
         <h2 className="mb-5 flex items-center gap-2.5 text-[22px] font-semibold">
           <current.icon aria-hidden="true" className="size-5 text-ink-soft" />
           {current.label}

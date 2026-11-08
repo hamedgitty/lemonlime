@@ -19,11 +19,32 @@ async function accounts(command: string, args: { agent?: string; id?: string; la
 }
 
 /** Every account per agent, and the limit setting. Null outside the desktop app. */
+const LAST_LIST_KEY = "lemonlime:accounts-last";
+
 export async function listAccounts(): Promise<AccountsList | null> {
   if (!isTauri()) return null;
   const parsed = AccountsList.safeParse(await accounts("list"));
   if (!parsed.success) throw new Error("The runner's list of accounts couldn't be read. Is it up to date?");
+  try {
+    localStorage.setItem(LAST_LIST_KEY, JSON.stringify(parsed.data));
+  } catch {
+    /* only a convenience */
+  }
   return parsed.data;
+}
+
+/**
+ * The list as it was last seen, so the Accounts tab shows at once while the agents are
+ * asked again (names, emails and usage only: the list never holds a token).
+ */
+export function lastAccounts(): AccountsList | null {
+  try {
+    const raw = localStorage.getItem(LAST_LIST_KEY);
+    const r = raw ? AccountsList.safeParse(JSON.parse(raw)) : null;
+    return r?.success ? r.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function addAccount(agent: AccountAgent, label: string): Promise<{ id: string; label: string }> {

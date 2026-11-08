@@ -14,7 +14,10 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const root = dirname(here);
 const store = join(root, "node_modules/.pnpm");
-const sharpDir = readdirSync(store).filter(d => d.startsWith("sharp@")).sort().pop();
+const sharpDir = readdirSync(store)
+  .filter(d => d.startsWith("sharp@"))
+  .sort()
+  .pop();
 if (!sharpDir) throw new Error("sharp isn't installed. Run pnpm install first.");
 const sharp = createRequire(join(store, sharpDir, "node_modules/sharp/package.json"))("sharp");
 
@@ -64,9 +67,16 @@ const sized = async (svg, sizes) => Promise.all(sizes.map(async size => ({ size,
 // ── The kit itself ──
 const kit = join(here, "png");
 for (const [svg, w, h] of [
-  ["mark.svg", 512], ["mark.svg", 1024], ["mark-ink.svg", 1024], ["mark-cream.svg", 1024],
-  ["lockup.svg", 1200, 300], ["lockup-on-dark.svg", 1200, 300], ["lockup-ink.svg", 1200, 300], ["lockup-cream.svg", 1200, 300],
-  ["lockup-stacked.svg", 800, 640], ["lockup-stacked-on-dark.svg", 800, 640],
+  ["mark.svg", 512],
+  ["mark.svg", 1024],
+  ["mark-ink.svg", 1024],
+  ["mark-cream.svg", 1024],
+  ["lockup.svg", 1200, 300],
+  ["lockup-on-dark.svg", 1200, 300],
+  ["lockup-ink.svg", 1200, 300],
+  ["lockup-cream.svg", 1200, 300],
+  ["lockup-stacked.svg", 800, 640],
+  ["lockup-stacked-on-dark.svg", 800, 640],
   ["app-icon.svg", 1024],
 ]) {
   const name = svg.replace(".svg", "") + `-${w}${h && h !== w ? `x${h}` : ""}.png`;

@@ -14,6 +14,7 @@ import glob
 import io
 import math
 import os
+import subprocess
 
 import uharfbuzz as hb
 from fontTools.pens.svgPathPen import SVGPathPen
@@ -320,9 +321,14 @@ def main() -> None:
         write(name, svg(w, h, body, "LemonLime"))
 
     mark_tsx = react_mark()
-    for target in ("apps/web/src/components/logo-mark.tsx", "apps/desktop/src/components/LogoMark.tsx"):
-        with open(os.path.join(ROOT, target), "w") as f:
+    targets = [os.path.join(ROOT, t) for t in ("apps/web/src/components/logo-mark.tsx", "apps/desktop/src/components/LogoMark.tsx")]
+    for target in targets:
+        with open(target, "w") as f:
             f.write(mark_tsx)
+    # Match the repo's code style so the format check passes.
+    prettier = os.path.join(ROOT, "node_modules/.bin/prettier")
+    if os.path.exists(prettier):
+        subprocess.run([prettier, "--write", "--log-level", "warn", *targets], check=True, cwd=ROOT)
 
     write("app-icon.svg", app_icon(full_bleed=False))
     write("app-icon-square.svg", app_icon(full_bleed=True))

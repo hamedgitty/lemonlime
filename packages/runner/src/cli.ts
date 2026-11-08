@@ -90,8 +90,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            e.g. lemonlime-open-pr,lemonlime-previews
   --no-command-guard       Let the agent run commands that wipe the computer or home
                            folder, erase disks or fork-bomb (blocked by default: Claude Code
-                           through a hook, OpenCode and other ACP agents when they ask
-                           before running a command)
+                           through a hook, Codex through a hook in cloud sandboxes, OpenCode
+                           and other ACP agents when they ask before running a command)
   --exit-with-parent       Stop when the process that started this runner exits (for apps)
   --instructions-file <path>
                            Your own instructions, added to every turn (Claude Code's system

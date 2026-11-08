@@ -29,6 +29,22 @@ export const codexAdapter: AgentAdapter = {
   },
 };
 
+/**
+ * The command guard (see command-guard.ts) as a Codex PreToolUse hook, in cloud sandboxes.
+ * Codex only runs hooks someone has trusted, and trust is kept in its config; in a sandbox
+ * that config is the sandbox's own, but rather than write to it the hook is passed for this
+ * run with hook trust skipped. That also lets a repository's own hooks run, which in a
+ * sandbox the agent can already do itself at full access. On the user's own computer the
+ * guard isn't added this way: trusting hooks there is the user's call.
+ */
+export function codexGuardFlags(enabled: boolean, command: string[] = selfCommand("command-guard")): string[] {
+  if (!enabled) return [];
+  const hook = `{type="command",command=${tomlString(command.map(shellQuote).join(" "))},timeout=10}`;
+  return ["-c", `hooks.PreToolUse=[{matcher="^Bash$",hooks=[${hook}]}]`, "--dangerously-bypass-hook-trust"];
+}
+
+const shellQuote = (a: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);
+
 class CodexSession implements AgentSession {
   private threadId: string | undefined;
   private readonly opts: SessionOptions;
@@ -74,6 +90,7 @@ class CodexSession implements AgentSession {
     }
     // The user's plugin servers. Unlike LemonLime's own, their tools aren't pre-approved.
     flags.push(...codexMcpFlags(this.opts.mcpServers ?? {}));
+    flags.push(...codexGuardFlags(this.opts.commandGuard !== false && process.env.LEMONLIME_SANDBOX === "1"));
     if (this.opts.autonomy === "full") flags.push("--dangerously-bypass-approvals-and-sandbox");
     else flags.push("-c", this.opts.autonomy === "read" || plan ? 'sandbox_mode="read-only"' : 'sandbox_mode="workspace-write"');
     // "-" reads the prompt from stdin, so it can't be taken for a flag or be too long for argv.

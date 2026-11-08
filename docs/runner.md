@@ -252,7 +252,9 @@ no client connected. With retry on, it replaces the "Continue where you left off
   devices, and fork bombs. The agent is told why and asked to leave it to you.
   OpenCode and other ACP agents get the same check when they ask permission to run a
   command: a dangerous one is refused at every autonomy level (`command_blocked` notice).
-  `--no-command-guard` turns it off for a thread. Codex has no hook for it yet.
+  `--no-command-guard` turns it off for a thread. Codex gets the same hook in cloud sandboxes,
+  passed for each run with Codex's hook trust skipped (the sandbox is the agent's anyway); on
+  your own computer it isn't added, since trusting hooks in your Codex config is your call.
 - **Disk.** Below 15% free in the thread's folder (at most 10 GB) you get a warning; below
   5% (at most 2 GB) the agent is paused and new messages wait; at 8% (at most 4 GB) it
   carries on. If the disk is still full 30 seconds

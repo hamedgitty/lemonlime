@@ -4,9 +4,10 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { branchForThread, type Thread, type ThreadEvent } from "@lemonlime/protocol";
 import { ActivityMonitor, startHeartbeat, ThreadRunner, type AgentAdapter } from "../src/index.ts";
+import { runCheckScript } from "../src/check-script.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -92,10 +93,11 @@ describe("heartbeat", () => {
   }
 
   /** A pretend control plane that keeps history and an inbox like the real one. */
-  async function fakeControlPlane(opts: { drain?: boolean; inbox?: { clientMsgId: string; text: string }[] }) {
+  async function fakeControlPlane(opts: { drain?: boolean; inbox?: { clientMsgId: string; text: string; check?: string }[] }) {
     const stored: ThreadEvent[] = [];
     const heartbeats: Record<string, unknown>[] = [];
     const acked: string[] = [];
+    const skipped: { clientMsgId: string; reason: string }[] = [];
     let inbox = opts.inbox ?? [];
     let drain = opts.drain ?? false;
     const server = createServer((req, res) => {
@@ -119,8 +121,10 @@ describe("heartbeat", () => {
         }
         if (req.url?.startsWith("/api/runner/inbox") && req.method === "GET") return send({ messages: inbox });
         if (req.url === "/api/runner/inbox") {
-          const ids = JSON.parse(body).clientMsgIds as string[];
+          const parsed = JSON.parse(body) as { clientMsgIds: string[]; skipped?: { clientMsgId: string; reason: string }[] };
+          const ids = parsed.clientMsgIds;
           acked.push(...ids);
+          skipped.push(...(parsed.skipped ?? []));
           inbox = inbox.filter(m => !ids.includes(m.clientMsgId));
           return send({ ok: true });
         }
@@ -129,7 +133,7 @@ describe("heartbeat", () => {
     });
     await new Promise<void>(r => server.listen(0, "127.0.0.1", () => r()));
     cleanups.push(() => new Promise<void>(r => server.close(() => r())));
-    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, stored, heartbeats, acked };
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, stored, heartbeats, acked, skipped };
   }
 
   async function runner(id: string) {
@@ -192,5 +196,58 @@ describe("heartbeat", () => {
     expect(prompts).toEqual(["while you were away"]);
     expect(cp.acked).toEqual(["p1"]);
     expect(cp.heartbeats.some(h => h.background === "server")).toBe(true);
+  });
+
+  it("runs an automation's check script first, and skips the run when it finds nothing", async () => {
+    const cp = await fakeControlPlane({
+      inbox: [
+        { clientMsgId: "automation-a", text: "Triage the new issues.", check: "list-issues" },
+        { clientMsgId: "automation-b", text: "Bump deps.", check: "nothing-new" },
+      ],
+    });
+    const { r, prompts } = await runner("hb-thread-3");
+    const ran: string[] = [];
+    const hb = startHeartbeat(r, {
+      controlPlaneUrl: cp.url,
+      threadSecret: "secret-for-heartbeat-tests-0123",
+      version: "t",
+      onShutdown: () => undefined,
+      intervalMs: 60_000,
+      activity: { sample: () => null, load: () => null },
+      runCheck: async script => {
+        ran.push(script);
+        return script === "list-issues" ? { run: true, context: "<check-output>\n#12 crash\n</check-output>" } : { run: false, reason: "printed nothing" };
+      },
+    });
+    cleanups.push(() => hb.stop());
+    await hb.beat();
+    await vi.waitFor(() => expect(cp.acked.sort()).toEqual(["automation-a", "automation-b"]));
+    await r.settled();
+    expect(ran.sort()).toEqual(["list-issues", "nothing-new"]);
+    expect(prompts).toEqual(["Triage the new issues.\n\n<check-output>\n#12 crash\n</check-output>"]);
+    expect(cp.skipped).toEqual([{ clientMsgId: "automation-b", reason: "printed nothing" }]);
+  });
+});
+
+describe("check scripts", () => {
+  it("go ahead only when they exit 0 and print something", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "marker.txt"), "found it");
+    const ok = await runCheckScript("cat marker.txt", dir);
+    expect(ok).toMatchObject({ run: true });
+    expect(ok.run && ok.context).toContain("found it");
+    expect(await runCheckScript("true", dir)).toMatchObject({ run: false, reason: expect.stringContaining("printed nothing") });
+    expect(await runCheckScript("echo something; exit 3", dir)).toMatchObject({ run: false, reason: expect.stringContaining("code 3") });
+    // Only stdout counts.
+    expect(await runCheckScript("echo oops >&2", dir)).toMatchObject({ run: false });
+  });
+
+  it("don't see the runner's secrets, and stop at the timeout", async () => {
+    const dir = temp();
+    const env = { ...process.env, LEMONLIME_THREAD_SECRET: "do-not-leak" };
+    const leaked = await runCheckScript('printf "%s" "${LEMONLIME_THREAD_SECRET:-}"', dir, { env });
+    expect(leaked).toMatchObject({ run: false });
+    const slow = await runCheckScript("sleep 5; echo late", dir, { timeoutMs: 200 });
+    expect(slow).toMatchObject({ run: false, reason: expect.stringContaining("longer than") });
   });
 });

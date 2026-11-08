@@ -329,6 +329,8 @@ export const pendingMessages = sqliteTable(
       .references(() => threads.id, { onDelete: "cascade" }),
     clientMsgId: text("client_msg_id").notNull(),
     text: text("text").notNull(),
+    /** A check script the runner runs before sending the message (automations); null for none. */
+    check: text("check"),
     createdAt: text("created_at").notNull().$defaultFn(nowIso),
   },
   t => [uniqueIndex("pending_messages_thread_msg_idx").on(t.threadId, t.clientMsgId)],
@@ -345,7 +347,7 @@ export const systemStatus = sqliteTable("system_status", {
 
 // ─── Automations ─────────────────────────────────────────────────────────────
 
-/** A prompt run as a new cloud thread on a schedule (the minute sweep starts due ones). */
+/** A prompt run as a new cloud thread on a schedule (the minute sweep starts due ones), or when its webhook is called. */
 export const automations = sqliteTable(
   "automations",
   {
@@ -357,14 +359,22 @@ export const automations = sqliteTable(
       .references(() => workspaces.id, { onDelete: "cascade" }),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
     name: text("name").notNull(),
-    /** Five-field cron, e.g. "0 9 * * 1-5". */
+    /** Five-field cron, e.g. "0 9 * * 1-5"; empty when it only runs from its webhook. */
     schedule: text("schedule").notNull(),
     timezone: text("timezone").notNull().default("UTC"),
     agent: text("agent", { mode: "json" }).$type<AgentConfig>().notNull(),
     repo: text("repo", { mode: "json" }).$type<RepoRef>().notNull(),
     sandboxSize: text("sandbox_size").$type<SandboxSize>().notNull().default("small"),
     prompt: text("prompt").notNull(),
+    /** Shell command run in the sandbox first; the run goes ahead only if it exits 0 and prints something. */
+    checkScript: text("check_script").notNull().default(""),
+    /** SHA-256 (hex) of the secret in its webhook URL; null when it has no webhook. */
+    webhookTokenHash: text("webhook_token_hash"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    /** Why it turned itself off (failing in a row, agent not signed in); null when on or paused by hand. */
+    pausedReason: text("paused_reason"),
+    /** When it was last turned back on; earlier runs don't count towards pausing it again. */
+    resumedAt: text("resumed_at"),
     /** When it runs next (ISO); null when disabled or the schedule never fires again. */
     nextRunAt: text("next_run_at"),
     lastRunAt: text("last_run_at"),
@@ -387,6 +397,8 @@ export const automationRuns = sqliteTable(
     scheduledFor: text("scheduled_for").notNull(),
     ranAt: text("ran_at").notNull().$defaultFn(nowIso),
     status: text("status").$type<"started" | "skipped" | "failed">().notNull(),
+    /** What started it. */
+    trigger: text("trigger").$type<"schedule" | "webhook">().notNull().default("schedule"),
     threadId: text("thread_id"),
     /** Why it was skipped or failed, in words for the user. */
     detail: text("detail"),

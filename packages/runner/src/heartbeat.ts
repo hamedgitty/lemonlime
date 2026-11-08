@@ -1,5 +1,16 @@
-import { HeartbeatResponse, RunnerHistoryResponse, RunnerInbox, signToken, type RunnerHeartbeat, type ThreadEvent } from "@lemonlime/protocol";
+import {
+  HeartbeatResponse,
+  promptWithContext,
+  RunnerHistoryResponse,
+  RunnerInbox,
+  signToken,
+  type CheckVerdict,
+  type PendingMessage,
+  type RunnerHeartbeat,
+  type ThreadEvent,
+} from "@lemonlime/protocol";
 import { ActivityMonitor } from "./activity.ts";
+import { runCheckScript } from "./check-script.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 import { relayResponse, type Relay } from "./relay.ts";
 
@@ -26,6 +37,8 @@ export interface HeartbeatOptions {
   activity?: Pick<ActivityMonitor, "sample" | "load">;
   /** Relay mode: calls wait for the control plane to collect them instead of being sent. */
   relay?: Relay;
+  /** Runs a message's check script (an automation's); replaceable in tests. */
+  runCheck?: (script: string, cwd: string) => Promise<CheckVerdict>;
 }
 
 export interface Heartbeat {
@@ -103,14 +116,45 @@ export function startHeartbeat(runner: ThreadRunner, opts: HeartbeatOptions): He
     return true;
   };
 
+  /** Messages whose check script is running now, so a later beat doesn't start it again. */
+  const checking = new Set<string>();
+  const runCheck = opts.runCheck ?? runCheckScript;
+
+  /**
+   * An automation's message with a check script: run the script first (in the background,
+   * so heartbeats carry on), then send the message with what it printed, or tell the
+   * control plane it was skipped.
+   */
+  const checkThenSend = async (m: PendingMessage & { check: string }) => {
+    checking.add(m.clientMsgId);
+    try {
+      const verdict = await runCheck(m.check, runner.workdir);
+      if (verdict.run) runner.sendMessage(promptWithContext(m.text, [verdict.context]), m.clientMsgId);
+      else opts.log?.(`skipped an automation run: ${verdict.reason}`);
+      await call("/api/runner/inbox", {
+        method: "POST",
+        body: { threadId, clientMsgIds: [m.clientMsgId], ...(verdict.run ? {} : { skipped: [{ clientMsgId: m.clientMsgId, reason: verdict.reason }] }) },
+      });
+    } catch (err) {
+      opts.log?.(`check script failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      checking.delete(m.clientMsgId);
+    }
+  };
+
   /** Bring messages sent while the sandbox was paused into the queue, then tell the control plane. */
   const pickUpMessages = async () => {
     const res = await call(`/api/runner/inbox?threadId=${encodeURIComponent(threadId)}`, { method: "GET" });
     if (!res.ok) return;
     const inbox = RunnerInbox.safeParse(await res.json().catch(() => ({})));
     if (!inbox.success || inbox.data.messages.length === 0) return;
-    for (const m of inbox.data.messages) runner.sendMessage(m.text, m.clientMsgId);
-    await call("/api/runner/inbox", { method: "POST", body: { threadId, clientMsgIds: inbox.data.messages.map(m => m.clientMsgId) } });
+    const plain = inbox.data.messages.filter(m => !m.check);
+    for (const m of inbox.data.messages) {
+      if (m.check && !checking.has(m.clientMsgId)) void checkThenSend({ ...m, check: m.check });
+    }
+    if (!plain.length) return;
+    for (const m of plain) runner.sendMessage(m.text, m.clientMsgId);
+    await call("/api/runner/inbox", { method: "POST", body: { threadId, clientMsgIds: plain.map(m => m.clientMsgId) } });
   };
 
   const once = async () => {

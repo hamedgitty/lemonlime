@@ -71,6 +71,17 @@ export function Timeline({
   const toc = useMemo(() => tocEntries(items), [items]);
   const turnStart = working ? liveTurnStart(items) : null;
 
+  // The scrollbar shows while the person scrolls (not while new output follows itself).
+  const quietTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showScrollbar = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.dataset.scrolling = "";
+    if (quietTimer.current) clearTimeout(quietTimer.current);
+    quietTimer.current = setTimeout(() => delete el.dataset.scrolling, 900);
+  };
+  useEffect(() => () => void (quietTimer.current && clearTimeout(quietTimer.current)), []);
+
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -133,7 +144,10 @@ export function Timeline({
         <div
           ref={scrollRef}
           onScroll={onScroll}
-          className="scroll-thin relative h-full overflow-y-auto"
+          onWheel={showScrollbar}
+          onTouchMove={showScrollbar}
+          onKeyDown={showScrollbar}
+          className="scroll-quiet relative h-full overflow-y-auto"
           role="log"
           aria-live="polite"
           aria-relevant="additions"

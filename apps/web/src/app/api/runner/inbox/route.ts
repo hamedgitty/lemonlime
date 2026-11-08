@@ -1,4 +1,5 @@
 import { RunnerInboxAck } from "@lemonlime/protocol";
+import { recordCheckSkips } from "@/lib/automations.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { ackPendingMessages, listPendingMessages } from "@/lib/history.ts";
 import { HttpError, json, parseBody, route } from "@/lib/http.ts";
@@ -25,5 +26,7 @@ export const POST = route(async request => {
   if (!auth.ok) throw new HttpError(auth.status, auth.error);
   await getLiveRunnerThread(ctx, ack.threadId);
   await ackPendingMessages(ctx, ack.threadId, ack.clientMsgIds);
+  // An automation's check script said there was nothing to do: record the run as skipped.
+  if (ack.skipped?.length) await recordCheckSkips(ctx, ack.threadId, ack.skipped);
   return json({ ok: true });
 });

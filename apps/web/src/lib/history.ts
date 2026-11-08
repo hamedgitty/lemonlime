@@ -169,16 +169,49 @@ export async function lastAgentMessage(ctx: AppContext, threadId: string, maxChu
   return null;
 }
 
+/**
+ * How a thread's stored history ends: the agent's last whole message, and the code of an
+ * error that came after it (the turn failed), if any. Reads the newest chunks only.
+ */
+export async function threadEnding(ctx: AppContext, threadId: string, maxChunks = 3): Promise<{ message: string | null; errorCode: string | null }> {
+  if (!ctx.history) return { message: null, errorCode: null };
+  const chunks = (await ctx.history.list(prefixFor(threadId)))
+    .map(key => ({ key, range: parseKey(key) }))
+    .filter((c): c is { key: string; range: { from: number; to: number } } => c.range !== null)
+    .sort((a, b) => b.range.to - a.range.to)
+    .slice(0, maxChunks);
+  let errorCode: string | null = null;
+  for (const chunk of chunks) {
+    const lines = ((await ctx.history.get(chunk.key)) ?? "").split("\n").reverse();
+    for (const line of lines) {
+      const isError = line.includes('"type":"error"');
+      if (!isError && !line.includes('"agent_message"')) continue;
+      const parsed = ThreadEvent.safeParse(JSON.parse(line));
+      if (!parsed.success) continue;
+      const e = parsed.data;
+      if (e.type === "error" && errorCode === null) errorCode = e.code ?? "agent_failed";
+      if (e.type === "agent_message" && !e.partial && e.text.trim()) return { message: e.text, errorCode };
+    }
+  }
+  return { message: null, errorCode };
+}
+
 // ─── Messages sent while the sandbox was paused ─────────────────────────────
 
-/** Save a message for a thread whose runner isn't reachable. Sending the same id twice is a no-op. */
+/**
+ * Save a message for a thread whose runner isn't reachable. Sending the same id twice is a
+ * no-op. Only automations set `check`; messages from people never carry one.
+ */
 export async function addPendingMessage(ctx: AppContext, threadId: string, msg: PendingMessage): Promise<void> {
-  await ctx.db.insert(pendingMessages).values({ threadId, clientMsgId: msg.clientMsgId, text: msg.text }).onConflictDoNothing();
+  await ctx.db
+    .insert(pendingMessages)
+    .values({ threadId, clientMsgId: msg.clientMsgId, text: msg.text, check: msg.check?.trim() || null })
+    .onConflictDoNothing();
 }
 
 export async function listPendingMessages(ctx: AppContext, threadId: string): Promise<PendingMessage[]> {
   const rows = await ctx.db.select().from(pendingMessages).where(eq(pendingMessages.threadId, threadId)).orderBy(pendingMessages.id);
-  return rows.map(r => ({ clientMsgId: r.clientMsgId, text: r.text }));
+  return rows.map(r => ({ clientMsgId: r.clientMsgId, text: r.text, ...(r.check ? { check: r.check } : {}) }));
 }
 
 export async function countPendingMessages(ctx: AppContext, threadId: string): Promise<number> {

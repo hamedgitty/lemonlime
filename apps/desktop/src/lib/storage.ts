@@ -207,6 +207,12 @@ export const UiPrefs = z.object({
   unreadSince: z.string().default(""),
   /** Threads marked as unread by hand. */
   markedUnread: z.array(z.string()).default([]),
+  /** After a turn, offer a likely next message in the empty composer (Tab takes it). */
+  suggestNextPrompt: z.boolean().default(true),
+  /** On Home, point out when the message names another of your projects. */
+  projectHint: z.boolean().default(true),
+  /** The Get started checklist on Home was put away. */
+  getStartedDismissed: z.boolean().default(false),
 });
 export type UiPrefs = z.infer<typeof UiPrefs>;
 

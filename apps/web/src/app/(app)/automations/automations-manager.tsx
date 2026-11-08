@@ -9,9 +9,13 @@ import { timeAgo } from "@/components/status-pill.tsx";
 interface Run {
   id: string;
   status: "started" | "skipped" | "failed";
+  /** What it came to, from its thread. */
+  outcome?: "started" | "finished" | "skipped" | "failed";
+  trigger?: "schedule" | "webhook";
   ranAt: string;
   threadId: string | null;
   detail: string | null;
+  summary?: string | null;
 }
 
 export interface AutomationInfo {
@@ -22,7 +26,11 @@ export interface AutomationInfo {
   agent: { kind: AgentKind; model?: string; reasoning?: ReasoningLevel };
   repo: { url: string; baseBranch: string };
   prompt: string;
+  checkScript?: string;
   enabled: boolean;
+  /** Why it turned itself off; null when on or paused by hand. */
+  pausedReason?: string | null;
+  hasWebhook?: boolean;
   nextRunAt: string | null;
   recentRuns?: Run[];
 }
@@ -45,7 +53,13 @@ const when = (iso: string | null, tz: string) =>
     ? new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: tz })
     : "Not scheduled";
 
-const RUN_LABEL: Record<Run["status"], string> = { started: "Started", skipped: "Skipped", failed: "Failed" };
+const RUN_LABEL: Record<NonNullable<Run["outcome"]>, string> = { started: "Started", finished: "Finished", skipped: "Skipped", failed: "Failed" };
+const RUN_TONE: Record<NonNullable<Run["outcome"]>, string> = {
+  started: "text-muted",
+  finished: "text-leaf",
+  skipped: "text-amber-800",
+  failed: "text-red-800",
+};
 
 /** Create, pause, delete and look back at automations. Times show in each automation's own time zone. */
 export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
@@ -61,7 +75,10 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
     repoUrl: "",
     baseBranch: "main",
     prompt: "",
+    checkScript: "",
   });
+  /** A webhook URL just made, shown this once. */
+  const [newHook, setNewHook] = useState<{ id: string; url: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const caps = AGENT_CAPABILITIES[form.agent];
 
@@ -90,12 +107,30 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
         agent: { kind: form.agent, ...(form.model.trim() ? { model: form.model.trim() } : {}), ...(form.reasoning ? { reasoning: form.reasoning } : {}) },
         repo: { url: form.repoUrl.trim(), baseBranch: form.baseBranch.trim() || "main" },
         prompt: form.prompt,
+        checkScript: form.checkScript,
       },
     });
     setBusy(false);
     if (!res.ok) return setError(res.message);
     setList(l => [...l, { ...res.data.automation, recentRuns: [] }]);
-    set({ name: "", prompt: "" });
+    set({ name: "", prompt: "", checkScript: "" });
+  }
+
+  async function makeWebhook(a: AutomationInfo) {
+    if (a.hasWebhook && !window.confirm("Make a new webhook URL? The old one stops working straight away.")) return;
+    setError(null);
+    const res = await apiFetch<{ url: string }>(`/api/automations/${a.id}/webhook`, { method: "POST" });
+    if (!res.ok) return setError(res.message);
+    setNewHook({ id: a.id, url: res.data.url });
+    setList(l => l.map(x => (x.id === a.id ? { ...x, hasWebhook: true } : x)));
+  }
+
+  async function removeWebhook(a: AutomationInfo) {
+    setError(null);
+    const res = await apiFetch(`/api/automations/${a.id}/webhook`, { method: "DELETE" });
+    if (!res.ok) return setError(res.message);
+    if (newHook?.id === a.id) setNewHook(null);
+    setList(l => l.map(x => (x.id === a.id ? { ...x, hasWebhook: false } : x)));
   }
 
   async function toggle(a: AutomationInfo) {
@@ -123,17 +158,42 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
 
       {list.length > 0 && (
         <ul className="space-y-3">
-          {list.map(a => (
+          {/* Paused ones go to the bottom. */}
+          {[...list.filter(a => a.enabled), ...list.filter(a => !a.enabled)].map(a => (
             <li key={a.id} className="card p-5">
               <div className="flex flex-wrap items-start gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold">{a.name}</p>
                   <p className="mt-0.5 text-sm text-muted">
-                    <span className="font-mono">{a.schedule}</span> ({a.timezone}), {AGENTS.find(x => x.kind === a.agent.kind)?.label ?? a.agent.kind} on{" "}
+                    {a.schedule ? (
+                      <>
+                        <span className="font-mono">{a.schedule}</span> ({a.timezone})
+                      </>
+                    ) : (
+                      "Webhook only"
+                    )}
+                    , {AGENTS.find(x => x.kind === a.agent.kind)?.label ?? a.agent.kind} on{" "}
                     <span className="font-mono">{a.repo.url.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")}</span>
+                    {a.checkScript ? ", checks first" : ""}
                   </p>
-                  <p className="mt-1 text-sm">{a.enabled ? `Next run ${when(a.nextRunAt, a.timezone)}` : "Paused"}</p>
+                  <p className="mt-1 text-sm">
+                    {a.enabled
+                      ? a.schedule
+                        ? `Next run ${when(a.nextRunAt, a.timezone)}`
+                        : "Runs when its webhook is called"
+                      : a.pausedReason
+                        ? `Paused automatically. ${a.pausedReason}`
+                        : "Paused"}
+                  </p>
                 </div>
+                <button type="button" className="btn-ghost h-8" onClick={() => makeWebhook(a)}>
+                  {a.hasWebhook ? "New webhook URL" : "Add a webhook"}
+                </button>
+                {a.hasWebhook && (
+                  <button type="button" className="btn-ghost h-8" onClick={() => removeWebhook(a)}>
+                    Turn off webhook
+                  </button>
+                )}
                 <button type="button" className="btn-ghost h-8" onClick={() => toggle(a)}>
                   {a.enabled ? "Pause" : "Resume"}
                 </button>
@@ -141,18 +201,31 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
                   Delete
                 </button>
               </div>
+              {newHook?.id === a.id && (
+                <div className="mt-4 rounded-lg border border-line px-3 py-3 text-sm">
+                  <label htmlFor={`hook-${a.id}`} className="label">
+                    Webhook URL
+                  </label>
+                  <input id={`hook-${a.id}`} readOnly className="field font-mono" value={newHook.url} onFocus={e => e.currentTarget.select()} />
+                  <p className="mt-1 text-muted">
+                    Copy it now: it won&apos;t be shown again. A POST to it starts a run; any JSON body (up to 16 KB) is given to the agent as untrusted
+                    context.
+                  </p>
+                </div>
+              )}
               {a.recentRuns && a.recentRuns.length > 0 && (
                 <ul aria-label="Recent runs" className="mt-4 divide-y divide-line rounded-lg border border-line text-sm">
                   {a.recentRuns.map(r => (
                     <li key={r.id} className="flex items-center gap-3 px-3 py-2">
-                      <span className={r.status === "started" ? "text-leaf" : r.status === "skipped" ? "text-amber-800" : "text-red-800"}>
-                        {RUN_LABEL[r.status]}
+                      <span className={RUN_TONE[r.outcome ?? r.status]}>{RUN_LABEL[r.outcome ?? r.status]}</span>
+                      <span className="text-muted">
+                        {timeAgo(r.ranAt, now)}
+                        {r.trigger === "webhook" ? ", webhook" : ""}
                       </span>
-                      <span className="text-muted">{timeAgo(r.ranAt, now)}</span>
-                      <span className="min-w-0 flex-1 truncate text-muted" title={r.detail ?? undefined}>
-                        {r.detail}
+                      <span className="min-w-0 flex-1 truncate text-muted" title={r.summary ?? r.detail ?? undefined}>
+                        {r.summary ?? r.detail}
                       </span>
-                      {r.threadId && (
+                      {r.threadId && r.status !== "skipped" && (
                         <Link href={`/threads/${r.threadId}`} className="text-leaf underline-offset-2 hover:underline">
                           Open thread
                         </Link>
@@ -303,6 +376,25 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
             value={form.prompt}
             onChange={e => set({ prompt: e.target.value })}
           />
+        </div>
+        <div>
+          <label htmlFor="auto-check" className="label">
+            Check first <span className="font-normal text-muted">(optional)</span>
+          </label>
+          <textarea
+            id="auto-check"
+            rows={2}
+            maxLength={10_000}
+            spellCheck={false}
+            className="field h-auto py-2 font-mono"
+            placeholder="git log --since=yesterday --oneline"
+            aria-describedby="auto-check-help"
+            value={form.checkScript}
+            onChange={e => set({ checkScript: e.target.value })}
+          />
+          <p id="auto-check-help" className="mt-1 text-sm text-muted">
+            A shell command run in the sandbox before the agent starts. If it prints nothing or fails, the run is skipped; what it prints is given to the agent.
+          </p>
         </div>
         <button type="submit" className="btn-primary h-10" disabled={busy || !preview.ok}>
           {busy ? "Saving..." : "Create automation"}

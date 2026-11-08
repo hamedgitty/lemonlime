@@ -69,6 +69,8 @@ export interface AppSidebarProps {
   onForward: (() => void) | null;
   /** Card above the footer, e.g. cloud hours left (from the deployment). */
   usageCard?: ReactNode;
+  /** The notification bell, given the footer buttons' class. */
+  notifications?: (className: string) => ReactNode;
   onArchive: (t: ThreadSummary, archive: boolean) => void;
   /** Each thread's status mark (see threadState.ts); missing means none. */
   glyphs?: Record<string, RowGlyph>;
@@ -414,6 +416,7 @@ export function AppSidebar(p: AppSidebarProps) {
             <SquareTerminal aria-hidden="true" />
           </button>
         </Tip>
+        {p.notifications?.(FOOT)}
         <span className="flex-1" />
         {p.agentUpdates && p.agentUpdates.length > 0 && (
           <Tip label={`${p.agentUpdates.join(" and ")} ${p.agentUpdates.length === 1 ? "has" : "have"} an update`}>

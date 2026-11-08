@@ -95,6 +95,12 @@ export type RunnerHistoryResponse = z.infer<typeof RunnerHistoryResponse>;
 export const PendingMessage = z.object({
   clientMsgId: z.string().min(1).max(100),
   text: z.string().min(1).max(200_000),
+  /**
+   * A shell command the runner runs first, in the thread's folder (an automation's check
+   * script). The message is sent only if it exits 0 and prints something; what it printed
+   * is added to the message. Otherwise the message is skipped and the ack says why.
+   */
+  check: z.string().max(10_000).optional(),
 });
 export type PendingMessage = z.infer<typeof PendingMessage>;
 
@@ -103,7 +109,15 @@ export const RunnerInbox = z.object({ messages: z.array(PendingMessage) });
 export type RunnerInbox = z.infer<typeof RunnerInbox>;
 
 /** Runner → control plane: these messages are now in the runner's queue or history. */
-export const RunnerInboxAck = z.object({ threadId: ThreadId, clientMsgIds: z.array(z.string()).max(1000) });
+export const RunnerInboxAck = z.object({
+  threadId: ThreadId,
+  clientMsgIds: z.array(z.string()).max(1000),
+  /** Messages not sent because their check said there was nothing to do (they are in `clientMsgIds` too). */
+  skipped: z
+    .array(z.object({ clientMsgId: z.string(), reason: z.string().max(2000) }))
+    .max(100)
+    .optional(),
+});
 export type RunnerInboxAck = z.infer<typeof RunnerInboxAck>;
 
 /** Client → control plane: the thread's stored history (for paused threads; no sandbox needed). */

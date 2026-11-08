@@ -5,7 +5,7 @@ import { applyPick, detectTrigger, insertQuote, type Trigger } from "../lib/comp
 import { HISTORY_IDLE, loadDraft, saveDraft, stepHistory, type HistoryState } from "../lib/promptHistory.ts";
 import { caretCoordinates } from "../lib/caret.ts";
 import { Highlighted } from "./Highlighted.tsx";
-import { Tip } from "./primitives.tsx";
+import { Kbd, Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 
 export interface ComposerHandle {
@@ -55,9 +55,28 @@ export const Composer = forwardRef<
     history?: readonly string[];
     /** Keep unsent text under this key (a thread id) across switches and restarts. */
     draftKey?: string;
+    /** A likely next message, shown greyed while the box is empty; Tab takes it. */
+    suggestion?: string | null;
+    /** Called as the text changes. */
+    onTextChange?: (text: string) => void;
   }
 >(function Composer(
-  { onSend, onInterrupt, working = false, disabled = false, disabledReason, placeholder, tools, busy = false, autoFocus, suggestions, history = [], draftKey },
+  {
+    onSend,
+    onInterrupt,
+    working = false,
+    disabled = false,
+    disabledReason,
+    placeholder,
+    tools,
+    busy = false,
+    autoFocus,
+    suggestions,
+    history = [],
+    draftKey,
+    suggestion,
+    onTextChange,
+  },
   handle,
 ) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
@@ -90,6 +109,9 @@ export const Composer = forwardRef<
   // Drafts: saved shortly after typing stops, and when the composer goes away.
   const textRef = useRef(text);
   textRef.current = text;
+  const onTextChangeRef = useRef(onTextChange);
+  onTextChangeRef.current = onTextChange;
+  useEffect(() => onTextChangeRef.current?.(text), [text]);
   useEffect(() => {
     if (!draftKey) return;
     const t = setTimeout(() => saveDraft(draftKey, text), 300);
@@ -223,8 +245,17 @@ export const Composer = forwardRef<
     ref.current?.focus();
   };
 
+  const offered = !disabled && !working && text === "" && suggestion ? suggestion : null;
+  const hintId = useId();
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
+    if (offered && e.key === "Tab" && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+      e.preventDefault();
+      setText(offered);
+      setCaret(offered.length);
+      return;
+    }
     if (open) {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -294,8 +325,11 @@ export const Composer = forwardRef<
           onKeyDown={onKeyDown}
           disabled={disabled}
           placeholder={
-            disabled ? (disabledReason ?? "Not connected") : (placeholder ?? (working ? "Add to the conversation…" : "Ask the agent to build anything…"))
+            disabled
+              ? (disabledReason ?? "Not connected")
+              : (offered ?? placeholder ?? (working ? "Add to the conversation…" : "Ask the agent to build anything…"))
           }
+          aria-describedby={offered ? hintId : undefined}
           {...(suggestions
             ? {
                 role: "combobox",
@@ -305,8 +339,19 @@ export const Composer = forwardRef<
                 "aria-activedescendant": open && options.length > 0 ? optionId(activeIndex) : undefined,
               }
             : {})}
-          className="block max-h-[260px] min-h-[56px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed"
+          className={cx(
+            "block max-h-[260px] min-h-[56px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed",
+            offered && "pr-24",
+          )}
         />
+        {offered && (
+          <span id={hintId} className="pointer-events-none absolute top-3.5 right-3 inline-flex items-center gap-1 text-[12.5px] text-ink-faint">
+            <span className="sr-only">Suggested reply: {offered}.</span>
+            <Kbd>Tab</Kbd>
+            <span aria-hidden="true">to use</span>
+            <span className="sr-only">Press Tab to use it.</span>
+          </span>
+        )}
         <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
           <div className="flex min-w-0 flex-1 items-center gap-0.5">{tools}</div>
           {working && onInterrupt && (

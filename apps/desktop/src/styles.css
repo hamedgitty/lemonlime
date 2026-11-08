@@ -30,6 +30,12 @@
   --color-diff-add-strong: #2f5c10;
   --color-diff-del: #fde8e6;
   --color-diff-del-strong: #9b1c13;
+  /* Code highlighting: ink and citrus-leaf tones, each at least 4.5:1 on cream. */
+  --color-code-keyword: #3f7a16;
+  --color-code-string: #8a5a00;
+  --color-code-number: #9b3d12;
+  --color-code-tag: #9b1c13;
+  --color-code-function: #17200e;
 
   --font-display: "Bricolage Grotesque Variable", "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -88,6 +94,11 @@
   --color-diff-add-strong: #b6ec74;
   --color-diff-del: #3d1a16;
   --color-diff-del-strong: #f6a49c;
+  --color-code-keyword: #b6ec74;
+  --color-code-string: #f5c96a;
+  --color-code-number: #f6a49c;
+  --color-code-tag: #f6a49c;
+  --color-code-function: #f2f6ea;
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
   --shadow-pop: 0 2px 6px rgb(0 0 0 / 0.35), 0 18px 48px rgb(0 0 0 / 0.5);
 }
@@ -223,6 +234,66 @@
     padding: 0;
     font-size: inherit;
   }
+  /* Syntax colours (Prism token classes from the highlighter). */
+  .md-code .token.comment,
+  .md-code .token.prolog,
+  .md-code .token.doctype,
+  .md-code .token.cdata {
+    color: var(--color-ink-faint);
+    font-style: italic;
+  }
+  .md-code .token.punctuation,
+  .md-code .token.operator {
+    color: var(--color-ink-soft);
+  }
+  .md-code .token.keyword,
+  .md-code .token.atrule,
+  .md-code .token.important,
+  .md-code .token.rule {
+    color: var(--color-code-keyword);
+  }
+  .md-code .token.string,
+  .md-code .token.char,
+  .md-code .token.attr-value,
+  .md-code .token.regex,
+  .md-code .token.url {
+    color: var(--color-code-string);
+  }
+  .md-code .token.number,
+  .md-code .token.boolean,
+  .md-code .token.constant,
+  .md-code .token.symbol {
+    color: var(--color-code-number);
+  }
+  .md-code .token.tag,
+  .md-code .token.selector,
+  .md-code .token.builtin,
+  .md-code .token.class-name {
+    color: var(--color-code-tag);
+  }
+  .md-code .token.function,
+  .md-code .token.title {
+    color: var(--color-code-function);
+    font-weight: 600;
+  }
+  .md-code .token.property,
+  .md-code .token.attr-name,
+  .md-code .token.variable,
+  .md-code .token.parameter {
+    color: var(--color-ink-soft);
+  }
+  .md-code .token.inserted {
+    color: var(--color-diff-add-strong);
+  }
+  .md-code .token.deleted {
+    color: var(--color-diff-del-strong);
+  }
+  .md-code .token.bold {
+    font-weight: 600;
+  }
+  .md-code .token.italic {
+    font-style: italic;
+  }
   .md-table {
     @apply overflow-x-auto rounded-lg border border-line;
   }
@@ -236,4 +307,14 @@
   .md td {
     @apply border-t border-line px-3 py-1.5 align-top;
   }
+}
+
+/* Find in thread (⌘F): matches painted with the CSS Custom Highlight API. */
+::highlight(find-match) {
+  background-color: var(--color-lemon-soft);
+  color: var(--color-ink);
+}
+::highlight(find-current) {
+  background-color: var(--color-lemon);
+  color: #17200e;
 }

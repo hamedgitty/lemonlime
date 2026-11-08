@@ -1,4 +1,7 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { Check, Copy } from "lucide-react";
+import { useHighlighted } from "./markdownHighlight.tsx";
+import { splitMarkdownBlocks } from "./markdownStreamBlocks.ts";
 
 /**
  * A small Markdown renderer for skill and plugin docs: headings, paragraphs, lists,
@@ -147,77 +150,120 @@ export function inline(text: string, onLink?: (url: string) => void): ReactNode[
 }
 
 export function Markdown({ text, onLink, className }: { text: string; onLink?: (url: string) => void; className?: string }) {
-  const blocks = parseBlocks(text);
+  return <div className={`md ${className ?? ""}`}>{renderBlocks(parseBlocks(text), onLink)}</div>;
+}
+
+/**
+ * Markdown that may still be growing (an agent's reply as it streams). The text is cut at
+ * blank lines between finished blocks and each piece is memoised, so only the last block
+ * is parsed and drawn again as more arrives. Pass a stable `onLink`.
+ */
+export function StreamingMarkdown({ text, onLink, className }: { text: string; onLink?: (url: string) => void; className?: string }) {
+  const pieces = splitMarkdownBlocks(text) ?? [text];
   return (
     <div className={`md ${className ?? ""}`}>
-      {blocks.map((b, i) => {
-        switch (b.kind) {
-          case "heading": {
-            const Tag = (["h2", "h3", "h4", "h4", "h4", "h4"] as const)[b.level - 1]!;
-            return <Tag key={i}>{inline(b.text, onLink)}</Tag>;
-          }
-          case "para":
-            return <p key={i}>{inline(b.text, onLink)}</p>;
-          case "quote":
-            return <blockquote key={i}>{inline(b.text, onLink)}</blockquote>;
-          case "rule":
-            return <hr key={i} />;
-          case "code":
-            return <CodeBlock key={i} code={b.text} />;
-          case "list": {
-            const Tag = b.ordered ? "ol" : "ul";
-            return (
-              <Tag key={i}>
-                {b.items.map((it, j) => (
-                  <li key={j}>{inline(it, onLink)}</li>
-                ))}
-              </Tag>
-            );
-          }
-          case "table":
-            return (
-              <div key={i} className="md-table">
-                <table>
-                  <thead>
-                    <tr>
-                      {b.head.map((h, j) => (
-                        <th key={j}>{inline(h, onLink)}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {b.rows.map((r, j) => (
-                      <tr key={j}>
-                        {r.map((c, n) => (
-                          <td key={n}>{inline(c, onLink)}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          default:
-            return <Fragment key={i} />;
-        }
-      })}
+      {pieces.map((piece, i) => (
+        <MarkdownPiece key={i} text={piece} onLink={onLink} />
+      ))}
     </div>
   );
 }
 
-function CodeBlock({ code }: { code: string }) {
+const MarkdownPiece = memo(function MarkdownPiece({ text, onLink }: { text: string; onLink?: ((url: string) => void) | undefined }) {
+  return <>{renderBlocks(parseBlocks(text), onLink)}</>;
+});
+
+function renderBlocks(blocks: Block[], onLink?: (url: string) => void): ReactNode[] {
+  return blocks.map((b, i) => {
+    switch (b.kind) {
+      case "heading": {
+        const Tag = (["h2", "h3", "h4", "h4", "h4", "h4"] as const)[b.level - 1]!;
+        return <Tag key={i}>{inline(b.text, onLink)}</Tag>;
+      }
+      case "para":
+        return <p key={i}>{inline(b.text, onLink)}</p>;
+      case "quote":
+        return <blockquote key={i}>{inline(b.text, onLink)}</blockquote>;
+      case "rule":
+        return <hr key={i} />;
+      case "code":
+        return <CodeBlock key={i} code={b.text} lang={b.lang} />;
+      case "list": {
+        const Tag = b.ordered ? "ol" : "ul";
+        return (
+          <Tag key={i}>
+            {b.items.map((it, j) => (
+              <li key={j}>{inline(it, onLink)}</li>
+            ))}
+          </Tag>
+        );
+      }
+      case "table":
+        return (
+          <div key={i} className="md-table">
+            <table>
+              <thead>
+                <tr>
+                  {b.head.map((h, j) => (
+                    <th key={j}>{inline(h, onLink)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {b.rows.map((r, j) => (
+                  <tr key={j}>
+                    {r.map((c, n) => (
+                      <td key={n}>{inline(c, onLink)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      default:
+        return <Fragment key={i} />;
+    }
+  });
+}
+
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const highlighted = useHighlighted(code, lang);
   return (
     <div className="group/code relative">
-      <pre>
-        <code>{code}</code>
+      <pre className={highlighted ? "md-code" : undefined}>
+        <code>{highlighted ?? code}</code>
       </pre>
-      <button
-        type="button"
-        onClick={() => void navigator.clipboard?.writeText(code)}
-        className="absolute top-1.5 right-1.5 rounded-md border border-line bg-paper px-2 py-0.5 text-[12px] text-ink-soft opacity-0 transition-opacity group-hover/code:opacity-100 hover:text-ink focus-visible:opacity-100"
-      >
-        Copy
-      </button>
+      <CopyButton
+        text={code}
+        label="Copy code"
+        className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/code:opacity-100 focus-visible:opacity-100"
+      />
     </div>
+  );
+}
+
+/** Copies `text`; the icon turns into a check for a moment. */
+export function CopyButton({ text, label = "Copy", className, showLabel = false }: { text: string; label?: string; className?: string; showLabel?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
+  return (
+    <button
+      type="button"
+      aria-label={copied ? "Copied" : label}
+      title={label}
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+      className={`inline-flex h-7 items-center gap-1 rounded-md border border-line bg-paper px-1.5 text-[12.5px] text-ink-soft hover:text-ink ${className ?? ""}`}
+    >
+      {copied ? <Check aria-hidden="true" className="size-3.5 text-leaf" /> : <Copy aria-hidden="true" className="size-3.5" />}
+      {showLabel && <span>{copied ? "Copied" : "Copy"}</span>}
+    </button>
   );
 }

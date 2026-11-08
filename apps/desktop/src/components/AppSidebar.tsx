@@ -36,10 +36,12 @@ import {
   SlidersHorizontal,
   SquareTerminal,
   SquarePen,
+  Server,
   UserRound,
   X,
 } from "lucide-react";
 import type { ThreadSummary } from "../lib/threads.ts";
+import { useMachines, type Machine } from "../lib/machines.ts";
 import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { NAV_ITEMS, type NavItem, type SidebarChild, type UiPrefs } from "../lib/storage.ts";
 import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.ts";
@@ -125,13 +127,15 @@ export function AppSidebar(p: AppSidebarProps) {
 
   const [archivedOpen, setArchivedOpen] = useState(false);
   const archived = useMemo(() => filtered.filter(t => p.prefs.archived[t.id]), [filtered, p.prefs.archived]);
+  const machines = useMachines();
   const groups = useMemo(
     () =>
       groupThreads(
         filtered.filter(t => !p.prefs.archived[t.id]),
         p.prefs,
+        machines,
       ),
-    [filtered, p.prefs],
+    [filtered, p.prefs, machines],
   );
 
   const navAction = (item: NavItem) => {
@@ -520,6 +524,8 @@ function ThreadRow({
   onRename?: (title: string) => void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const machines = useMachines();
+  const machineName = t.machine ? (machines.find(m => m.id === t.machine)?.name ?? "a removed machine") : null;
   return (
     <li className="group/row relative">
       {renaming && onRename ? (
@@ -561,6 +567,8 @@ function ThreadRow({
             <AgentBadge kind={t.agent.kind} />
           ) : t.mode === "cloud" ? (
             <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+          ) : t.machine ? (
+            <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
           ) : (
             <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
           )}
@@ -573,7 +581,7 @@ function ThreadRow({
           {kids.length > 0 && <ProgressGrid kids={kids} />}
           <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
           <span className="sr-only">
-            {t.mode === "cloud" ? "Cloud" : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
+            {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
             {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
           </span>
         </button>
@@ -742,17 +750,19 @@ interface Group {
   threads: ThreadSummary[];
 }
 
-function groupThreads(threads: ThreadSummary[], prefs: UiPrefs): Group[] {
+function groupThreads(threads: ThreadSummary[], prefs: UiPrefs, machines: readonly Machine[] = []): Group[] {
   const pinned = threads.filter(t => prefs.pinned.includes(t.id));
   const rest = threads.filter(t => !prefs.pinned.includes(t.id));
   const groups = new Map<string, Group>();
   for (const t of rest) {
-    const key = prefs.organize === "place" ? t.mode : prefs.organize === "agent" ? t.agent.kind : repoName(t.repo);
+    const key = prefs.organize === "place" ? (t.machine ? `machine:${t.machine}` : t.mode) : prefs.organize === "agent" ? t.agent.kind : repoName(t.repo);
     const label =
       prefs.organize === "place"
         ? t.mode === "cloud"
           ? "Cloud"
-          : "On this computer"
+          : t.machine
+            ? `On ${machines.find(m => m.id === t.machine)?.name ?? "a removed machine"}`
+            : "On this computer"
         : prefs.organize === "agent"
           ? AGENT_LABELS[t.agent.kind]
           : repoName(t.repo);
@@ -760,6 +770,8 @@ function groupThreads(threads: ThreadSummary[], prefs: UiPrefs): Group[] {
       prefs.organize === "place" ? (
         t.mode === "cloud" ? (
           <Cloud aria-hidden="true" className="size-3.5" />
+        ) : t.machine ? (
+          <Server aria-hidden="true" className="size-3.5" />
         ) : (
           <Laptop aria-hidden="true" className="size-3.5" />
         )

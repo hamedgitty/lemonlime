@@ -47,6 +47,8 @@ export const LocalThreadMeta = z.object({
   title: z.string().default(""),
   agent: AgentConfig,
   repoPath: z.string(),
+  /** Set for a thread on another machine (Settings → Machines), over SSH; repoPath is then a path there. */
+  machine: z.string().optional(),
   baseBranch: z.string().default("main"),
   branch: z.string(),
   /** Last status the runner reported. */
@@ -166,6 +168,8 @@ export const UiPrefs = z.object({
   /** Last agent and place chosen in the composer. */
   lastAgent: z.enum(["claude-code", "codex", "opencode", "acp"]).default("claude-code"),
   lastPlace: z.enum(["local", "cloud"]).default("local"),
+  /** With lastPlace "local": the machine (Settings → Machines) last chosen; empty means this computer. */
+  lastMachine: z.string().default(""),
   rightPanel: z.boolean().default(false),
   /** Which side the side panel (terminals, browser) sits on. */
   panelSide: z.enum(["left", "right"]).default("right"),

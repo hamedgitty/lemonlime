@@ -12,6 +12,7 @@ mod repo;
 mod runner;
 mod secrets;
 mod skills;
+mod ssh;
 mod system;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,6 +50,9 @@ pub fn run() {
             runner::local_runner_running,
             runner::list_local_runners,
             runner::remove_local_thread,
+            ssh::check_ssh_machine,
+            ssh::start_ssh_runner,
+            ssh::remove_ssh_thread,
             repo::inspect_repo,
             secrets::secret_get,
             secrets::secret_set,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, Bot, Check, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, X, Zap } from "lucide-react";
+import { ArrowLeftRight, Bot, Check, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Plus, Server, X, Zap } from "lucide-react";
 import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type ReasoningLevel, type SandboxSize } from "@lemonlime/protocol";
 import { splitCommand } from "../lib/command.ts";
 import { AGENT_LABELS, repoName } from "../lib/format.ts";
@@ -7,6 +7,7 @@ import { inDesktopShell, inspectRepo, pickFolder } from "../lib/native.ts";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
 import { showGetStarted, type GetStartedFacts, type GetStartedStep } from "../lib/getStarted.ts";
 import { otherProjectMentioned } from "../lib/projectHint.ts";
+import { rememberPath, remoteFolderName, remotePathProblem, saveMachines, useMachines } from "../lib/machines.ts";
 import { GetStarted } from "./GetStarted.tsx";
 import type { Settings, UiPrefs } from "../lib/storage.ts";
 import { Composer, PickerButton, type ComposerHandle } from "./Composer.tsx";
@@ -69,8 +70,17 @@ export function Home({
 }: HomeProps) {
   const composer = useRef<ComposerHandle>(null);
   const shell = inDesktopShell();
-  const wanted = prefs.defaultPlace === "last" ? prefs.lastPlace : prefs.defaultPlace;
+  const machines = useMachines();
+  // What was picked in the place menu here, over the default from Settings.
+  const [picked, setPicked] = useState<string | null>(null);
+  const fromPrefs =
+    prefs.defaultPlace === "last" ? (prefs.lastPlace === "local" && prefs.lastMachine ? `machine:${prefs.lastMachine}` : prefs.lastPlace) : prefs.defaultPlace;
+  const wanted = picked ?? fromPrefs;
   const place = wanted === "cloud" && cloudAvailable ? "cloud" : "local";
+  // One of the user's machines over SSH (Settings → Machines): a local thread whose folder is there.
+  const machine = place === "local" && wanted.startsWith("machine:") ? machines.find(m => `machine:${m.id}` === wanted) : undefined;
+  const placeValue = place === "cloud" ? "cloud" : machine ? `machine:${machine.id}` : "local";
+  const [remotePath, setRemotePath] = useState(() => machine?.recentPaths[0] ?? "");
   useEffect(() => {
     if (draft) composer.current?.fill(draft.text);
   }, [draft]);
@@ -89,7 +99,7 @@ export function Home({
   const [denial, setDenial] = useState<PolicyDenied | null>(null);
   const [typed, setTyped] = useState("");
   const [hintDismissed, setHintDismissed] = useState<string | null>(null);
-  const hinted = prefs.projectHint && place === "local" ? otherProjectMentioned(typed, prefs.recentProjects, repoPath) : null;
+  const hinted = prefs.projectHint && place === "local" && !machine ? otherProjectMentioned(typed, prefs.recentProjects, repoPath) : null;
   const projectHint = hinted && hinted !== hintDismissed ? hinted : null;
 
   const pickProject = async (path: string) => {
@@ -118,7 +128,14 @@ export function Home({
     setDenial(null);
     const words = agent === "acp" ? splitCommand(acpCommand) : [];
     if (agent === "acp" && words.length === 0) return setError("Enter the command that starts your ACP agent, under the agent picker.");
-    if (place === "local" && !repoPath) {
+    const remote = remotePath.trim();
+    if (machine) {
+      const problem = remotePathProblem(remote, "project folder");
+      if (problem) {
+        setProjectOpen(true);
+        return setError(problem);
+      }
+    } else if (place === "local" && !repoPath) {
       setProjectOpen(true);
       return setError("Choose the project folder the agent should work in.");
     }
@@ -138,7 +155,12 @@ export function Home({
     };
     setBusy(true);
     try {
-      await onCreate(place === "local" ? { mode: "local", ...common, repoPath } : { mode: "cloud", ...common, repoUrl: repoUrl.trim(), sandboxSize });
+      if (machine) {
+        await onCreate({ mode: "local", ...common, repoPath: remote, machine: machine.id });
+        saveMachines(rememberPath(machines, machine.id, remote));
+      } else {
+        await onCreate(place === "local" ? { mode: "local", ...common, repoPath } : { mode: "cloud", ...common, repoUrl: repoUrl.trim(), sandboxSize });
+      }
     } catch (err) {
       if (err instanceof DeniedError) setDenial(err.denial);
       else setError(err instanceof Error ? err.message : String(err));
@@ -155,6 +177,7 @@ export function Home({
     if (id === "thread") return composer.current?.focus();
     if (id === "cloud") {
       if (!cloudAvailable) return onConnectCloud();
+      setPicked("cloud");
       onPrefs({ lastPlace: "cloud" });
       setProjectOpen(true);
       return;
@@ -163,7 +186,18 @@ export function Home({
     if (dashboardUrl) void openExternal(`${dashboardUrl.replace(/\/+$/, "")}/settings#github`);
   };
 
-  const projectLabel = place === "local" ? (repoPath ? repoName(repoPath) : "Work in a project") : repoUrl.trim() ? repoName(repoUrl) : "Choose a repository";
+  const projectLabel = machine
+    ? remotePath.trim()
+      ? remoteFolderName(remotePath.trim())
+      : `Choose a project on ${machine.name}`
+    : place === "local"
+      ? repoPath
+        ? repoName(repoPath)
+        : "Work in a project"
+      : repoUrl.trim()
+        ? repoName(repoUrl)
+        : "Choose a repository";
+  const projectChosen = machine ? remotePath.trim() : place === "local" ? repoPath : repoUrl.trim();
 
   return (
     <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
@@ -279,14 +313,53 @@ export function Home({
             open={projectOpen}
             onOpenChange={setProjectOpen}
             trigger={
-              <PickerButton icon={place === "local" ? <FolderPlus /> : <GitBranch />} tone={repoPath || repoUrl ? "plain" : "muted"}>
+              <PickerButton icon={place === "local" ? <FolderPlus /> : <GitBranch />} tone={projectChosen ? "plain" : "muted"}>
                 {projectLabel}
-                {(place === "local" ? repoPath : repoUrl.trim()) && <span className="ml-1 font-normal text-ink-faint">from {baseBranch}</span>}
+                {projectChosen && <span className="ml-1 font-normal text-ink-faint">from {baseBranch}</span>}
               </PickerButton>
             }
             className="w-[360px]"
           >
-            {place === "local" ? (
+            {machine ? (
+              <div className="space-y-3 p-3">
+                <label className="block">
+                  <span className="mb-1 block text-[13.5px] font-medium">Project folder on {machine.name}</span>
+                  <TextInput
+                    value={remotePath}
+                    onChange={e => setRemotePath(e.target.value)}
+                    placeholder="~/code/my-app"
+                    className="font-mono text-[13px]"
+                    spellCheck={false}
+                    autoFocus
+                  />
+                  <span className="mt-1 block text-[12.5px] text-ink-faint">
+                    A git repository already on that machine. Folders there can't be browsed from here, so type its path.
+                  </span>
+                </label>
+                {machine.recentPaths.length > 0 && (
+                  <div className="-mx-1">
+                    {machine.recentPaths.map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => {
+                          setRemotePath(p);
+                          setProjectOpen(false);
+                        }}
+                        className={cx(
+                          "flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2 text-left hover:bg-cream-deep",
+                          p === remotePath.trim() && "bg-cream-deep",
+                        )}
+                      >
+                        <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                        <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{p}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <BranchField value={baseBranch} onChange={setBaseBranch} />
+              </div>
+            ) : place === "local" ? (
               <div className="p-1">
                 {prefs.recentProjects.length > 0 && (
                   <>
@@ -358,19 +431,35 @@ export function Home({
 
           <Menu
             trigger={
-              <PickerButton icon={place === "cloud" ? <Cloud className="text-leaf" /> : <Laptop />}>
-                {place === "cloud" ? "Cloud" : "This computer"}
+              <PickerButton icon={place === "cloud" ? <Cloud className="text-leaf" /> : machine ? <Server /> : <Laptop />}>
+                {place === "cloud" ? "Cloud" : machine ? machine.name : "This computer"}
               </PickerButton>
             }
           >
             <MenuChoice
-              value={place}
-              onChange={v => (v === "cloud" && !cloudAvailable ? onConnectCloud() : onPrefs({ lastPlace: v }))}
+              value={placeValue}
+              onChange={v => {
+                if (v === "cloud" && !cloudAvailable) return onConnectCloud();
+                setPicked(v);
+                if (v === "cloud") return onPrefs({ lastPlace: "cloud" });
+                const id = v.startsWith("machine:") ? v.slice("machine:".length) : "";
+                setRemotePath(machines.find(m => m.id === id)?.recentPaths[0] ?? "");
+                onPrefs({ lastPlace: "local", lastMachine: id });
+              }}
               options={[
                 { value: "local", label: "This computer", icon: <Laptop /> },
+                ...machines.map(m => ({ value: `machine:${m.id}`, label: m.name, icon: <Server /> })),
                 { value: "cloud", label: cloudAvailable ? "Cloud" : "Cloud (connect an account)", icon: <Cloud /> },
               ]}
             />
+            {onOpenSettings && (
+              <>
+                <MenuSeparator />
+                <MenuItem icon={<Plus />} onSelect={() => onOpenSettings("machines")}>
+                  {machines.length ? "Manage machines" : "Add a machine over SSH"}
+                </MenuItem>
+              </>
+            )}
             {!cloudAvailable && (
               <>
                 <MenuSeparator />

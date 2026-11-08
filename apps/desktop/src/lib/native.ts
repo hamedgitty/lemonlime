@@ -72,6 +72,48 @@ export async function startLocalRunner(input: StartLocalRunnerArgs): Promise<Loc
   });
 }
 
+/** Starts (or returns the already running) runner for a thread on another machine, over SSH (src-tauri/src/ssh.rs). */
+export async function startSshRunner(input: StartLocalRunnerArgs & { host: string; remoteRunnerPath?: string | undefined }): Promise<LocalRunnerInfo> {
+  requireShell();
+  const args = { ...runnerDefaults, ...input };
+  return invoke<LocalRunnerInfo>("start_ssh_runner", {
+    threadId: args.threadId,
+    host: args.host,
+    runnerPath: args.remoteRunnerPath || null,
+    agent: args.agent,
+    agentCommand: args.agentCommand || null,
+    model: args.model || null,
+    reasoning: args.reasoning || null,
+    workdir: args.workdir,
+    baseBranch: args.baseBranch || null,
+    instructions: args.instructions?.trim() ? args.instructions : null,
+    stripCoauthors: args.stripCoauthors ?? null,
+    branchPrefix: args.branchPrefix || null,
+    retryMaxWaitMinutes: args.retryMaxWaitMinutes ?? null,
+    disabledSkills: args.disabledSkills?.length ? args.disabledSkills : null,
+    commandGuard: args.commandGuard ?? null,
+  });
+}
+
+export interface SshCheck {
+  ok: boolean;
+  version: string | null;
+  /** What happened, in plain words. */
+  message: string;
+}
+
+/** Logs in to a machine without prompting and asks its runner for its version. */
+export async function checkSshMachine(host: string, runnerPath: string): Promise<SshCheck> {
+  requireShell();
+  return invoke<SshCheck>("check_ssh_machine", { host, runnerPath: runnerPath || null });
+}
+
+/** Stops a thread on another machine and removes its worktree and history there; the branch stays. */
+export async function removeSshThread(threadId: string, host: string, runnerPath: string, workdir: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("remove_ssh_thread", { threadId, host, runnerPath: runnerPath || null, workdir });
+}
+
 export async function stopLocalRunner(threadId: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("stop_local_runner", { threadId });

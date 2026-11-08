@@ -37,6 +37,10 @@ lemonlime-runner cleanup --thread <id> --source-repo <path>
   --retry-max-wait <min>   Retry turns that hit a busy provider or a usage limit (0: off)
   --disable-skills <names> Leave these bundled skills out (comma-separated)
   --no-command-guard       Turn the command guard off
+  --exit-with-parent       Stop when the app that started it goes (with --secret-stdin, also
+                           when stdin closes)
+  --secret-stdin           Read the thread secret from the first line of stdin
+  -v, --version            Print the runner's version
 ```
 
 `lemonlime-runner --help` lists every option and environment variable. Cloud sandboxes
@@ -82,8 +86,60 @@ Environment:
 
 | Variable | Purpose |
 | --- | --- |
-| `LEMONLIME_THREAD_SECRET` | The thread's own secret. Client tokens must be signed with it. Required. |
+| `LEMONLIME_THREAD_SECRET` | The thread's own secret. Client tokens must be signed with it. Required, unless `--secret-stdin` is given. |
 | `LEMONLIME_HOME` | Where local worktrees and history live. Default `~/.lemonlime`. |
+
+### Threads on your other machines (SSH)
+
+The desktop app can run a thread on another computer of yours: a home server, a dev box,
+or a machine on your Tailscale network (which is reachable over plain SSH). Add it under
+Settings, Machines, by a host from your `~/.ssh/config` or as `user@host[:port]`, then pick
+it in the place menu on the home screen and type the path of a git repository already on
+that machine.
+
+The app runs your own `ssh` with your own config, keys and agent, always in batch mode, so
+it never asks for or stores a password or key. Starting a thread runs
+
+```
+ssh -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ControlPath=none ... \
+    -L 127.0.0.1:<free local port>:127.0.0.1:<remote port> -- <host> \
+    "exec lemonlime-runner --thread <id> --agent <kind> ... --secret-stdin --exit-with-parent \
+     --host 127.0.0.1 --port <remote port> --source-repo <path>"
+```
+
+- The runner listens only on the remote machine's loopback; the app reaches it through the
+  tunnel on this computer's loopback, and from there it is just like a local thread.
+- The thread secret is sent as the first line of the session's stdin (`--secret-stdin`), so
+  it never appears on a command line on either machine. The runner reads nothing else from
+  stdin.
+- With `--exit-with-parent`, the runner stops when stdin closes. Stopping the thread, quitting
+  the app or a dropped connection all end the ssh session, and the runner there with it.
+  After a drop the thread says it can't reach the machine, with a button to try again.
+- The host can't start with `-` or hold spaces, and every word of the remote command is
+  quoted for the remote shell (a POSIX shell such as sh, bash or zsh; a leading `~/` in a
+  path means the remote home folder).
+- Like local threads, the thread works in its own git worktree of that repository (under
+  `~/.lemonlime/worktrees` there), and removing the thread cleans it up there.
+
+The machine needs:
+
+- SSH that works without a prompt: `ssh -o BatchMode=yes <host> true`. Connect once by hand
+  first to accept its host key.
+- Git, and the repository already cloned there.
+- The agent's CLI installed and signed in there; agent accounts on this computer aren't used.
+- The runner: a LemonLime checkout with Node 22 or newer (use
+  `<checkout>/packages/runner/bin/lemonlime-runner.js` as the runner path), or the
+  single-file runner built on a machine of the same kind with
+  `pnpm --filter @lemonlime/runner build:sea`. Leave the runner path empty to use the
+  `lemonlime-runner` on the PATH that SSH sees (often shorter than a login shell's).
+  The Check button in Settings runs `ssh -o BatchMode=yes <host> lemonlime-runner --version`
+  and says what's missing.
+
+Things that only make sense on this computer stay off for threads elsewhere: opening the
+folder in your editor, the local folder picker, switching agent accounts kept on this
+computer, and computer access. Previews come through the runner's tunnel, like a cloud
+sandbox's. Your instructions and thread settings go along as flags (instructions through
+`LEMONLIME_INSTRUCTIONS`); your agent plugins stay on this computer.
 
 ## Endpoints
 

@@ -12,6 +12,8 @@ export interface ThreadSummary {
   agent: AgentConfig;
   repo: string;
   branch: string;
+  /** Local threads on another machine (Settings → Machines): its id. */
+  machine?: string;
   status: DisplayStatus;
   updatedAt: string;
   createdAt: string;
@@ -27,6 +29,7 @@ export function summarize(entry: ThreadEntry, runnerUp: boolean): ThreadSummary 
       agent: m.agent,
       repo: m.repoPath,
       branch: m.branch,
+      ...(m.machine ? { machine: m.machine } : {}),
       status: runnerUp ? m.status : m.status === "failed" ? "failed" : "offline",
       updatedAt: m.updatedAt,
       createdAt: m.createdAt,

@@ -33,10 +33,8 @@ import {
   listLocalRunners,
   loadAccessToken,
   pickFolder,
-  removeLocalThread,
   saveAccessToken,
   setRunnerDefaults,
-  startLocalRunner,
   stopLocalRunner,
 } from "./lib/native.ts";
 import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
@@ -67,7 +65,7 @@ import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
 import { addToInbox, automationRunItems, loadInbox, markAllRead, markRead, markThreadRead, saveInbox, type Inbox } from "./lib/inbox.ts";
 import { computerId, threadSnapshots } from "./lib/phoneBridge.ts";
 import { usePhoneLink } from "./lib/usePhoneLink.ts";
-import { joinCommand } from "./lib/command.ts";
+import { removeThreadRunner, startThreadRunner } from "./lib/threadRunner.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 import {
   MAX_PANES,
@@ -379,16 +377,7 @@ export function App() {
     const { localThreads: list, archived, runnerPath } = phoneThreadsRef.current;
     const meta = list.find(m => m.id === threadId);
     if (!meta || archived[meta.id]) return null;
-    const info = await startLocalRunner({
-      threadId: meta.id,
-      agent: meta.agent.kind,
-      agentCommand: meta.agent.command ? joinCommand(meta.agent.command) : undefined,
-      model: meta.agent.model,
-      reasoning: meta.agent.reasoning,
-      workdir: meta.repoPath,
-      baseBranch: meta.baseBranch,
-      runnerPath,
-    });
+    const info = await startThreadRunner(meta, runnerPath);
     return { port: info.port, secret: info.secret };
   }, []);
   const phone = usePhoneLink({
@@ -614,7 +603,7 @@ export function App() {
     (id: string) => {
       const meta = localThreads.find(m => m.id === id);
       // Removes the thread's worktree and history; its branch stays in the repository.
-      const stop = meta ? removeLocalThread(id, meta.repoPath, settings.runnerPath) : stopLocalRunner(id);
+      const stop = meta ? removeThreadRunner(meta, settings.runnerPath) : stopLocalRunner(id);
       void stop.catch(err => console.warn("Could not clean up the thread", err)).finally(refreshRunners);
       forgetEvents(id);
       setLocalThreads(list => list.filter(m => m.id !== id));
@@ -664,7 +653,7 @@ export function App() {
     cleanedUp.current = true;
     const cutoff = Date.now() - ARCHIVE_KEEP_DAYS * 86_400_000;
     const old = localThreads.filter(m => prefs.archived[m.id] && Date.parse(prefs.archived[m.id]!) < cutoff);
-    for (const m of old) void removeLocalThread(m.id, m.repoPath, settings.runnerPath).catch(err => console.warn("Could not clean up an archived thread", err));
+    for (const m of old) void removeThreadRunner(m, settings.runnerPath).catch(err => console.warn("Could not clean up an archived thread", err));
     if (old.length) {
       for (const m of old) forgetEvents(m.id);
       setLocalThreads(list => list.filter(m => !old.some(o => o.id === m.id)));
@@ -691,6 +680,7 @@ export function App() {
         title: input.title || (input.prompt ? titleFromPrompt(input.prompt) : repoName(input.repoPath)),
         agent,
         repoPath: input.repoPath,
+        ...(input.machine ? { machine: input.machine } : {}),
         baseBranch: input.baseBranch,
         branch: branchForThread(id, isSafeBranchPrefix(settings.branchPrefix) ? settings.branchPrefix : undefined),
         status: "idle",
@@ -1319,9 +1309,9 @@ export function App() {
         onRemoveLocal={onRemoveLocal}
         onCloudRefresh={refreshCloud}
         onRunnersChanged={refreshRunners}
-        {...(cloudConfigured || entry.mode === "cloud" ? { onMove: moveThread } : {})}
+        {...((cloudConfigured && !(entry.mode === "local" && entry.meta.machine)) || entry.mode === "cloud" ? { onMove: moveThread } : {})}
         followUp={prefs.followUp}
-        {...(entry.mode === "local" && inDesktopShell()
+        {...(entry.mode === "local" && !entry.meta.machine && inDesktopShell()
           ? {
               onOpenFolder: () => {
                 const m = entry.meta;

@@ -16,10 +16,12 @@ import {
   Play,
   Power,
   RotateCw,
+  Server,
   Shrink,
   Trash2,
   X,
 } from "lucide-react";
+import { useMachines } from "../lib/machines.ts";
 import {
   agentLoopState,
   backgroundWork,
@@ -187,6 +189,11 @@ function ThreadSessionView({
     onPromptSent: onLocalPromptSent,
   });
   const summary = summarize(entry, runnerUp);
+  // A thread on another machine (over SSH): its name stands where "this computer" would.
+  const machines = useMachines();
+  const machineId = entry.mode === "local" ? entry.meta.machine : undefined;
+  const machine = machineId ? (machines.find(m => m.id === machineId)?.name ?? "a removed machine") : null;
+  const onThisComputer = entry.mode === "local" && !machineId;
   const items = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
   const loadImage = useSentImageLoader(session.connection);
   // The agent is waiting on an approval or a question: tell the person if they aren't looking.
@@ -286,7 +293,9 @@ function ThreadSessionView({
 
   const removeLocal = async () => {
     const ok = await confirmAction(
-      `Remove “${summary.title}” from LemonLime? The runner is stopped and the history cached in this app is cleared. Your repository and the ${summary.branch} branch are not touched.`,
+      machine
+        ? `Remove “${summary.title}” from LemonLime? The runner on ${machine} is stopped, and the thread's worktree and history there are removed. Your project there and the ${summary.branch} branch are not touched.`
+        : `Remove “${summary.title}” from LemonLime? The runner is stopped and the history cached in this app is cleared. Your repository and the ${summary.branch} branch are not touched.`,
     );
     if (ok) onRemoveLocal(summary.id);
   };
@@ -352,7 +361,8 @@ function ThreadSessionView({
   const limitOpen = lastLimit?.kind === "limit" && lastLimit.open;
   const [accountList, setAccountList] = useState<AccountsList | null>(null);
   useEffect(() => {
-    if (entry.mode !== "local" || !limitOpen) return;
+    // Accounts are kept per computer; a thread on another machine uses the ones there.
+    if (!onThisComputer || !limitOpen) return;
     let live = true;
     void listAccounts()
       .then(l => live && setAccountList(l))
@@ -360,14 +370,15 @@ function ThreadSessionView({
     return () => {
       live = false;
     };
-  }, [entry.mode, limitOpen]);
+  }, [onThisComputer, limitOpen]);
   const [others, setOthers] = useState<{ ids: string[]; accountId: string } | null>(null);
   const { limitAction } = session;
   const limitActions = useMemo<LimitActions | undefined>(() => {
     if (session.state !== "live") return undefined;
     return {
-      choices: hit => limitChoices({ hit, mode: entry.mode, model: threadOptions.model, accounts: accountList, agents: agents ?? null }),
-      canSwitchAccount: entry.mode === "local",
+      choices: hit =>
+        limitChoices({ hit, mode: onThisComputer ? "local" : "cloud", model: threadOptions.model, accounts: accountList, agents: agents ?? null }),
+      canSwitchAccount: onThisComputer,
       switchAccount: accountId => {
         limitAction({ action: "switch_account", accountId });
         if (entry.mode !== "local" || lastLimit?.kind !== "limit") return;
@@ -589,6 +600,11 @@ function ThreadSessionView({
           Open in editor
         </MenuItem>
       )}
+      {machine && (
+        <MenuItem icon={<FolderOpen />} disabled hint="This computer only">
+          Open in editor
+        </MenuItem>
+      )}
       {entry.mode === "local" && (
         <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
           Remove thread
@@ -635,12 +651,14 @@ function ThreadSessionView({
             <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2.5">
               <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
               <span className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex" title={summary.repo}>
-                {summary.mode === "local" ? (
+                {machine ? (
+                  <Server aria-hidden="true" className="size-3.5 shrink-0" />
+                ) : summary.mode === "local" ? (
                   <Laptop aria-hidden="true" className="size-3.5 shrink-0" />
                 ) : (
                   <Cloud aria-hidden="true" className="size-3.5 shrink-0" />
                 )}
-                <span className="truncate">{repoName(summary.repo)}</span>
+                <span className="truncate">{machine ? `${repoName(summary.repo)} on ${machine}` : repoName(summary.repo)}</span>
               </span>
             </div>
             {git.available && (git.status || entry.mode === "cloud") && <GitActionsButton git={git} mode={entry.mode} />}
@@ -726,7 +744,7 @@ function ThreadSessionView({
             working={working}
             unreadAfterSeq={unreadAt}
             loadImage={loadImage}
-            empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} />}
+            empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} machine={machine} />}
             onApprove={session.approve}
             onEditQueued={session.editQueued}
             onRewind={rewindTo}
@@ -873,9 +891,11 @@ function ThreadSessionView({
               }
               disabledReason={
                 session.state === "starting"
-                  ? summary.mode === "local"
-                    ? "Starting the runner…"
-                    : "Connecting…"
+                  ? machine
+                    ? `Connecting to ${machine}…`
+                    : summary.mode === "local"
+                      ? "Starting the runner…"
+                      : "Connecting…"
                   : summary.mode === "cloud" && cloudStatus === "paused"
                     ? "This sandbox is paused. Send a message to wake it."
                     : "Not connected"
@@ -892,7 +912,8 @@ function ThreadSessionView({
           state={panel}
           onState={setPanel}
           session={session}
-          mode={entry.mode}
+          // Previews from another machine come through a tunnel, like a cloud sandbox's.
+          mode={onThisComputer ? "local" : "cloud"}
           runnerPath={runnerPath}
           onClose={() => setPanelOpen(false)}
           refreshKey={gitRefresh}
@@ -918,7 +939,19 @@ function ThreadSessionView({
   );
 }
 
-function EmptyThread({ state, mode, branch, cloudStatus }: { state: SessionState; mode: "local" | "cloud"; branch: string; cloudStatus: ThreadStatus | null }) {
+function EmptyThread({
+  state,
+  mode,
+  branch,
+  cloudStatus,
+  machine,
+}: {
+  state: SessionState;
+  mode: "local" | "cloud";
+  branch: string;
+  cloudStatus: ThreadStatus | null;
+  machine: string | null;
+}) {
   let heading = "Tell the agent what to work on";
   let body = (
     <>
@@ -926,8 +959,8 @@ function EmptyThread({ state, mode, branch, cloudStatus }: { state: SessionState
     </>
   );
   if (state === "starting") {
-    heading = mode === "local" ? "Starting the runner" : "Connecting";
-    body = <>This takes a moment the first time.</>;
+    heading = machine ? `Connecting to ${machine}` : mode === "local" ? "Starting the runner" : "Connecting";
+    body = machine ? <>Starting the runner there over SSH. This takes a moment the first time.</> : <>This takes a moment the first time.</>;
   } else if (state === "offline" && cloudStatus === "provisioning") {
     heading = "Starting the sandbox";
     body = <>The thread opens as soon as its sandbox is ready.</>;

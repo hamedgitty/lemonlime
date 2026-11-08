@@ -8,6 +8,8 @@ export interface NewLocalThread {
   model: string | undefined;
   reasoning: ReasoningLevel | undefined;
   repoPath: string;
+  /** Run it on one of the user's machines (Settings → Machines) over SSH; repoPath is a path there. */
+  machine?: string | undefined;
   baseBranch: string;
   prompt: string | undefined;
 }

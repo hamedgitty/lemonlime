@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, Bot, Cloud, FolderGit2, Keyboard, NotebookPen, Package, Palette, Search, Settings as SettingsIcon, UserRound } from "lucide-react";
+import { ArrowLeft, Bot, Cloud, FolderGit2, Keyboard, NotebookPen, Package, Palette, Search, Server, Settings as SettingsIcon, UserRound } from "lucide-react";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 import { AccountPage } from "./settings/AccountPage.tsx";
@@ -10,12 +10,13 @@ import type { SettingsCtx } from "./settings/context.ts";
 import { GeneralPage } from "./settings/GeneralPage.tsx";
 import { InstructionsPage } from "./settings/InstructionsPage.tsx";
 import { KeyboardPage } from "./settings/KeyboardPage.tsx";
+import { MachinesPage } from "./settings/MachinesPage.tsx";
 import { ProjectsPage } from "./settings/ProjectsPage.tsx";
 import { UpdatesPage } from "./settings/UpdatesPage.tsx";
 
 export type { SettingsCtx } from "./settings/context.ts";
 
-export type SettingsPage = "account" | "general" | "agents" | "instructions" | "cloud" | "projects" | "appearance" | "keyboard" | "updates";
+export type SettingsPage = "account" | "general" | "agents" | "instructions" | "cloud" | "machines" | "projects" | "appearance" | "keyboard" | "updates";
 
 export const SETTINGS_PAGES: { id: SettingsPage; label: string; icon: typeof UserRound; keywords: string }[] = [
   { id: "account", label: "Account", icon: UserRound, keywords: "cloud control plane url token sign in sign out connect github workspace activity usage" },
@@ -35,6 +36,12 @@ export const SETTINGS_PAGES: { id: SettingsPage; label: string; icon: typeof Use
   },
   { id: "instructions", label: "Instructions", icon: NotebookPen, keywords: "custom instructions system prompt built-in skills" },
   { id: "cloud", label: "Cloud", icon: Cloud, keywords: "setup script environment api keys secrets skills sync auto delete clean up sandbox" },
+  {
+    id: "machines",
+    label: "Machines",
+    icon: Server,
+    keywords: "ssh remote server home server dev box tailscale another computer machine host runner",
+  },
   { id: "projects", label: "Projects", icon: FolderGit2, keywords: "projects folders repositories archived restore import export chats markdown json" },
   { id: "appearance", label: "Appearance", icon: Palette, keywords: "theme dark light system sidebar organize sort agent icons fold collapse turns" },
   { id: "keyboard", label: "Keyboard", icon: Keyboard, keywords: "shortcuts keys rebind" },
@@ -141,6 +148,7 @@ export function SettingsView({ page, ctx, importTab }: { page: SettingsPage; ctx
         {current.id === "agents" && <AgentsPage ctx={ctx} />}
         {current.id === "instructions" && <InstructionsPage ctx={ctx} />}
         {current.id === "cloud" && <CloudPage ctx={ctx} />}
+        {current.id === "machines" && <MachinesPage ctx={ctx} />}
         {current.id === "projects" && <ProjectsPage ctx={ctx} {...(importTab ? { importTab } : {})} />}
         {current.id === "appearance" && <AppearancePage ctx={ctx} />}
         {current.id === "keyboard" && <KeyboardPage ctx={ctx} />}

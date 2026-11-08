@@ -8,7 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -21,19 +21,22 @@ use crate::paths;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-const AGENTS: [&str; 4] = ["claude-code", "codex", "opencode", "acp"];
+pub(crate) const AGENTS: [&str; 4] = ["claude-code", "codex", "opencode", "acp"];
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
-struct RunnerProcess {
-    child: Child,
-    port: u16,
-    secret: String,
-    log_path: PathBuf,
+pub(crate) struct RunnerProcess {
+    pub(crate) child: Child,
+    pub(crate) port: u16,
+    pub(crate) secret: String,
+    pub(crate) log_path: PathBuf,
+    /// For a thread on another machine: the ssh session's stdin, kept open for as long as
+    /// the thread runs. Closing it ends the session, and the remote runner with it.
+    pub(crate) stdin: Option<ChildStdin>,
 }
 
 impl RunnerProcess {
-    fn alive(&mut self) -> bool {
+    pub(crate) fn alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
 }
@@ -43,7 +46,7 @@ impl RunnerProcess {
 pub struct Runners(Mutex<HashMap<String, RunnerProcess>>);
 
 impl Runners {
-    fn lock(&self) -> MutexGuard<'_, HashMap<String, RunnerProcess>> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, HashMap<String, RunnerProcess>> {
         // A panic while holding the lock must not stop us from cleaning up later.
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -61,7 +64,7 @@ impl Runners {
     /// Stops every runner. Called when the app exits.
     pub fn stop_all(&self) {
         let procs: Vec<RunnerProcess> = self.lock().drain().map(|(_, p)| p).collect();
-        let handles: Vec<_> = procs.into_iter().map(|p| thread::spawn(move || terminate(p.child))).collect();
+        let handles: Vec<_> = procs.into_iter().map(|p| thread::spawn(move || stop(p))).collect();
         for h in handles {
             let _ = h.join();
         }
@@ -70,8 +73,8 @@ impl Runners {
 
 #[derive(Serialize, Clone)]
 pub struct RunnerInfo {
-    port: u16,
-    secret: String,
+    pub(crate) port: u16,
+    pub(crate) secret: String,
 }
 
 struct StartRequest {
@@ -88,15 +91,85 @@ struct StartRequest {
 
 /// The user's settings for local threads, passed to the runner as flags.
 #[derive(Default)]
-struct RunnerSettings {
+pub(crate) struct RunnerSettings {
     /// Custom instructions; written to a file in the app's data folder (--instructions-file).
-    instructions: Option<String>,
+    pub(crate) instructions: Option<String>,
     strip_coauthors: bool,
     branch_prefix: Option<String>,
     retry_max_wait_minutes: Option<u32>,
     disabled_skills: Vec<String>,
     /// False turns the command guard off (--no-command-guard).
     command_guard: bool,
+}
+
+impl RunnerSettings {
+    /// The settings as the frontend sends them, with anything odd dropped.
+    pub(crate) fn from_frontend(
+        instructions: Option<String>,
+        strip_coauthors: Option<bool>,
+        branch_prefix: Option<String>,
+        retry_max_wait_minutes: Option<f64>,
+        disabled_skills: Option<Vec<String>>,
+        command_guard: Option<bool>,
+    ) -> Self {
+        RunnerSettings {
+            instructions: non_empty(instructions),
+            strip_coauthors: strip_coauthors.unwrap_or(false),
+            branch_prefix: non_empty(branch_prefix),
+            retry_max_wait_minutes: retry_max_wait_minutes.filter(|m| m.is_finite() && *m > 0.0).map(|m| m.round().min(u32::MAX as f64) as u32),
+            disabled_skills: disabled_skills.unwrap_or_default().into_iter().filter(|s| valid_skill_name(s)).collect(),
+            command_guard: command_guard.unwrap_or(true),
+        }
+    }
+}
+
+/// The runner flags a thread's agent and settings turn into, the same on this computer and
+/// on another machine (everything but the instructions file, which is a local path).
+pub(crate) fn thread_flags(
+    agent_command: Option<&str>,
+    model: Option<String>,
+    reasoning: Option<String>,
+    base_branch: Option<String>,
+    s: &RunnerSettings,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut flag = |name: &str, value: Option<String>| {
+        out.push(name.to_string());
+        if let Some(v) = value {
+            out.push(v);
+        }
+    };
+    if let Some(c) = agent_command {
+        flag("--agent-command", Some(c.to_string()));
+    }
+    if let Some(m) = non_empty(model) {
+        flag("--model", Some(m));
+    }
+    // Only the levels the runner knows; anything else is dropped rather than passed on.
+    if let Some(r) = non_empty(reasoning).filter(|r| ["low", "medium", "high", "xhigh", "max", "ultra"].contains(&r.as_str())) {
+        flag("--reasoning", Some(r));
+    }
+    // A value starting with "-" would read as a flag, so never pass one.
+    if let Some(b) = non_empty(base_branch).filter(|b| !b.starts_with('-')) {
+        flag("--base", Some(b));
+    }
+    if s.strip_coauthors {
+        flag("--strip-coauthors", None);
+    }
+    // The runner checks the prefix is a safe branch name; "--" would read as a flag, so not that.
+    if let Some(p) = s.branch_prefix.as_ref().filter(|p| !p.starts_with('-')) {
+        flag("--branch-prefix", Some(p.clone()));
+    }
+    if let Some(m) = s.retry_max_wait_minutes {
+        flag("--retry-max-wait", Some(m.to_string()));
+    }
+    if !s.disabled_skills.is_empty() {
+        flag("--disable-skills", Some(s.disabled_skills.join(",")));
+    }
+    if !s.command_guard {
+        flag("--no-command-guard", None);
+    }
+    out
 }
 
 /// What a skill name may look like, so nothing odd ends up on the runner's command line.
@@ -127,14 +200,7 @@ pub async fn start_local_runner(
     disabled_skills: Option<Vec<String>>,
     command_guard: Option<bool>,
 ) -> Result<RunnerInfo, String> {
-    let settings = RunnerSettings {
-        instructions: non_empty(instructions),
-        strip_coauthors: strip_coauthors.unwrap_or(false),
-        branch_prefix: non_empty(branch_prefix),
-        retry_max_wait_minutes: retry_max_wait_minutes.filter(|m| m.is_finite() && *m > 0.0).map(|m| m.round().min(u32::MAX as f64) as u32),
-        disabled_skills: disabled_skills.unwrap_or_default().into_iter().filter(|s| valid_skill_name(s)).collect(),
-        command_guard: command_guard.unwrap_or(true),
-    };
+    let settings = RunnerSettings::from_frontend(instructions, strip_coauthors, branch_prefix, retry_max_wait_minutes, disabled_skills, command_guard);
     let req = StartRequest { thread_id, agent, agent_command, model, reasoning, workdir, base_branch, runner_path, settings };
     tauri::async_runtime::spawn_blocking(move || start_blocking(&app, req))
         .await
@@ -145,7 +211,7 @@ pub async fn start_local_runner(
 pub async fn stop_local_runner(state: State<'_, Runners>, thread_id: String) -> Result<(), String> {
     let proc = state.lock().remove(&thread_id);
     if let Some(p) = proc {
-        tauri::async_runtime::spawn_blocking(move || terminate(p.child))
+        tauri::async_runtime::spawn_blocking(move || stop(p))
             .await
             .map_err(|e| format!("Could not stop the runner: {e}"))?;
     }
@@ -167,7 +233,7 @@ pub async fn remove_local_thread(
     let proc = state.lock().remove(&thread_id);
     tauri::async_runtime::spawn_blocking(move || {
         if let Some(p) = proc {
-            terminate(p.child);
+            stop(p);
         }
         let program = paths::resolve_program(runner_path.as_deref(), "lemonlime-runner")?;
         let mut cmd = runner_command(&program)?;
@@ -259,7 +325,7 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
                 let info = RunnerInfo { port: existing.port, secret: existing.secret.clone() };
                 let log = existing.log_path.clone();
                 drop(runners);
-                wait_until_ready(app, &req.thread_id, info.port, &log)?;
+                wait_until_ready(app, &req.thread_id, info.port, &log, Probe::Tcp)?;
                 return Ok(info);
             }
             runners.remove(&req.thread_id);
@@ -283,43 +349,14 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
             .arg(port.to_string())
             .arg("--host")
             .arg("127.0.0.1");
-        if let Some(c) = &agent_command {
-            cmd.arg("--agent-command").arg(c);
-        }
-        if let Some(m) = non_empty(req.model) {
-            cmd.arg("--model").arg(m);
-        }
-        // Only the levels the runner knows; anything else is dropped rather than passed on.
-        if let Some(r) = non_empty(req.reasoning).filter(|r| ["low", "medium", "high", "xhigh", "max", "ultra"].contains(&r.as_str())) {
-            cmd.arg("--reasoning").arg(r);
-        }
-        if let Some(b) = non_empty(req.base_branch) {
-            cmd.arg("--base").arg(b);
-        }
         // The user's agent plugins; the runner puts the enabled ones into the thread.
         if let Some(plugins) = crate::plugins::plugins_dir().filter(|d| d.is_dir()) {
             cmd.arg("--plugins-dir").arg(plugins);
         }
-        let s = &req.settings;
         if let Some(file) = &instructions_path {
             cmd.arg("--instructions-file").arg(file);
         }
-        if s.strip_coauthors {
-            cmd.arg("--strip-coauthors");
-        }
-        // The runner checks the prefix is a safe branch name; "--" would read as a flag, so not that.
-        if let Some(p) = s.branch_prefix.as_ref().filter(|p| !p.starts_with('-')) {
-            cmd.arg("--branch-prefix").arg(p);
-        }
-        if let Some(m) = s.retry_max_wait_minutes {
-            cmd.arg("--retry-max-wait").arg(m.to_string());
-        }
-        if !s.disabled_skills.is_empty() {
-            cmd.arg("--disable-skills").arg(s.disabled_skills.join(","));
-        }
-        if !s.command_guard {
-            cmd.arg("--no-command-guard");
-        }
+        cmd.args(thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.base_branch, &req.settings));
         // If this app crashes or is force-quit, the runner stops too instead of living on.
         cmd.arg("--exit-with-parent");
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.
@@ -353,22 +390,40 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
 
         runners.insert(
             req.thread_id.clone(),
-            RunnerProcess { child, port, secret: secret.clone(), log_path: log_path.clone() },
+            RunnerProcess { child, port, secret: secret.clone(), log_path: log_path.clone(), stdin: None },
         );
         (RunnerInfo { port, secret }, log_path)
     };
 
-    wait_until_ready(app, &req.thread_id, info.port, &log_path)?;
+    wait_until_ready(app, &req.thread_id, info.port, &log_path, Probe::Tcp)?;
     Ok(info)
 }
 
-/// Waits until the runner accepts TCP connections. Fails early if it exits.
+/// How to tell a runner is ready.
+#[derive(Clone, Copy)]
+pub(crate) enum Probe<'a> {
+    /// Something accepts connections on the port (a runner on this computer).
+    Tcp,
+    /// The runner on `host` answers /healthz for this thread through the port. An ssh tunnel
+    /// accepts connections before the far end is there, so a connection alone proves nothing.
+    Health { host: &'a str },
+}
+
+/// Waits until the runner is ready. Fails early if it exits.
 /// If it is merely slow, returns Ok and lets the client keep retrying.
-fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path) -> Result<(), String> {
+pub(crate) fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path, probe: Probe<'_>) -> Result<(), String> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let deadline = Instant::now() + READY_TIMEOUT;
+    let deadline = Instant::now() + match probe {
+        Probe::Tcp => READY_TIMEOUT,
+        // Connecting, then making the thread's worktree on the far side, takes longer.
+        Probe::Health { .. } => READY_TIMEOUT * 3,
+    };
     loop {
-        if TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok() {
+        let ready = match probe {
+            Probe::Tcp => TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok(),
+            Probe::Health { .. } => answers_health(&addr, thread_id),
+        };
+        if ready {
             return Ok(());
         }
         {
@@ -376,21 +431,21 @@ fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path
             let mut runners = state.lock();
             let exited = match runners.get_mut(thread_id) {
                 Some(p) => match p.child.try_wait() {
-                    Ok(Some(status)) => Some(status.to_string()),
+                    Ok(Some(status)) => Some((status.to_string(), status.code())),
                     Ok(None) => None,
-                    Err(e) => Some(e.to_string()),
+                    Err(e) => Some((e.to_string(), None)),
                 },
                 // Stopped by someone else meanwhile.
                 None => return Err("The runner was stopped.".into()),
             };
-            if let Some(status) = exited {
+            if let Some((status, code)) = exited {
                 runners.remove(thread_id);
                 drop(runners);
                 let tail = log_tail(log_path);
-                return Err(if tail.is_empty() {
-                    format!("The runner exited right away ({status}).")
-                } else {
-                    format!("The runner exited right away ({status}):\n{tail}")
+                return Err(match probe {
+                    Probe::Health { host } => crate::ssh::explain_failure(host, code, &tail),
+                    Probe::Tcp if tail.is_empty() => format!("The runner exited right away ({status})."),
+                    Probe::Tcp => format!("The runner exited right away ({status}):\n{tail}"),
                 });
             }
         }
@@ -399,6 +454,39 @@ fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path
         }
         thread::sleep(Duration::from_millis(150));
     }
+}
+
+/// GET /healthz through the port; true when the runner for this thread answers.
+fn answers_health(addr: &SocketAddr, thread_id: &str) -> bool {
+    use std::io::Write;
+    let Ok(mut stream) = TcpStream::connect_timeout(addr, Duration::from_millis(500)) else { return false };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+    if stream.write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").is_err() {
+        return false;
+    }
+    let mut buf = Vec::new();
+    let _ = stream.take(16 * 1024).read_to_end(&mut buf);
+    let text = String::from_utf8_lossy(&buf);
+    text.starts_with("HTTP/1.1 200") && text.contains(&format!("\"threadId\":\"{thread_id}\""))
+}
+
+/// Stops a runner. For one on another machine, closing the ssh session's stdin first lets
+/// the remote runner stop cleanly (it stops when its stdin closes); then the ssh process is
+/// ended like a local runner.
+pub(crate) fn stop(p: RunnerProcess) {
+    let RunnerProcess { mut child, stdin, .. } = p;
+    if let Some(stdin) = stdin {
+        drop(stdin);
+        let deadline = Instant::now() + STOP_GRACE + STOP_GRACE;
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+    terminate(child);
 }
 
 /// Asks the runner to shut down cleanly, then forces it after a grace period.
@@ -458,32 +546,32 @@ pub(crate) fn runner_command(program: &Path) -> Result<Command, String> {
     Ok(cmd)
 }
 
-fn valid_thread_id(id: &str) -> bool {
+pub(crate) fn valid_thread_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     (6..=64).contains(&bytes.len())
         && bytes[0].is_ascii_alphanumeric()
         && bytes.iter().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase() || *b == b'-')
 }
 
-fn non_empty(v: Option<String>) -> Option<String> {
+pub(crate) fn non_empty(v: Option<String>) -> Option<String> {
     v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 /// 32 random bytes, hex encoded.
-fn random_secret() -> String {
+pub(crate) fn random_secret() -> String {
     let bytes: [u8; 32] = rand::random();
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Asks the OS for a free port on the loopback interface.
-fn free_port() -> Result<u16, String> {
+pub(crate) fn free_port() -> Result<u16, String> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .and_then(|l| l.local_addr())
         .map(|a| a.port())
         .map_err(|e| format!("Could not find a free port: {e}"))
 }
 
-fn open_log(path: &Path) -> Result<File, String> {
+pub(crate) fn open_log(path: &Path) -> Result<File, String> {
     OpenOptions::new()
         .create(true)
         .append(true)

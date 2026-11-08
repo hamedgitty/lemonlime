@@ -13,10 +13,10 @@ import {
 } from "@lemonlime/protocol";
 import { appendEvents, contiguousSeq, type PendingMessage } from "./timeline.ts";
 import { forgetEvents, loadEvents, saveEvents, type LocalThreadMeta } from "./storage.ts";
-import { confirmAction, isLocalRunnerRunning, startLocalRunner } from "./native.ts";
+import { confirmAction, isLocalRunnerRunning } from "./native.ts";
 import { answerComputerRequest, type ComputerLevel } from "./computer.ts";
 import type { CloudApi } from "./cloud.ts";
-import { joinCommand } from "./command.ts";
+import { machineName, startThreadRunner } from "./threadRunner.ts";
 
 export type SessionState =
   /** Starting the local runner or asking the control plane where to connect. */
@@ -280,7 +280,10 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
                 client?.close();
                 setConnection(null);
                 setState("offline");
-                setError("The runner for this thread has stopped.");
+                // Over SSH, the tunnel ending most often means the connection to the machine dropped.
+                const t = targetRef.current;
+                const machine = t.mode === "local" ? machineName(t.meta) : null;
+                setError(machine ? `Can't reach ${machine}. The connection to it dropped.` : "The runner for this thread has stopped.");
               })
               .finally(() => {
                 checkingRunner = false;
@@ -443,16 +446,8 @@ function newClientMsgId(): string {
 export async function resolveConnection(target: SessionTarget): Promise<Connection | null> {
   if (target.mode === "local") {
     const { meta, runnerPath } = target;
-    const info = await startLocalRunner({
-      threadId: meta.id,
-      agent: meta.agent.kind,
-      agentCommand: meta.agent.command ? joinCommand(meta.agent.command) : undefined,
-      model: meta.agent.model,
-      reasoning: meta.agent.reasoning,
-      workdir: meta.repoPath,
-      baseBranch: meta.baseBranch,
-      runnerPath,
-    });
+    // On this computer, or on another machine through an SSH tunnel: the same from here on.
+    const info = await startThreadRunner(meta, runnerPath);
     return {
       url: `ws://127.0.0.1:${info.port}/ws`,
       token: () => signToken({ threadId: meta.id, scope: "client", sub: "desktop", exp: Math.floor(Date.now() / 1000) + CLIENT_TOKEN_TTL_S }, info.secret),

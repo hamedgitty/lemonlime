@@ -331,6 +331,7 @@ describe("E2BProvider", () => {
       metadata: { "lemonlime.thread": "t1", "lemonlime.runner-port": "7420", "lemonlime.workspace": "w" },
       envVars: { LEMONLIME_THREAD_SECRET: "s" },
       timeout: 3600,
+      secure: true,
     });
 
     expect(calls[1]!.method).toBe("POST");
@@ -357,7 +358,7 @@ describe("E2BProvider", () => {
 
   it("names the default user for old envd versions and skips keepalives", async () => {
     const { fetch, calls } = scriptedFetch([
-      json({ sandboxID: "ib2", envdVersion: "0.3.1", domain: "e2b.example" }, 201),
+      json({ sandboxID: "ib2", envdAccessToken: "envd-tok", envdVersion: "0.3.1", domain: "e2b.example" }, 201),
       () => connectStream([{ message: { event: { keepalive: {} } } }, { message: { event: { start: { pid: 7 } } } }]),
     ]);
     const info = await make(fetch).create({ threadId: "t2", size: "large", runner });
@@ -365,12 +366,12 @@ describe("E2BProvider", () => {
     expect(calls[0]!.body).toMatchObject({ templateID: "tpl-large" });
     expect(calls[1]!.url).toBe("https://49983-ib2.e2b.example/process.Process/Start");
     expect(calls[1]!.headers.authorization).toBe(`Basic ${btoa("user:")}`);
-    expect(calls[1]!.headers["x-access-token"]).toBeUndefined();
+    expect(calls[1]!.headers["x-access-token"]).toBe("envd-tok");
   });
 
   it("kills the sandbox when envd refuses to start the runner", async () => {
     const { fetch, calls } = scriptedFetch([
-      json({ sandboxID: "ib3", envdVersion: "0.5.0" }, 201),
+      json({ sandboxID: "ib3", envdAccessToken: "envd-tok", envdVersion: "0.5.0" }, 201),
       () => connectStream([{ flags: 2, message: { error: { code: "invalid_argument", message: "bad cmd" } } }]),
       empty(204),
     ]);
@@ -378,9 +379,15 @@ describe("E2BProvider", () => {
     expect(calls[2]).toMatchObject({ method: "DELETE", url: `${API}/sandboxes/ib3` });
   });
 
+  it("won't start the runner in a sandbox E2B didn't lock down, and removes it", async () => {
+    const { fetch, calls } = scriptedFetch([json({ sandboxID: "ib5", envdVersion: "0.5.0" }, 201), empty(204)]);
+    await expect(make(fetch).create({ threadId: "t5", size: "small", runner })).rejects.toThrow(/access token/);
+    expect(calls.at(-1)).toMatchObject({ method: "DELETE", url: `${API}/sandboxes/ib5` });
+  });
+
   it("reports an envd HTTP error", async () => {
     const { fetch } = scriptedFetch([
-      json({ sandboxID: "ib4", envdVersion: "0.5.0" }, 201),
+      json({ sandboxID: "ib4", envdAccessToken: "envd-tok", envdVersion: "0.5.0" }, 201),
       new Response("sandbox not reachable", { status: 502 }),
       empty(204),
     ]);

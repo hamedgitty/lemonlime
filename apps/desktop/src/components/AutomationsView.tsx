@@ -152,7 +152,7 @@ export function AutomationsView({
 
   const toReview = useMemo(() => (list ?? []).flatMap(a => (a.recentRuns ?? []).filter(r => r.status !== "skipped" && !r.reviewedAt)).length, [list]);
 
-  if (!cloudApi && tab !== "scans") {
+  if (!cloudApi && (tab === "overview" || tab === "review")) {
     return (
       <main className="flex flex-1 flex-col">
         <Header tab={tab} onTab={setTab} toReview={0} hasScans={Boolean(scans)} onNew={null} />

@@ -2,7 +2,7 @@
 //! the user's live in `~/.lemonlime/skills` (or `$LEMONLIME_HOME/skills`), which the
 //! runner copies into every local thread next to the bundled ones.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
@@ -249,6 +249,94 @@ pub fn add_skill(path: String) -> Result<String, String> {
     Ok(name)
 }
 
+/// One file of a skill downloaded from a public catalogue, base64-encoded.
+#[derive(Deserialize)]
+pub struct DownloadedFile {
+    /// Relative to the skill's folder, e.g. "SKILL.md" or "scripts/run.py".
+    path: String,
+    base64: String,
+}
+
+/// Save a skill downloaded from a public catalogue into the user's skills, under `name`.
+/// The same rules as adding a folder: a SKILL.md, a plain name, under 20 MB, nothing
+/// outside its folder. It is written next to the skills first and moved in once complete.
+#[tauri::command]
+pub fn add_skill_files(name: String, files: Vec<DownloadedFile>) -> Result<String, String> {
+    let dir = user_skills_dir().ok_or("Couldn't find your home folder.")?;
+    add_files_into(&dir, &name, files)
+}
+
+fn add_files_into(dir: &Path, name: &str, files: Vec<DownloadedFile>) -> Result<String, String> {
+    if !valid_name(name) {
+        return Err("Use letters, numbers, dots, dashes or underscores for the name.".into());
+    }
+    if !files.iter().any(|f| f.path == "SKILL.md") {
+        return Err("That skill has no SKILL.md.".into());
+    }
+    let to = dir.join(name);
+    if to.exists() {
+        return Err(format!("You already have a skill called {name}."));
+    }
+    let mut decoded = Vec::with_capacity(files.len());
+    let mut total: u64 = 0;
+    for f in files {
+        if !crate::plugins::safe_relative(&f.path) || f.path.split('/').any(|s| s.is_empty() || s == ".") {
+            return Err(format!("{} would land outside the skill's folder.", f.path));
+        }
+        let bytes = decode_base64(&f.base64).ok_or_else(|| format!("{} didn't download properly. Try again.", f.path))?;
+        total += bytes.len() as u64;
+        if total > MAX_SKILL_BYTES {
+            return Err("That skill is over 20 MB. Skills are copied into every thread, so keep them small.".into());
+        }
+        decoded.push((f.path, bytes));
+    }
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    // Staged beside the skills folder, so a half-written copy never reaches a thread.
+    let parent = dir.parent().unwrap_or(dir);
+    let staging = parent.join(format!(".skill-download-{}-{}", name, std::process::id()));
+    let _ = fs::remove_dir_all(&staging);
+    let written = (|| -> std::io::Result<()> {
+        for (path, bytes) in &decoded {
+            let target = staging.join(path);
+            if let Some(up) = target.parent() {
+                fs::create_dir_all(up)?;
+            }
+            fs::write(target, bytes)?;
+        }
+        fs::rename(&staging, &to)
+    })();
+    written.map_err(|e| {
+        let _ = fs::remove_dir_all(&staging);
+        format!("Couldn't save the skill: {e}")
+    })?;
+    Ok(name.to_string())
+}
+
+/// Standard base64 (with or without padding; line breaks ignored). None if it isn't base64.
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in text.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' | b'\n' | b'\r' => continue,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 /// Remove one of the user's skills (never a bundled one).
 #[tauri::command]
 pub fn remove_skill(name: String) -> Result<(), String> {
@@ -326,6 +414,33 @@ pub fn export_skills(names: Vec<String>) -> Result<Vec<ExportedSkill>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64() {
+        assert_eq!(decode_base64("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(decode_base64("aGVsbG8").unwrap(), b"hello");
+        assert_eq!(decode_base64("").unwrap(), b"");
+        assert_eq!(decode_base64("AAEC/w==").unwrap(), vec![0, 1, 2, 255]);
+        assert!(decode_base64("not base64!").is_none());
+    }
+
+    #[test]
+    fn saves_a_downloaded_skill() {
+        let root = std::env::temp_dir().join(format!("lemonlime-skill-dl-{}", std::process::id()));
+        let dir = root.join("skills");
+        let file = |path: &str, b64: &str| DownloadedFile { path: path.into(), base64: b64.into() };
+        let ok = add_files_into(&dir, "hello", vec![file("SKILL.md", "aGVsbG8="), file("scripts/run.sh", "AAEC")]).unwrap();
+        assert_eq!(ok, "hello");
+        assert_eq!(fs::read(dir.join("hello/SKILL.md")).unwrap(), b"hello");
+        assert_eq!(fs::read(dir.join("hello/scripts/run.sh")).unwrap(), vec![0, 1, 2]);
+        assert!(add_files_into(&dir, "hello", vec![file("SKILL.md", "")]).unwrap_err().contains("already"));
+        assert!(add_files_into(&dir, "other", vec![file("README.md", "")]).is_err());
+        assert!(add_files_into(&dir, "evil", vec![file("SKILL.md", ""), file("../x", "")]).is_err());
+        assert!(add_files_into(&dir, "evil", vec![file("SKILL.md", ""), file("/etc/x", "")]).is_err());
+        assert!(add_files_into(&dir, "../up", vec![file("SKILL.md", "")]).is_err());
+        assert!(!dir.join("evil").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
 
     #[test]
     fn names_and_descriptions() {

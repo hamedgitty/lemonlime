@@ -66,6 +66,7 @@ pub fn run() {
             previews::stop_preview_tunnel,
             skills::list_skills,
             skills::add_skill,
+            skills::add_skill_files,
             skills::remove_skill,
             skills::skills_folder,
             skills::read_skill,

@@ -85,3 +85,24 @@ describe("diffLines", () => {
     expect(items.map(i => (i.kind === "user" || i.kind === "agent" ? i.text : i.kind))).toEqual(["one", "did one", "notice", "two, again"]);
   });
 });
+
+describe("buildTimeline: plans and questions", () => {
+  it("keeps the latest plan open until a message follows, and pairs questions with answers", () => {
+    seq = 0;
+    const events = [
+      ev({ type: "agent_message", text: "Look", partial: true }),
+      ev({ type: "todo_snapshot", items: [{ text: "A", status: "in_progress" }] }),
+      ev({ type: "agent_message", text: "ing", partial: true }),
+      ev({ type: "question_request", requestId: "q1", questions: [{ question: "Which?", options: [{ label: "A" }], multiSelect: false }] }),
+      ev({ type: "question_result", requestId: "q1", answers: [["A"]], by: "user" }),
+      ev({ type: "plan_proposal", plan: "# Plan" }),
+    ];
+    const items = buildTimeline(events);
+    expect(items.map(i => i.kind)).toEqual(["agent", "question", "plan"]);
+    expect(items[0]).toMatchObject({ text: "Looking" });
+    expect(items[1]).toMatchObject({ result: { answers: [["A"]] } });
+    expect(items[2]).toMatchObject({ open: true });
+    events.push(ev({ type: "user_message", text: "go" }));
+    expect(buildTimeline(events)[2]).toMatchObject({ kind: "plan", open: false });
+  });
+});

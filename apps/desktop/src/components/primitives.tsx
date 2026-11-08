@@ -88,15 +88,18 @@ export function MenuChoice<T extends string>({
   value,
   onChange,
   options,
+  closeOnClick = false,
 }: {
   value: T;
   onChange: (v: T) => void;
   options: { value: T; label: ReactNode; icon?: ReactNode }[];
+  /** Close the menu once a choice is picked (pickers), instead of staying open (settings). */
+  closeOnClick?: boolean;
 }) {
   return (
     <BaseMenu.RadioGroup value={value} onValueChange={v => onChange(v as T)}>
       {options.map(o => (
-        <BaseMenu.RadioItem key={o.value} value={o.value} className={ITEM}>
+        <BaseMenu.RadioItem key={o.value} value={o.value} className={ITEM} closeOnClick={closeOnClick}>
           {o.icon}
           <span className="min-w-0 flex-1 truncate">{o.label}</span>
           <BaseMenu.RadioItemIndicator keepMounted className="data-[unchecked]:invisible">

@@ -526,7 +526,12 @@ function ThreadRow({
           </span>
         </button>
       )}
-      <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100">
+      <div
+        className={cx(
+          "absolute top-1/2 right-1 -translate-y-1/2 opacity-0 transition-opacity group-hover/row:opacity-100 has-[[data-popup-open]]:opacity-100 focus-within:opacity-100",
+          renaming && "hidden",
+        )}
+      >
         <Menu
           align="end"
           trigger={

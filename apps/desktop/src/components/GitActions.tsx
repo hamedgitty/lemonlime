@@ -281,7 +281,7 @@ export function PullRequestPill({ pr }: { pr: PullRequestView }) {
       onClick={() => void openExternal(pr.url)}
       title={pr.url}
       className={cx(
-        "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-medium hover:brightness-[0.98]",
+        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12.5px] font-medium whitespace-nowrap hover:brightness-[0.98]",
         style?.cls ?? "border-line bg-paper text-ink-soft",
       )}
     >

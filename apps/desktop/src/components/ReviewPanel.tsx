@@ -178,6 +178,7 @@ export function ReviewPanel({
           }
         >
           <MenuChoice
+            closeOnClick
             value={scope.scope === "commit" ? "" : scope.scope}
             onChange={v => setScope({ scope: v as "branch" | "uncommitted" })}
             options={[
@@ -190,6 +191,7 @@ export function ReviewPanel({
               <MenuSeparator />
               <MenuLabel>One commit</MenuLabel>
               <MenuChoice
+                closeOnClick
                 value={scope.scope === "commit" ? scope.commit : ""}
                 onChange={commit => setScope({ scope: "commit", commit })}
                 options={commits.map(c => ({
@@ -469,7 +471,18 @@ function FileDiffCard({
               {file.truncated ? "This file's diff is too large to show here." : file.status === "renamed" ? "Renamed without changes." : "No line changes."}
             </p>
           ) : (
-            <table className="w-full border-collapse font-mono text-[12px] leading-[1.6]">
+            <table className={cx("w-full border-collapse font-mono text-[12px] leading-[1.6]", layout === "split" && "table-fixed")}>
+              {layout === "split" && (
+                // Side by side: two equal halves; long lines wrap rather than push the other side away.
+                <colgroup>
+                  <col className="w-10" />
+                  <col className="w-4" />
+                  <col />
+                  <col className="w-10" />
+                  <col className="w-4" />
+                  <col />
+                </colgroup>
+              )}
               <tbody>
                 {file.hunks.map((h, hi) => (
                   <Fragment key={`${hi}:${h.header}`}>
@@ -505,8 +518,13 @@ function GapRow({ hunks, index, layout, hunk, onMore }: { hunks: DiffHunk[]; ind
               className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-ink-soft hover:bg-cream-hover hover:text-ink"
             >
               <UnfoldVertical aria-hidden="true" className="size-3.5" />
-              Show {Math.min(hidden, MORE_CONTEXT)} more {Math.min(hidden, MORE_CONTEXT) === 1 ? "line" : "lines"}
-              <span className="text-ink-faint">({hidden} hidden)</span>
+              {hidden <= MORE_CONTEXT ? (
+                `Show ${hidden} hidden ${hidden === 1 ? "line" : "lines"}`
+              ) : (
+                <>
+                  Show {MORE_CONTEXT} more lines <span className="text-ink-faint">({hidden} hidden)</span>
+                </>
+              )}
             </button>
           ) : null}
           {section && <span className="min-w-0 truncate font-mono text-[12px]">{section}</span>}
@@ -564,7 +582,7 @@ function SplitRowView({
   onPick: (l: ReviewLine, extend: boolean) => void;
 }) {
   const side = (l: ReviewLine | null, which: "left" | "right") => {
-    if (!l) return <td colSpan={3} className="w-1/2 bg-cream/60" />;
+    if (!l) return <td colSpan={3} className={cx("bg-cream/60", which === "left" && "border-r border-line/70")} />;
     const picked = isPicked(l);
     const n = which === "left" ? l.oldNo : l.newNo;
     return (
@@ -575,7 +593,7 @@ function SplitRowView({
         </td>
         <td
           className={cx(
-            "w-1/2 pr-3 align-top whitespace-pre",
+            "pr-3 align-top break-all whitespace-pre-wrap",
             LINE_BG[l.kind],
             LINE_FG[l.kind],
             which === "left" && "border-r border-line/70",

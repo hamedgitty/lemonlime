@@ -106,3 +106,38 @@ describe("buildTimeline: plans and questions", () => {
     expect(buildTimeline(events)[2]).toMatchObject({ kind: "plan", open: false });
   });
 });
+
+describe("buildTimeline: reasoning and turn times", () => {
+  const timed = (s: number, e: Record<string, unknown>) =>
+    ({ threadId: T, seq: ++seq, at: new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString(), ...e }) as unknown as ThreadEvent;
+
+  it("streams reasoning into one row timed from the event before it", () => {
+    seq = 0;
+    const items = buildTimeline([
+      timed(0, { type: "user_message", text: "go" }),
+      timed(2, { type: "agent_reasoning", text: "Look ", partial: true }),
+      timed(5, { type: "agent_reasoning", text: "around", partial: true }),
+      timed(9, { type: "agent_reasoning", text: "Look around.", partial: false }),
+      timed(10, { type: "agent_message", text: "Done", partial: false }),
+    ]);
+    expect(items.map(i => i.kind)).toEqual(["user", "reasoning", "agent"]);
+    expect(items[1]).toMatchObject({ text: "Look around.", streaming: false, startedAt: "2026-01-01T00:00:00.000Z", endedAt: "2026-01-01T00:00:09.000Z" });
+  });
+
+  it("says how long a turn took on the status change that ended it", () => {
+    seq = 0;
+    const items = buildTimeline([
+      timed(0, { type: "user_message", text: "go" }),
+      timed(0, { type: "status_change", from: "idle", to: "running" }),
+      timed(95, { type: "status_change", from: "running", to: "idle" }),
+    ]);
+    expect(items[1]).not.toHaveProperty("workedMs");
+    expect(items[2]).toMatchObject({ kind: "status", workedMs: 95_000 });
+  });
+
+  it("stops showing a message as streaming once something else arrives", () => {
+    seq = 0;
+    const items = buildTimeline([ev({ type: "agent_message", text: "Hel", partial: true }), ev({ type: "tool_call", callId: "c", name: "Read", input: {} })]);
+    expect(items[0]).toMatchObject({ kind: "agent", streaming: false });
+  });
+});

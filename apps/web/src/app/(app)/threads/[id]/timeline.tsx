@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { EventOf } from "@lemonlime/protocol";
+import { elapsedMs, formatDuration, type EventOf } from "@lemonlime/protocol";
 import { diffLines, type DiffLineKind, type TimelineItem } from "@/lib/timeline.ts";
 import { PlanCard, QuestionRecord } from "./agent-loop.tsx";
 
@@ -119,6 +119,8 @@ function Item({ item, onApprove, onImplementPlan }: { item: TimelineItem; onAppr
           <span className="mt-1 block text-xs text-muted">{time(item.at)}</span>
         </div>
       );
+    case "reasoning":
+      return <Reasoning item={item} />;
     case "tool":
       return <ToolItem call={item.call} result={item.result} />;
     case "diff":
@@ -128,7 +130,7 @@ function Item({ item, onApprove, onImplementPlan }: { item: TimelineItem; onAppr
         <div className="flex items-center gap-3 text-xs text-muted" role="status">
           <span className="h-px flex-1 bg-line" />
           <span>
-            {STATUS_TEXT[item.event.to] ?? item.event.to}
+            {item.workedMs !== undefined ? `Worked for ${formatDuration(item.workedMs)}` : (STATUS_TEXT[item.event.to] ?? item.event.to)}
             {item.event.reason ? `: ${item.event.reason}` : ""} · {time(item.event.at)}
           </span>
           <span className="h-px flex-1 bg-line" />
@@ -154,6 +156,23 @@ function Item({ item, onApprove, onImplementPlan }: { item: TimelineItem; onAppr
         </div>
       );
   }
+}
+
+/** The agent's reasoning, folded to one quiet line ("Thought for 12s"). */
+function Reasoning({ item }: { item: Extract<TimelineItem, { kind: "reasoning" }> }) {
+  const ms = elapsedMs(item.startedAt, item.endedAt);
+  const label = item.streaming ? "Thinking" : ms !== null && ms >= 1000 ? `Thought for ${formatDuration(ms)}` : "Thought for a moment";
+  return (
+    <details className="group text-[13.5px]">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+        <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" fill="currentColor">
+          <path d="M6 3.5 10.5 8 6 12.5 5 11.5 8.5 8 5 4.5z" />
+        </svg>
+        <span className="tabular-nums">{label}</span>
+      </summary>
+      <p className="mt-1.5 ml-[7px] border-l-2 border-line pl-4 leading-relaxed whitespace-pre-wrap break-words text-muted">{item.text}</p>
+    </details>
+  );
 }
 
 function ToolItem({ call, result }: { call: EventOf<"tool_call">; result: EventOf<"tool_result"> | null }) {

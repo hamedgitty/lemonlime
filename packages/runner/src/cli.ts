@@ -18,6 +18,7 @@ import {
 } from "@lemonlime/protocol";
 import { adapterFor, type Autonomy } from "./agents/index.ts";
 import { killAllAgentGroups } from "./agents/process.ts";
+import { takeRunnerLock } from "./lock.ts";
 import { runApprovalMcp } from "./approval-mcp.ts";
 import { runSubagentsMcp } from "./subagents-mcp.ts";
 import { GitWorkspace } from "./git.ts";
@@ -90,6 +91,7 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            folder, erase disks or fork-bomb (blocked by default: Claude Code
                            through a hook, OpenCode and other ACP agents when they ask
                            before running a command)
+  --exit-with-parent       Stop when the process that started this runner exits (for apps)
   --instructions-file <path>
                            Your own instructions, added to every turn (Claude Code's system
                            prompt, Codex's developer instructions, the first message of each
@@ -283,6 +285,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       "plugins-dir": { type: "string" },
       "memory-limit-mb": { type: "string" },
       "no-command-guard": { type: "boolean", default: false },
+      "exit-with-parent": { type: "boolean", default: false },
       "instructions-file": { type: "string" },
       "strip-coauthors": { type: "boolean", default: false },
       "branch-prefix": { type: "string" },
@@ -333,6 +336,13 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   const command = values["agent-command"] ? splitCommand(values["agent-command"]) : undefined;
   const now = new Date().toISOString();
   const id = threadId.data!;
+  let releaseLock: () => void = () => {};
+  try {
+    releaseLock = takeRunnerLock(dataDir);
+  } catch (err) {
+    fail((err as Error).message);
+  }
+  process.on("exit", () => releaseLock());
 
   const branchPrefix = values["branch-prefix"];
   if (branchPrefix !== undefined && !isSafeBranchPrefix(branchPrefix)) fail("--branch-prefix must be a safe git branch prefix, e.g. agent/ or ai-");
@@ -526,6 +536,17 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   process.on("SIGINT", () => void shutdown(0));
   // Agents run in their own process groups, which would outlive a runner that dies another way.
   process.on("exit", () => killAllAgentGroups());
+  // Started by an app that wants this runner gone with it: if that app dies without stopping
+  // it (a crash, a force quit), the runner is handed to another parent, and stops.
+  if (values["exit-with-parent"]) {
+    const parent = process.ppid;
+    setInterval(() => {
+      if (process.ppid !== parent) {
+        log("the app that started this runner is gone; stopping");
+        void shutdown(0);
+      }
+    }, 2000).unref();
+  }
 }
 
 /**

@@ -320,6 +320,8 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         if !s.command_guard {
             cmd.arg("--no-command-guard");
         }
+        // If this app crashes or is force-quit, the runner stops too instead of living on.
+        cmd.arg("--exit-with-parent");
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.
         if let Ok(pty) = app.path().resolve("node-pty", tauri::path::BaseDirectory::Resource) {
             if pty.join("node_modules").is_dir() {

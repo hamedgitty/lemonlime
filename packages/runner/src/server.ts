@@ -5,6 +5,8 @@ import { createConnection, type AddressInfo, type Socket } from "node:net";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   ComputerRequest,
+  DEFAULT_TERMINAL_ID,
+  FILE_READ_MAX_BYTES,
   FILES_LIMIT_MAX,
   RelayAnswers,
   parseClientMessage,
@@ -15,11 +17,12 @@ import {
   type ServerMessage,
   type TerminalServerMessage,
 } from "@lemonlime/protocol";
-import { TerminalSession, type SpawnPty } from "./terminal.ts";
+import { TerminalPool, type SpawnPty, type TerminalSession } from "./terminal.ts";
 import { keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
 import { listWorkdirFiles, searchFiles } from "./composer.ts";
+import { contentTypeFor, resolveWorkdirFile } from "./files.ts";
 import { handleGitApi } from "./git-api.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 import type { Relay } from "./relay.ts";
@@ -33,7 +36,7 @@ export interface ServerOptions {
   keys?: ThreadKeys;
   version: string;
   /** The thread's terminal: a shell in `cwd`. Without `spawn` (no PTY support), it says so. */
-  terminal?: { cwd: string; spawn: SpawnPty | null };
+  terminal?: { cwd: string; spawn: SpawnPty | null; /** Most shells at once (default MAX_TERMINALS). */ max?: number };
   /** Ports the runner itself uses, never offered for preview. */
   ownPorts?: number[];
   /** Relay mode: calls for the control plane wait here for it to collect them (see relay.ts). */
@@ -111,6 +114,8 @@ function drained(ws: WebSocket): Promise<void> {
   });
 }
 const TERMINAL_SLOW_MS = 10_000;
+/** Close code for a terminal socket whose terminal was closed for good (don't reconnect). */
+const TERMINAL_CLOSED_CLOSE = 4410;
 
 /** HTTP health endpoint + the thread's WebSocket. */
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
@@ -119,6 +124,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
     if (
       path === "/capabilities" ||
       path === "/files" ||
+      path === "/file" ||
       path === "/commands" ||
       path.startsWith("/attachments") ||
       path === "/previews" ||
@@ -158,11 +164,11 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_FRAME_BYTES });
   const tunnelWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const terminal = opts.terminal?.spawn ? new TerminalSession(opts.terminal.spawn, opts.terminal.cwd) : null;
+  const terminals = opts.terminal?.spawn ? new TerminalPool(opts.terminal.spawn, opts.terminal.cwd, opts.terminal.max) : null;
   http.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
     if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
-    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminal));
+    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminals));
     else if (path === "/tunnel") tunnelWss.handleUpgrade(req, socket, head, ws => handleTunnel(ws, req, runner, opts));
     else socket.destroy();
   });
@@ -179,7 +185,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
             tunnelWss.close();
             wss.close();
             terminalWss.close();
-            terminal?.close();
+            terminals?.closeAll();
             http.close(() => done());
           }),
       });
@@ -361,7 +367,9 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
   ws.on("error", () => ws.terminate());
 }
 
-function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminal: TerminalSession | null): void {
+function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminals: TerminalPool | null): void {
+  let terminal: TerminalSession | null = null;
+  let terminalId = DEFAULT_TERMINAL_ID;
   let slowSince: number | null = null;
   const send = (m: TerminalServerMessage) => {
     if (ws.readyState !== ws.OPEN) return;
@@ -402,19 +410,26 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
       authed = true;
       clearTimeout(helloTimer);
       stopExpiry = closeAtExpiry(ws, result.claims.exp);
-      if (!terminal) {
+      if (!terminals) {
         send({ type: "error", code: "unavailable", message: "This runner can't open a terminal on this computer." });
         return ws.close(1011, "unavailable");
+      }
+      terminalId = msg.terminal ?? DEFAULT_TERMINAL_ID;
+      terminal = terminals.open(terminalId);
+      if (!terminal) {
+        send({ type: "error", code: "limit", message: `A thread can have ${terminals.max} terminals open at once. Close one first.` });
+        return ws.close(1008, "too many terminals");
       }
       terminal.resize(msg.cols, msg.rows);
       terminal.start();
       const { reset, data } = terminal.replay(msg.resumeFrom, msg.shell);
-      send({ type: "ready", reset, running: terminal.running, shell: terminal.generation });
+      send({ type: "ready", reset, running: terminal.running, shell: terminal.generation, name: terminal.name });
       if (data) sendOutput(data, terminal.end);
       unsubscribe = terminal.subscribe({
         output: sendOutput,
         exit: code => send({ type: "exit", code }),
         restarted: shell => send({ type: "restarted", shell }),
+        closed: () => ws.close(TERMINAL_CLOSED_CLOSE, "terminal closed"),
       });
       return;
     }
@@ -428,6 +443,9 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
         break;
       case "restart":
         terminal.start();
+        break;
+      case "close":
+        terminals?.close(terminalId);
         break;
       case "hello":
         break;
@@ -608,6 +626,21 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     const limit = Math.min(FILES_LIMIT_MAX, Math.max(1, Number(params.get("limit")) || 50));
     const files = await listWorkdirFiles(runner.workdir).catch(() => [] as string[]);
     return reply(res, 200, searchFiles(files, (params.get("q") ?? "").slice(0, 200), limit));
+  }
+  // One file from the working folder, for the app's file tabs.
+  if (path === "/file" && req.method === "GET") {
+    const asked = new URL(req.url ?? "/", "http://runner").searchParams.get("path") ?? "";
+    const found = await resolveWorkdirFile(runner.workdir, asked, FILE_READ_MAX_BYTES);
+    if ("error" in found) return reply(res, found.status, { error: found.error });
+    res.writeHead(200, {
+      "content-type": contentTypeFor(found.path, found.data),
+      "content-length": String(found.data.length),
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      ...CORS,
+    });
+    res.end(found.data);
+    return;
   }
   if (path === "/commands" && req.method === "GET") return reply(res, 200, { commands: runner.agentCommands });
   if (path.startsWith("/git/")) return handleGitApi(req, res, path, runner.review, { reply, readBody });

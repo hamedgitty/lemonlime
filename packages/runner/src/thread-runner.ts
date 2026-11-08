@@ -276,6 +276,9 @@ export class ThreadRunner {
         if (!this.closing) this.sendMessage(text, `subagent-${id}`);
       },
       notice: (code, message) => this.store.append({ type: "notice", code, message }),
+      changed: subagents => {
+        if (!this.closing) this.store.append({ type: "subagent_update", subagents });
+      },
     });
     const { autonomy: _a, ...session } = this.sessionOpts;
     this.side = new SideChats({

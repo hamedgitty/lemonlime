@@ -29,6 +29,8 @@ export const SHORTCUTS = [
   { id: "focus-pane-4", label: "Go to pane 4", group: "Split view", keys: "mod+4" },
   { id: "focus-pane-5", label: "Go to pane 5", group: "Split view", keys: "mod+5" },
   { id: "focus-pane-6", label: "Go to pane 6", group: "Split view", keys: "mod+6" },
+  { id: "quick-open", label: "Open a file in the side panel", group: "Threads", keys: "mod+p" },
+  { id: "reopen-tab", label: "Reopen the last closed panel tab", group: "Threads", keys: "mod+shift+t" },
 ] as const;
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
@@ -37,6 +39,7 @@ export type ShortcutId = (typeof SHORTCUTS)[number]["id"];
 export const FIXED_SHORTCUTS: [string, string][] = [
   ["Enter", "Send"],
   ["Shift Enter", "New line"],
+  ["Alt (⌥) Enter", "Send once the agent's subagents finish"],
   ["Esc", "Stop the agent, or leave Settings"],
   ["↑ ↓", "Earlier prompts, in an empty message box"],
   ["/", "Agent commands, at the start of a message"],

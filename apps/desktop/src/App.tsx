@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
-import { branchForThread, isSafeBranchPrefix, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
+import { branchForThread, isSafeBranchPrefix, newThreadId, type ChildWork, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
 import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
@@ -19,6 +19,7 @@ import { ThreadView } from "./components/ThreadView.tsx";
 import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
 import { Toaster, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
+import { settled, withChildren } from "./lib/children.ts";
 import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
@@ -49,12 +50,15 @@ import {
   loadSettings,
   loadSplitLayout,
   loadUiPrefs,
+  loadThreadChildren,
+  saveThreadChildren,
   saveLocalThreads,
   saveSettings,
   saveSplitLayout,
   saveUiPrefs,
   type LocalThreadMeta,
   type Settings,
+  type SidebarChild,
   type UiPrefs,
 } from "./lib/storage.ts";
 import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
@@ -860,6 +864,12 @@ export function App() {
         case "find":
           if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:find"));
           return;
+        case "quick-open":
+          if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:quick-open"));
+          return;
+        case "reopen-tab":
+          if (here.view === "thread") window.dispatchEvent(new Event("lemonlime:reopen-tab"));
+          return;
         case "toggle-sidebar":
           return onPrefs({ sidebarCollapsed: !pr.sidebarCollapsed });
         case "back":
@@ -932,6 +942,18 @@ export function App() {
   // ── Sidebar states: waiting, unread, drafts; the dock badge ──
   const [openWaiting, setOpenWaiting] = useState<Record<string, number>>({});
   const onWaiting = useCallback((id: string, count: number) => setOpenWaiting(w => (w[id] === count ? w : { ...w, [id]: count })), []);
+  // Each thread's subagents, nested under it in the sidebar.
+  const [threadChildren, setThreadChildren] = useState(loadThreadChildren);
+  const onChildren = useCallback((id: string, list: ChildWork[]) => setThreadChildren(all => withChildren(all, id, list)), []);
+  useEffect(() => saveThreadChildren(threadChildren), [threadChildren]);
+  const sidebarChildren = useMemo(() => {
+    const out: Record<string, SidebarChild[]> = {};
+    for (const [id, list] of Object.entries(threadChildren)) {
+      const local = localThreads.some(m => m.id === id);
+      out[id] = settled(list, !local || running.has(id));
+    }
+    return out;
+  }, [threadChildren, localThreads, running]);
   const [drafts, setDrafts] = useState<Set<string>>(draftThreadIds);
   useEffect(() => {
     const update = () => setDrafts(draftThreadIds());
@@ -1101,7 +1123,11 @@ export function App() {
     const paneCommands = (["maximise-pane", "focus-pane-1", "focus-pane-2", "focus-pane-3", "focus-pane-4", "focus-pane-5", "focus-pane-6"] as const).filter(
       id => paneCount === 0 || (id !== "maximise-pane" && Number(id.slice(-1)) > paneCount),
     );
-    const skip: ShortcutId[] = ["settings", ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "split-right"] as const)), ...paneCommands];
+    const skip: ShortcutId[] = [
+      "settings",
+      ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "split-right", "quick-open", "reopen-tab"] as const)),
+      ...paneCommands,
+    ];
     // Unarchived threads first, as in the sidebar.
     const sortedThreads = [...threads.filter(t => !t.detail?.endsWith(", archived")), ...threads.filter(t => t.detail?.endsWith(", archived"))];
     return [...sortedThreads, ...projects, ...appCommands(extras, skip)];
@@ -1263,6 +1289,8 @@ export function App() {
         }}
         onWaiting={onWaiting}
         suggestNext={prefs.suggestNextPrompt}
+        onChildren={onChildren}
+        shortcuts={prefs.shortcuts}
         computerLevel={prefs.computerAccess[entry.mode === "cloud" ? entry.thread.id : ""] ?? "off"}
         onComputerLevel={level => {
           if (entry.mode !== "cloud") return;
@@ -1393,6 +1421,7 @@ export function App() {
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
         glyphs={rowStates.glyphs}
+        childrenOf={sidebarChildren}
         unread={rowStates.unread}
         onMarkUnread={onMarkUnread}
         onRename={onRename}

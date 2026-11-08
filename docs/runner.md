@@ -108,14 +108,21 @@ Environment:
 
 ## Terminal
 
-Each thread has one shell, at `/terminal` on the runner's port (same client token as
-`/ws`; messages in `packages/protocol/src/terminal.ts`). It runs in the thread's working
-folder on the machine or sandbox where the agent runs, starts on first use and keeps
-running when nobody is connected. Every app that opens it sees the same shell. The runner
+Each thread can have up to 8 shells, at `/terminal` on the runner's port (same client
+token as `/ws`; messages in `packages/protocol/src/terminal.ts`). The app names each one
+in its hello (`terminal`, "main" when left out); a ninth is refused with a `limit` error,
+and a `close` message ends a shell for good. Each runs in the thread's working folder on
+the machine or sandbox where the agent runs, starts on first use and keeps running when
+nobody is connected. Every app that opens a terminal sees the same shell. The runner
 keeps the last 1 MB of output, so a client that reconnects gets only what it missed (or
 the whole kept screen if that's gone). Input is capped at 64 KB per message, output is
 sent in 64 KB pieces, and a client more than 4 MB behind for 10 seconds is dropped and
 reconnects. The shell doesn't get the runner's thread secret or approval token.
+
+`GET /file?path=<relative path>` (client token) returns one file from the working folder
+for the app's file tabs, up to 20 MB. The path must be relative and stay inside the
+working folder once symlinks are followed; `..`, absolute paths, `.git` and the runner's
+own `.lemonlime` folder are refused.
 
 The PTY comes from `@lydell/node-pty` (prebuilt, no compiler needed). The desktop app's
 single-file runner can't hold a native module, so `build:sea` copies it next to the

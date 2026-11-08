@@ -83,6 +83,25 @@ describe("subagents", () => {
       .filter(e => e.type === "notice")
       .map(e => (e as { code: string }).code);
     expect(codes).toEqual(expect.arrayContaining(["subagent_started", "subagent_replied"]));
+    // The apps follow each subagent's state from snapshots in the history.
+    const states = runner.store.since(0).flatMap(e => (e.type === "subagent_update" ? [e.subagents.map(s => s.status).join(",")] : []));
+    expect(states).toEqual(["working", "idle", "working", "idle"]);
+  });
+
+  it("count a subagent whose own subagents are still working as waiting", async () => {
+    const { runner, env, release } = await boot();
+    const parent = /sub-\w+/.exec(textOf(await runSubagentTool("spawn_subagent", { request_id: "p", task: "lead" }, env)))![0];
+    await until(() => runner.subagents.list().every(a => a.status === "idle"));
+    await runSubagentTool("spawn_subagent", { request_id: "c", task: "slow part" }, { ...env, LEMONLIME_SUBAGENT_ID: parent });
+    expect(runner.subagents.snapshot().map(s => [s.parentId === null ? "parent" : "child", s.status])).toEqual([
+      ["parent", "waiting"],
+      ["child", "working"],
+    ]);
+    release();
+    // The reply wakes the parent, whose prompt mentions the slow part too.
+    await until(() => runner.subagents.snapshot()[1]!.status === "idle");
+    release();
+    await until(() => runner.subagents.snapshot().every(s => s.status === "idle"));
   });
 
   it("go two levels deep at most, three at a time, and only the starter can message one", async () => {

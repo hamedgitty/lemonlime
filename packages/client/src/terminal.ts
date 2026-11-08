@@ -6,6 +6,8 @@ export interface TerminalClientOptions {
   /** The runner's terminal socket, e.g. ws://127.0.0.1:7420/terminal */
   url: string;
   token: string | (() => Promise<string>);
+  /** Which of the thread's terminals (see MAX_TERMINALS); the runner's default when left out. */
+  terminal?: string;
   cols: number;
   rows: number;
   WebSocketImpl?: typeof WebSocket;
@@ -14,6 +16,8 @@ export interface TerminalClientOptions {
   /** Clear the screen: what follows is the whole recent output, or a new shell. */
   onReset?: () => void;
   onState?: (state: TerminalState, detail?: string) => void;
+  /** The shell's name (e.g. "zsh"), once the runner says. */
+  onName?: (name: string) => void;
   maxBackoffMs?: number;
 }
 
@@ -36,6 +40,7 @@ export class TerminalClient {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private closedByUser = false;
   private live = false;
+  private killWhenReady = false;
 
   constructor(private readonly opts: TerminalClientOptions) {
     this.size = { cols: opts.cols, rows: opts.rows };
@@ -60,6 +65,14 @@ export class TerminalClient {
   /** Start a new shell after the last one exited. */
   restart(): void {
     this.post({ type: "restart" });
+  }
+
+  /** End this terminal's shell for good (its tab was closed), then disconnect. */
+  kill(): void {
+    if (this.live && this.ws?.readyState === 1) {
+      this.post({ type: "close" });
+      this.close();
+    } else this.killWhenReady = true; // still connecting: close it once the runner answers
   }
 
   close(): void {
@@ -94,6 +107,7 @@ export class TerminalClient {
           type: "hello",
           token,
           ...this.size,
+          ...(this.opts.terminal ? { terminal: this.opts.terminal } : {}),
           ...(this.shell !== undefined ? { shell: this.shell } : {}),
           ...(this.end !== undefined ? { resumeFrom: this.end } : {}),
         } satisfies TerminalClientMessage),
@@ -106,6 +120,8 @@ export class TerminalClient {
           this.attempts = 0;
           this.live = true;
           this.shell = msg.shell;
+          if (this.killWhenReady) return this.kill();
+          if (msg.name) this.opts.onName?.(msg.name);
           if (msg.reset) this.opts.onReset?.();
           this.opts.onState?.(msg.running ? "live" : "exited");
           break;
@@ -123,7 +139,7 @@ export class TerminalClient {
           this.opts.onState?.("live");
           break;
         case "error":
-          if (msg.code === "unavailable") {
+          if (msg.code === "unavailable" || msg.code === "limit") {
             unavailable = true;
             this.opts.onState?.("unavailable", msg.message);
           }
@@ -134,6 +150,11 @@ export class TerminalClient {
       if (this.ws !== ws) return;
       this.live = false;
       if (unavailable || this.closedByUser) return;
+      // The terminal was closed for good, from this app or another.
+      if (ev?.code === 4410) {
+        this.opts.onState?.("closed");
+        return;
+      }
       // Its token ran out (4001): reconnect at once with a fresh one.
       if (ev?.code === 4001) {
         this.timer = setTimeout(() => void this.open(), 0);

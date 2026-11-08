@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
-import { join } from "node:path";
-import { TERMINAL_REPLAY_CHARS } from "@lemonlime/protocol";
+import { basename, join } from "node:path";
+import { MAX_TERMINALS, TERMINAL_REPLAY_CHARS } from "@lemonlime/protocol";
 
 /** The slice of node-pty we use. */
 export interface Pty {
@@ -43,7 +43,13 @@ export function shellEnv(env: NodeJS.ProcessEnv = process.env): Record<string, s
   return out;
 }
 
-export type TerminalListener = { output(data: string, end: number): void; exit(code: number | null): void; restarted(shell: number): void };
+export type TerminalListener = {
+  output(data: string, end: number): void;
+  exit(code: number | null): void;
+  restarted(shell: number): void;
+  /** The terminal was closed for good (its tab closed in some app). */
+  closed?(): void;
+};
 
 /**
  * The thread's one shell. Starts on first use, keeps the last `TERMINAL_REPLAY_CHARS` of
@@ -65,6 +71,11 @@ export class TerminalSession {
     private readonly cwd: string,
     private readonly shell: string = process.env.SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/bash"),
   ) {}
+
+  /** The shell program's name, e.g. "zsh". */
+  get name(): string {
+    return basename(this.shell).replace(/\.exe$/i, "");
+  }
 
   get running(): boolean {
     return this.pty !== null;
@@ -129,6 +140,52 @@ export class TerminalSession {
   close(): void {
     this.pty?.kill();
     this.pty = null;
+    for (const l of this.listeners) l.closed?.();
     this.listeners.clear();
+  }
+}
+
+/**
+ * A thread's terminals, by the id the app gave each. At most `max` at once, so a buggy or
+ * hostile client can't start shells without end.
+ */
+export class TerminalPool {
+  private sessions = new Map<string, TerminalSession>();
+
+  constructor(
+    private readonly spawn: SpawnPty,
+    private readonly cwd: string,
+    readonly max: number = MAX_TERMINALS,
+    private readonly shell?: string,
+  ) {}
+
+  get size(): number {
+    return this.sessions.size;
+  }
+
+  ids(): string[] {
+    return [...this.sessions.keys()];
+  }
+
+  /** The terminal with this id, made (not started) if it's new and there's room. */
+  open(id: string): TerminalSession | null {
+    const known = this.sessions.get(id);
+    if (known) return known;
+    if (this.sessions.size >= this.max) return null;
+    const session = new TerminalSession(this.spawn, this.cwd, this.shell);
+    this.sessions.set(id, session);
+    return session;
+  }
+
+  /** End a terminal's shell and forget it. */
+  close(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    this.sessions.delete(id);
+    session.close();
+  }
+
+  closeAll(): void {
+    for (const id of this.ids()) this.close(id);
   }
 }

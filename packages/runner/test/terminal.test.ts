@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { branchForThread, parseTerminalServerMessage, signToken, type TerminalServerMessage, type Thread } from "@lemonlime/protocol";
 import { TerminalClient } from "@lemonlime/client";
-import { loadPty, shellEnv, startServer, TerminalSession, ThreadRunner, type AgentAdapter, type Pty } from "../src/index.ts";
+import { loadPty, shellEnv, startServer, TerminalPool, TerminalSession, ThreadRunner, type AgentAdapter, type Pty, type SpawnPty } from "../src/index.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const cleanups: (() => unknown)[] = [];
@@ -32,7 +32,7 @@ function thread(id: string): Thread {
   };
 }
 
-async function boot(spawn: Awaited<ReturnType<typeof loadPty>>) {
+async function boot(spawn: Awaited<ReturnType<typeof loadPty>>, max?: number) {
   const dir = mkdtempSync(join(tmpdir(), "lemonlime-term-"));
   const runner = new ThreadRunner({
     thread: thread("term-thread-1"),
@@ -44,7 +44,13 @@ async function boot(spawn: Awaited<ReturnType<typeof loadPty>>) {
     bundledSkills: false,
   });
   await runner.init();
-  const server = await startServer(runner, { host: "127.0.0.1", port: 0, threadSecret: SECRET, version: "t", terminal: { cwd: dir, spawn } });
+  const server = await startServer(runner, {
+    host: "127.0.0.1",
+    port: 0,
+    threadSecret: SECRET,
+    version: "t",
+    terminal: { cwd: dir, spawn, ...(max ? { max } : {}) },
+  });
   cleanups.push(
     () => rmSync(dir, { recursive: true, force: true }),
     () => runner.close(),
@@ -53,7 +59,7 @@ async function boot(spawn: Awaited<ReturnType<typeof loadPty>>) {
   return server.port;
 }
 
-function open(port: number, hello: { resumeFrom?: number; shell?: number; token?: string } = {}) {
+function open(port: number, hello: { resumeFrom?: number; shell?: number; token?: string; terminal?: string } = {}) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}/terminal`);
   const got: TerminalServerMessage[] = [];
   let text = "";
@@ -62,6 +68,8 @@ function open(port: number, hello: { resumeFrom?: number; shell?: number; token?
     got.push(m);
     if (m.type === "output") text += m.data;
   });
+  let closeCode: number | null = null;
+  ws.on("close", code => (closeCode = code));
   const ready = new Promise<void>(resolve =>
     ws.on("open", async () => {
       const token = hello.token ?? (await signToken({ threadId: "term-thread-1", scope: "client", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET));
@@ -70,7 +78,7 @@ function open(port: number, hello: { resumeFrom?: number; shell?: number; token?
     }),
   );
   cleanups.push(() => ws.close());
-  return { ws, got, text: () => text, ready, send: (m: unknown) => ws.send(JSON.stringify(m)) };
+  return { ws, got, text: () => text, ready, send: (m: unknown) => ws.send(JSON.stringify(m)), closeCode: () => closeCode };
 }
 
 const until = async (ok: () => boolean, ms = 8000) => {
@@ -174,5 +182,67 @@ describe("thread terminal", () => {
     expect(env).toMatchObject({ PATH: "/bin", HOME: "/h", TERM: "xterm-256color" });
     expect(env.LEMONLIME_THREAD_SECRET).toBeUndefined();
     expect(env.LEMONLIME_APPROVAL_TOKEN).toBeUndefined();
+  });
+
+  it("keeps several terminals per thread apart, up to a limit, and closes one for good", async () => {
+    const spawned: { data: (d: string) => void; killed: boolean; written: string[] }[] = [];
+    const spawn: SpawnPty = () => {
+      const p = { data: (_d: string) => {}, killed: false, written: [] as string[] };
+      spawned.push(p);
+      return {
+        onData: cb => ((p.data = cb), { dispose() {} }),
+        onExit: () => ({ dispose() {} }),
+        write: d => void p.written.push(d),
+        resize() {},
+        kill: () => void (p.killed = true),
+      };
+    };
+    const port = await boot(spawn, 2);
+    const a = open(port);
+    const b = open(port, { terminal: "two" });
+    await Promise.all([a.ready, b.ready]);
+    await until(() => a.got.length > 0 && b.got.length > 0);
+    expect(a.got[0]).toMatchObject({ type: "ready", name: expect.any(String) });
+    expect(spawned).toHaveLength(2);
+    spawned[1]!.data("only in two");
+    await until(() => b.text().includes("only in two"));
+    expect(a.text()).toBe("");
+    a.send({ type: "input", data: "ls\r" });
+    await until(() => spawned[0]!.written.length === 1);
+    expect(spawned[1]!.written).toEqual([]);
+
+    // A third is refused while two are open; a second client of "two" shares its shell.
+    const c = open(port, { terminal: "three" });
+    await c.ready;
+    await until(() => c.got.length > 0);
+    expect(c.got[0]).toMatchObject({ type: "error", code: "limit" });
+    const b2 = open(port, { terminal: "two" });
+    await b2.ready;
+    await until(() => b2.text().includes("only in two"));
+    expect(spawned).toHaveLength(2);
+
+    // Closing "two" ends its shell and both of its clients, and makes room again.
+    b.send({ type: "close" });
+    await until(() => spawned[1]!.killed && b2.closeCode() === 4410);
+    const d = open(port, { terminal: "three" });
+    await d.ready;
+    await until(() => d.got.length > 0);
+    expect(d.got[0]).toMatchObject({ type: "ready" });
+    expect(spawned).toHaveLength(3);
+  });
+
+  it("the pool refuses ids past its limit and reuses known ones", () => {
+    const fake: Pty = { onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }), write() {}, resize() {}, kill() {} };
+    const pool = new TerminalPool(() => fake, "/tmp", 2, "/bin/zsh");
+    const one = pool.open("a");
+    expect(pool.open("a")).toBe(one);
+    expect(pool.open("b")).not.toBeNull();
+    expect(pool.open("c")).toBeNull();
+    expect(one?.name).toBe("zsh");
+    pool.close("a");
+    expect(pool.ids()).toEqual(["b"]);
+    expect(pool.open("c")).not.toBeNull();
+    pool.closeAll();
+    expect(pool.size).toBe(0);
   });
 });

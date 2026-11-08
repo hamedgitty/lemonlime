@@ -43,7 +43,7 @@ export { BUNDLED_SKILLS_DIR, installSkills, listSkills, skillsDirFor } from "./s
 export * from "./agent-plugins.ts";
 export * from "./agents/index.ts";
 export { MemoryGuard, OOM_SCORE_FOR_WORK, descendants, listProcesses, prioritizeMemory, type Proc } from "./memory-guard.ts";
-export { TerminalSession, loadPty, shellEnv, type Pty, type SpawnPty } from "./terminal.ts";
+export { TerminalPool, TerminalSession, loadPty, shellEnv, type Pty, type SpawnPty } from "./terminal.ts";
 export { dangerousCommand, runCommandGuardHook } from "./command-guard.ts";
 export { DiskGuard, biggestWriter, diskSpace, type DiskSpace } from "./disk-guard.ts";
 export { allowedRequest, startTunnel, type RunningTunnel } from "./tunnel.ts";

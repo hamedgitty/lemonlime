@@ -45,6 +45,12 @@ export function AppearancePage({ ctx }: { ctx: SettingsCtx }) {
           checked={prefs.agentIcons}
           onChange={agentIcons => onPrefs({ agentIcons })}
         />
+        <ToggleRow
+          label="List subagents under their thread"
+          description="Each subagent gets its own line under the thread that started it. Turn this off to keep just the small progress grid on the thread's row."
+          checked={!prefs.collapseChildren}
+          onChange={on => onPrefs({ collapseChildren: !on })}
+        />
       </Section>
       <Section title="Threads list">
         <Row label="Group threads">

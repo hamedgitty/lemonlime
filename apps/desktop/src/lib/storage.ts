@@ -183,6 +183,8 @@ export const UiPrefs = z.object({
   collapseFinished: z.boolean().default(false),
   /** Show each thread's agent icon in the sidebar. */
   agentIcons: z.boolean().default(false),
+  /** Don't list subagents under their thread in the sidebar (its progress grid stays). */
+  collapseChildren: z.boolean().default(false),
   notifications: z
     .object({
       enabled: z.boolean().default(true),
@@ -231,13 +233,8 @@ export function saveUiPrefs(p: UiPrefs): void {
 // ── Thread side panel width ──────────────────────────────────
 
 const KEY_PANEL_WIDTH = "lemonlime:thread-panel-width";
-export const THREAD_PANEL = { min: 360, max: 1400, default: 440 } as const;
-
-/** The thread panel's width, clamped to what fits beside the conversation. */
-export function clampPanelWidth(width: number, windowWidth: number): number {
-  const max = Math.max(THREAD_PANEL.min, Math.min(THREAD_PANEL.max, windowWidth - 420));
-  return Math.round(Math.max(THREAD_PANEL.min, Math.min(max, width)));
-}
+/** The thread panel's starting width; lib/panel.ts keeps it in bounds and snaps it. */
+export const THREAD_PANEL = { default: 440 } as const;
 
 export function loadPanelWidth(): number {
   const n = Number(read(KEY_PANEL_WIDTH));
@@ -246,6 +243,27 @@ export function loadPanelWidth(): number {
 
 export function savePanelWidth(width: number): void {
   write(KEY_PANEL_WIDTH, Math.round(width));
+}
+
+// ── Subagents per thread, for the sidebar ───────────────────
+
+const KEY_CHILDREN = "lemonlime:children";
+
+export const SidebarChild = z.object({
+  id: z.string(),
+  title: z.string(),
+  state: z.enum(["done", "running", "waiting", "failed"]),
+});
+export type SidebarChild = z.infer<typeof SidebarChild>;
+
+/** Each thread's latest subagents, as last seen, so the sidebar shows them after a restart. */
+export function loadThreadChildren(): Record<string, SidebarChild[]> {
+  const r = z.record(z.string(), z.array(SidebarChild).max(50)).safeParse(read(KEY_CHILDREN));
+  return r.success ? r.data : {};
+}
+
+export function saveThreadChildren(all: Record<string, SidebarChild[]>): void {
+  write(KEY_CHILDREN, all);
 }
 
 // ── Unsent drafts, per thread ────────────────────────────────

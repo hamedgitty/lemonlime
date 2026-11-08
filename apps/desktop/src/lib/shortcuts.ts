@@ -20,6 +20,15 @@ export const SHORTCUTS = [
   { id: "last-pinned", label: "Go to the last pinned thread", group: "Threads", keys: "mod+e" },
   { id: "right-panel", label: "Show or hide the side panel", group: "Threads", keys: "mod+shift+\\" },
   { id: "find", label: "Find in this thread", group: "Threads", keys: "mod+f" },
+  // ⌘\ already shows or hides the sidebar, so splitting uses ⌘D.
+  { id: "split-right", label: "Split to the right", group: "Split view", keys: "mod+d" },
+  { id: "maximise-pane", label: "Maximise or restore this pane", group: "Split view", keys: "mod+shift+enter" },
+  { id: "focus-pane-1", label: "Go to pane 1", group: "Split view", keys: "mod+1" },
+  { id: "focus-pane-2", label: "Go to pane 2", group: "Split view", keys: "mod+2" },
+  { id: "focus-pane-3", label: "Go to pane 3", group: "Split view", keys: "mod+3" },
+  { id: "focus-pane-4", label: "Go to pane 4", group: "Split view", keys: "mod+4" },
+  { id: "focus-pane-5", label: "Go to pane 5", group: "Split view", keys: "mod+5" },
+  { id: "focus-pane-6", label: "Go to pane 6", group: "Split view", keys: "mod+6" },
 ] as const;
 
 export type ShortcutId = (typeof SHORTCUTS)[number]["id"];

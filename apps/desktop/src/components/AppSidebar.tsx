@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Cloud,
+  Columns2,
   Ellipsis,
   FolderGit2,
   GripVertical,
@@ -79,7 +80,15 @@ export interface AppSidebarProps {
   macChrome: boolean;
   searchOpen: boolean;
   onSearchOpen: (open: boolean) => void;
+  /** Threads showing in the split view, marked in the list. */
+  openInSplit?: Set<string>;
+  onOpenInSplit?: (t: ThreadSummary) => void;
+  /** A thread row is being dragged (to drop on a pane), or the drag ended (null). */
+  onDragThread?: (t: ThreadSummary | null) => void;
 }
+
+/** The drag data type for a thread row. */
+export const THREAD_DRAG_TYPE = "application/x-lemonlime-thread";
 
 const NAV: Record<NavItem, { label: string; icon: typeof SquarePen; shortcut: string }> = {
   new: { label: "New thread", icon: SquarePen, shortcut: "⌘ N" },
@@ -324,6 +333,9 @@ export function AppSidebar(p: AppSidebarProps) {
                       unread={p.unread?.has(t.id) ?? false}
                       {...(p.onMarkUnread ? { onMarkUnread: (u: boolean) => p.onMarkUnread!(t, u) } : {})}
                       {...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {})}
+                      inSplit={p.openInSplit?.has(t.id) ?? false}
+                      {...(p.onOpenInSplit ? { onOpenInSplit: () => p.onOpenInSplit!(t) } : {})}
+                      {...(p.onDragThread ? { onDrag: p.onDragThread } : {})}
                     />
                   ))}
                 </ul>
@@ -469,7 +481,13 @@ function ThreadRow({
   unread,
   onMarkUnread,
   onRename,
+  inSplit = false,
+  onOpenInSplit,
+  onDrag,
 }: {
+  inSplit?: boolean;
+  onOpenInSplit?: () => void;
+  onDrag?: (t: ThreadSummary | null) => void;
   t: ThreadSummary;
   selected: boolean;
   agentIcon?: boolean;
@@ -504,6 +522,16 @@ function ThreadRow({
             setRenaming(true);
           }}
           aria-current={selected ? "page" : undefined}
+          // Drag it onto a pane to open it there, or onto a pane's edge to split.
+          draggable={Boolean(onDrag)}
+          onDragStart={e => {
+            if (!onDrag) return;
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
+            e.dataTransfer.setData("text/plain", t.title);
+            onDrag(t);
+          }}
+          onDragEnd={() => onDrag?.(null)}
           className={cx(
             "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
             selected ? "bg-cream-hover" : "hover:bg-cream-hover",
@@ -519,6 +547,11 @@ function ThreadRow({
             <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
           )}
           <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
+          {inSplit && (
+            <span role="img" aria-label="Open in the split view" title="Open in the split view" className="inline-flex shrink-0 group-hover/row:invisible">
+              <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
+            </span>
+          )}
           <span className="shrink-0 text-[12.5px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
           <span className="sr-only">
             {t.mode === "cloud" ? "Cloud" : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
@@ -547,6 +580,11 @@ function ThreadRow({
           {!archived && (
             <MenuItem icon={pinned ? <PinOff /> : <Pin />} onSelect={() => onPin(!pinned)}>
               {pinned ? "Unpin" : "Pin to top"}
+            </MenuItem>
+          )}
+          {!archived && onOpenInSplit && (
+            <MenuItem icon={<Columns2 />} onSelect={onOpenInSplit}>
+              Open in split
             </MenuItem>
           )}
           {onRename && (

@@ -6,10 +6,13 @@ import {
   ArrowLeft,
   ArrowRight,
   BookOpen,
+  Columns2,
   Command,
   FolderGit2,
   FolderPlus,
   History,
+  LayoutGrid,
+  Maximize2,
   MessageSquare,
   Moon,
   PanelLeft,
@@ -23,7 +26,7 @@ import {
   SunMoon,
 } from "lucide-react";
 import { rankPalette, type PaletteItem, type PaletteSection } from "../lib/palette.ts";
-import { keyCaps, type ShortcutId } from "../lib/shortcuts.ts";
+import { IS_MAC, keyCaps, type ShortcutId } from "../lib/shortcuts.ts";
 import { Highlighted } from "./Highlighted.tsx";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
@@ -46,6 +49,8 @@ const COMMAND_ICONS: Record<string, typeof Command> = {
   "prev-thread": ArrowLeft,
   "next-thread": ArrowRight,
   find: Search,
+  "split-right": Columns2,
+  "maximise-pane": Maximize2,
   "theme:light": Sun,
   "theme:dark": Moon,
   "theme:system": SunMoon,
@@ -56,7 +61,7 @@ function iconFor(item: PaletteItem) {
   if (item.section === "threads") return MessageSquare;
   if (item.section === "projects") return FolderGit2;
   const id = item.id.replace(/^command:/, "");
-  return COMMAND_ICONS[id] ?? (id.startsWith("settings:") ? SettingsIcon : Command);
+  return COMMAND_ICONS[id] ?? (id.startsWith("settings:") ? SettingsIcon : id.startsWith("focus-pane-") ? LayoutGrid : Command);
 }
 
 /**
@@ -76,7 +81,8 @@ export function CommandPalette({
   items: PaletteItem[];
   /** Recently picked item ids, newest first. */
   recents: readonly string[];
-  onRun: (item: PaletteItem) => void;
+  /** `split`: ⌘↩ on a thread opens it beside the current one. */
+  onRun: (item: PaletteItem, opts: { split?: boolean }) => void;
   /** The keys a shortcut has now ("" when turned off). */
   keysOf: (id: ShortcutId) => string;
 }) {
@@ -106,11 +112,11 @@ export function CommandPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, current]);
 
-  const run = (item: PaletteItem | undefined) => {
+  const run = (item: PaletteItem | undefined, split = false) => {
     if (!item) return;
     onOpenChange(false);
     // After the dialog has closed and given focus back, so the command can move it on.
-    requestAnimationFrame(() => onRun(item));
+    requestAnimationFrame(() => onRun(item, { split }));
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -125,7 +131,8 @@ export function CommandPalette({
     else if (e.key === "End" && e.ctrlKey) move(flat.length - 1);
     else if (e.key === "Enter") {
       e.preventDefault();
-      run(flat[current]);
+      const item = flat[current];
+      run(item, item?.section === "threads" && (IS_MAC ? e.metaKey : e.ctrlKey));
     }
   };
 
@@ -209,6 +216,13 @@ export function CommandPalette({
               <Kbd>↩</Kbd>
               Open
             </span>
+            {flat[current]?.section === "threads" && (
+              <span className="inline-flex items-center gap-1.5">
+                <Kbd>{IS_MAC ? "⌘" : "Ctrl"}</Kbd>
+                <Kbd>↩</Kbd>
+                Open in split
+              </span>
+            )}
             <span className="inline-flex items-center gap-1.5">
               <Kbd>&gt;</Kbd>
               Commands only

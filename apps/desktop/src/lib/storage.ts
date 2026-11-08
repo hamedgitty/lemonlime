@@ -279,3 +279,23 @@ export function draftThreadIds(): Set<string> {
   }
   return ids;
 }
+
+// ── Split panes ──────────────────────────────────────────────
+
+const KEY_SPLIT = "lemonlime:split-layout";
+
+/** The stored split layout, unchecked (splitLayout.ts `restoreLayout` checks it). */
+export function loadSplitLayout(): unknown {
+  return read(KEY_SPLIT);
+}
+
+/** Keep the split layout, or forget it (null) when back to one pane. */
+export function saveSplitLayout(layout: object | null): void {
+  if (layout) write(KEY_SPLIT, layout);
+  else
+    try {
+      localStorage.removeItem(KEY_SPLIT);
+    } catch {
+      /* ignore */
+    }
+}

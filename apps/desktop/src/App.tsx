@@ -15,9 +15,10 @@ import { TipProvider } from "./components/primitives.tsx";
 import { SETTINGS_PAGES, SettingsSidebar, SettingsView, type SettingsCtx, type SettingsPage } from "./components/SettingsView.tsx";
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
+import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
 import { Toaster, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
-import { Button, cx, openExternal } from "./components/ui.tsx";
+import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
 import { keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
@@ -45,9 +46,11 @@ import {
   forgetEvents,
   loadLocalThreads,
   loadSettings,
+  loadSplitLayout,
   loadUiPrefs,
   saveLocalThreads,
   saveSettings,
+  saveSplitLayout,
   saveUiPrefs,
   type LocalThreadMeta,
   type Settings,
@@ -55,6 +58,29 @@ import {
 } from "./lib/storage.ts";
 import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
+import {
+  MAX_PANES,
+  canSplit,
+  closePane,
+  evenSplit,
+  findPane,
+  focusPane,
+  openThreadIds,
+  paneForThread,
+  panes,
+  pruneLayout,
+  replacePane,
+  resizeSplit,
+  restoreLayout,
+  showThread,
+  singlePane,
+  splitPane,
+  toggleMaximise,
+  type DropZone,
+  type PaneContent,
+  type PaneNode,
+  type SplitLayout,
+} from "./lib/splitLayout.ts";
 
 type Selection = { mode: "local" | "cloud"; id: string };
 /** Where the app is. Back and forward move through these. */
@@ -73,6 +99,10 @@ const RUNNER_POLL_MS = 5_000;
 const MAC_CHROME = inDesktopShell() && /Mac/.test(navigator.userAgent);
 /** Archived threads on this computer are removed after this many days. */
 const ARCHIVE_KEEP_DAYS = 21;
+/** The pane id of a thread shown on its own, so it stays mounted when it's split. */
+const SOLO_PANE = "solo";
+const threadPane = (sel: Selection): Extract<PaneContent, { kind: "thread" }> => ({ kind: "thread", mode: sel.mode, id: sel.id });
+const newPaneId = () => crypto.randomUUID().slice(0, 8);
 
 export function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
@@ -82,13 +112,30 @@ export function App() {
   const [cloudLoading, setCloudLoading] = useState(false);
   const [cloudError, setCloudError] = useState<string | null>(null);
   const [running, setRunning] = useState<Set<string>>(new Set());
-  const [history, setHistory] = useState<{ stack: Place[]; at: number }>({ stack: [{ view: "home" }], at: 0 });
+  // Split panes, kept between launches (threads removed since are dropped; cloud ones once the list is in).
+  const [layout, setLayout] = useState<SplitLayout | null>(() =>
+    restoreLayout(loadSplitLayout(), c => (c.mode === "local" ? loadLocalThreads().some(m => m.id === c.id) : undefined)),
+  );
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+  useEffect(() => saveSplitLayout(layout), [layout]);
+  const [history, setHistory] = useState<{ stack: Place[]; at: number }>(() => {
+    // A split restored at launch opens where it was left.
+    const first =
+      layout &&
+      (findPane(layout, layout.active)?.content.kind === "thread" ? findPane(layout, layout.active)! : panes(layout).find(p => p.content.kind === "thread"));
+    return first?.content.kind === "thread"
+      ? { stack: [{ view: "home" }, { view: "thread", selection: { mode: first.content.mode, id: first.content.id } }], at: 1 }
+      : { stack: [{ view: "home" }], at: 0 };
+  });
+  const historyRef = useRef(history);
+  historyRef.current = history;
   const [searchOpen, setSearchOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteRecents, setPaletteRecents] = useState<string[]>(loadRecents);
   const place = history.stack[history.at]!;
 
-  const go = useCallback((next: Place) => {
+  const pushPlace = useCallback((next: Place) => {
     setHistory(h => {
       const cur = h.stack[h.at];
       if (cur && JSON.stringify(cur) === JSON.stringify(next)) return h;
@@ -96,8 +143,24 @@ export function App() {
       return { stack, at: stack.length - 1 };
     });
   }, []);
-  const back = history.at > 0 ? () => setHistory(h => ({ ...h, at: h.at - 1 })) : null;
-  const forward = history.at < history.stack.length - 1 ? () => setHistory(h => ({ ...h, at: h.at + 1 })) : null;
+  // Opening a thread while split: focus the pane that has it, or show it in the active pane.
+  const go = useCallback(
+    (next: Place) => {
+      if (next.view === "thread") setLayout(l => (l ? showThread(l, threadPane(next.selection)) : l));
+      pushPlace(next);
+    },
+    [pushPlace],
+  );
+  const moveHistory = useCallback((step: -1 | 1) => {
+    const h = historyRef.current;
+    const at = h.at + step;
+    const next = h.stack[at];
+    if (!next) return;
+    if (next.view === "thread") setLayout(l => (l ? showThread(l, threadPane(next.selection)) : l));
+    setHistory({ ...h, at });
+  }, []);
+  const back = history.at > 0 ? () => moveHistory(-1) : null;
+  const forward = history.at < history.stack.length - 1 ? () => moveHistory(1) : null;
 
   // The access token comes from the keychain. A token an older version left in local
   // storage is moved there once, then cleared from local storage.
@@ -292,10 +355,13 @@ export function App() {
   }, [refreshRunners]);
 
   // ── Cloud threads ────────────────────────────────────────
+  // The cloud list has loaded at least once (or there's no cloud), so missing threads are really gone.
+  const [cloudKnown, setCloudKnown] = useState(false);
   const refreshCloud = useCallback(() => {
     if (!cloudApi) {
       setCloudThreads([]);
       setCloudError(null);
+      setCloudKnown(true);
       return;
     }
     setCloudLoading(true);
@@ -304,6 +370,7 @@ export function App() {
       .then(list => {
         setCloudThreads(list);
         setCloudError(null);
+        setCloudKnown(true);
       })
       .catch(err => setCloudError(err instanceof CloudError ? err.message : String(err)))
       .finally(() => setCloudLoading(false));
@@ -418,7 +485,8 @@ export function App() {
       void stop.catch(err => console.warn("Could not clean up the thread", err)).finally(refreshRunners);
       forgetEvents(id);
       setLocalThreads(list => list.filter(m => m.id !== id));
-      go({ view: "home" });
+      // In a split, its pane closes and the others stay.
+      if (!layoutRef.current) go({ view: "home" });
     },
     [refreshRunners, localThreads, settings.runnerPath, go],
   );
@@ -474,7 +542,7 @@ export function App() {
   }, [localThreads, prefs.archived, settings.runnerPath, onPrefs]);
 
   // ── Creating threads ─────────────────────────────────────
-  const createThread = async (input: NewThreadInput) => {
+  const createThread = async (input: NewThreadInput, navigate = prefs.navigateOnCreate): Promise<Selection | undefined> => {
     const agent = {
       kind: input.agent,
       ...(input.agentCommand ? { command: input.agentCommand } : {}),
@@ -499,8 +567,8 @@ export function App() {
         updatedAt: now,
       };
       setLocalThreads(list => [meta, ...list]);
-      if (prefs.navigateOnCreate) go({ view: "thread", selection: { mode: "local", id } });
-      return;
+      if (navigate) go({ view: "thread", selection: { mode: "local", id } });
+      return { mode: "local", id };
     }
 
     if (!cloudApi) throw new Error("Connect a cloud account in Settings first.");
@@ -514,7 +582,8 @@ export function App() {
         ...(input.prompt ? { prompt: input.prompt } : {}),
       });
       setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
-      if (prefs.navigateOnCreate) go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
+      if (navigate) go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
+      return { mode: "cloud", id: created.thread.id };
     } catch (err) {
       if (err instanceof CloudError && err.denial) throw new DeniedError(err.denial);
       throw err;
@@ -595,6 +664,110 @@ export function App() {
     go({ view: "thread", selection: { mode: "local", id } });
   };
 
+  // ── Split panes ──────────────────────────────────────────
+  // Asks a pane to put the cursor in its composer.
+  const [focusReq, setFocusReq] = useState({ pane: "", n: 0 });
+  const requestFocus = useCallback((pane: string) => setFocusReq(f => ({ pane, n: f.n + 1 })), []);
+  // A thread being dragged from the sidebar.
+  const [dragThread, setDragThread] = useState<Selection | null>(null);
+
+  /**
+   * Puts a new layout in place. One pane left is the normal thread view again. The place
+   * follows the active pane; `show` opens the split even from another page.
+   */
+  const commitLayout = useCallback(
+    (next: SplitLayout | null, show = true) => {
+      const here = placeRef.current;
+      const navigate = show || here.view === "thread";
+      const threads = next ? panes(next).filter(p => p.content.kind === "thread") : [];
+      if (!next || panes(next).length < 2 || threads.length === 0) {
+        setLayout(null);
+        if (!navigate) return;
+        const only = next && panes(next).length === 1 ? panes(next)[0]!.content : null;
+        pushPlace(only?.kind === "thread" ? { view: "thread", selection: { mode: only.mode, id: only.id } } : { view: "home" });
+        return;
+      }
+      setLayout(next);
+      if (!navigate) return;
+      const active = findPane(next, next.active)!.content;
+      if (active.kind === "thread") return pushPlace({ view: "thread", selection: { mode: active.mode, id: active.id } });
+      // A new-thread pane has the keyboard: stay on (or go to) a thread that's in the split.
+      const onScreen = here.view === "thread" && paneForThread(next, here.selection.id);
+      const first = threads[0]!.content as Extract<PaneContent, { kind: "thread" }>;
+      if (!onScreen) pushPlace({ view: "thread", selection: { mode: first.mode, id: first.id } });
+    },
+    [pushPlace],
+  );
+  /** The layout to change: the split, or the thread on screen as a pane of its own. */
+  const baseLayout = useCallback((): SplitLayout | null => {
+    const here = placeRef.current;
+    return layoutRef.current ?? (here.view === "thread" ? singlePane(threadPane(here.selection), SOLO_PANE) : null);
+  }, []);
+  const tooManyPanes = () => toast({ title: `Up to ${MAX_PANES} panes fit side by side`, description: "Close one to open another." });
+  /** Open a thread beside the active pane (or focus it, if it's already in the split). */
+  const openInSplit = useCallback(
+    (sel: Selection) => {
+      const base = baseLayout();
+      if (!base) return go({ view: "thread", selection: sel });
+      const open = paneForThread(base, sel.id);
+      if (open) {
+        commitLayout(focusPane(base, open.id));
+        return requestFocus(open.id);
+      }
+      if (!canSplit(base)) return tooManyPanes();
+      const id = newPaneId();
+      commitLayout(splitPane(base, base.active, "right", threadPane(sel), id));
+      requestFocus(id);
+    },
+    [baseLayout, commitLayout, go, requestFocus],
+  );
+  /** ⌘D: a new-thread pane to the right of the active one. */
+  const splitRight = useCallback(() => {
+    const base = baseLayout();
+    if (!base) return;
+    if (!canSplit(base)) return tooManyPanes();
+    commitLayout(splitPane(base, base.active, "right", { kind: "new" }, newPaneId()));
+  }, [baseLayout, commitLayout]);
+  const dropThread = (paneId: string, zone: DropZone) => {
+    const sel = dragThread;
+    setDragThread(null);
+    const base = baseLayout();
+    if (!sel || !base) return;
+    if (zone !== "center" && !canSplit(base)) return tooManyPanes();
+    const id = newPaneId();
+    const next = zone === "center" ? replacePane(base, paneId, threadPane(sel)) : splitPane(base, paneId, zone, threadPane(sel), id);
+    commitLayout(next);
+    const landed = paneForThread(next, sel.id);
+    if (landed) requestFocus(landed.id);
+  };
+  const focusPaneAt = useCallback(
+    (index: number) => {
+      const l = layoutRef.current;
+      const pane = l && placeRef.current.view === "thread" ? panes(l)[index - 1] : undefined;
+      if (!l || !pane) return;
+      commitLayout(focusPane(l, pane.id));
+      requestFocus(pane.id);
+    },
+    [commitLayout, requestFocus],
+  );
+  const closePaneById = useCallback(
+    (paneId: string) => {
+      const l = layoutRef.current;
+      if (l) commitLayout(closePane(l, paneId));
+    },
+    [commitLayout],
+  );
+  // Threads removed (or gone from the cloud) leave the split.
+  useEffect(() => {
+    const l = layoutRef.current;
+    if (!l) return;
+    const next = pruneLayout(
+      l,
+      c => c.kind !== "thread" || (c.mode === "local" ? localThreads.some(m => m.id === c.id) : !cloudKnown || cloudThreads.some(t => t.id === c.id)),
+    );
+    if (next !== l) commitLayout(next, false);
+  }, [localThreads, cloudThreads, cloudKnown, commitLayout]);
+
   // ── Keyboard shortcuts (Settings → Keyboard can change them) ──
   const shortcutState = useRef({ place, summaries: [] as ThreadSummary[], prefs });
   // One place that runs each shortcut, for the keys and for the command palette.
@@ -618,9 +791,9 @@ export function App() {
         case "toggle-sidebar":
           return onPrefs({ sidebarCollapsed: !pr.sidebarCollapsed });
         case "back":
-          return setHistory(h => (h.at > 0 ? { ...h, at: h.at - 1 } : h));
+          return moveHistory(-1);
         case "forward":
-          return setHistory(h => (h.at < h.stack.length - 1 ? { ...h, at: h.at + 1 } : h));
+          return moveHistory(1);
         case "skills":
           return go({ view: "skills" });
         case "automations":
@@ -643,9 +816,23 @@ export function App() {
           // A thread has its own panel (changes, terminal, browser); everywhere else, the side panel.
           if (here.view === "thread") return void window.dispatchEvent(new Event("lemonlime:toggle-panel"));
           return togglePanel();
+        case "split-right":
+          return splitRight();
+        case "maximise-pane": {
+          const l = layoutRef.current;
+          if (l && here.view === "thread") commitLayout(toggleMaximise(l, l.active));
+          return;
+        }
+        case "focus-pane-1":
+        case "focus-pane-2":
+        case "focus-pane-3":
+        case "focus-pane-4":
+        case "focus-pane-5":
+        case "focus-pane-6":
+          return focusPaneAt(Number(id.slice(-1)));
       }
     },
-    [go, onPrefs, togglePanel],
+    [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt],
   );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -696,14 +883,23 @@ export function App() {
     if (selectedId && prefsRef.current.markedUnread.includes(selectedId))
       onPrefs({ markedUnread: prefsRef.current.markedUnread.filter(id => id !== selectedId) });
   }, [selectedId, onPrefs]);
-  const selectedSummary = selectedId ? summaries.find(t => t.id === selectedId) : undefined;
-  const selectedSeq = selectedSummary ? latestSeq(selectedSummary) : 0;
+  // Every thread on screen (all the panes of a split) counts as seen.
+  const splitShown = layout !== null && place.view === "thread";
+  const visibleIds = useMemo(() => (splitShown ? openThreadIds(layout) : new Set(selectedId ? [selectedId] : [])), [splitShown, layout, selectedId]);
+  const visibleSeqs = JSON.stringify(
+    [...visibleIds].flatMap(id => {
+      const t = summaries.find(x => x.id === id);
+      return t ? [[id, latestSeq(t)] as const] : [];
+    }),
+  );
   useEffect(() => {
-    if (!selectedId) return;
     const p = prefsRef.current;
-    if (p.markedUnread.includes(selectedId) || (p.seenSeq[selectedId] ?? -1) >= selectedSeq) return;
-    onPrefs({ seenSeq: { ...p.seenSeq, [selectedId]: selectedSeq } });
-  }, [selectedId, selectedSeq, onPrefs]);
+    let seen = p.seenSeq;
+    for (const [id, seq] of JSON.parse(visibleSeqs) as [string, number][]) {
+      if (!p.markedUnread.includes(id) && (seen[id] ?? -1) < seq) seen = { ...seen, [id]: seq };
+    }
+    if (seen !== p.seenSeq) onPrefs({ seenSeq: seen });
+  }, [visibleSeqs, onPrefs]);
   const rowStates = useMemo(() => {
     const glyphs: Record<string, RowGlyph> = {};
     const unread = new Set<string>();
@@ -712,21 +908,21 @@ export function App() {
       const input = {
         status: t.status,
         // Local runners say how many answers they wait for; the open thread knows for itself.
-        waiting: t.mode === "local" ? Math.max(localWaiting[t.id] ?? 0, t.id === selectedId ? (openWaiting[t.id] ?? 0) : 0) : (openWaiting[t.id] ?? 0),
+        waiting: t.mode === "local" ? Math.max(localWaiting[t.id] ?? 0, visibleIds.has(t.id) ? (openWaiting[t.id] ?? 0) : 0) : (openWaiting[t.id] ?? 0),
         latestSeq: latestSeq(t),
         seenSeq: prefs.seenSeq[t.id],
         createdAt: t.createdAt,
         unreadSince: prefs.unreadSince,
         markedUnread: prefs.markedUnread.includes(t.id),
         draft: drafts.has(t.id),
-        selected: t.id === selectedId,
+        selected: visibleIds.has(t.id),
       };
       glyphs[t.id] = rowGlyph(input);
       if (isUnread(input)) unread.add(t.id);
       waiting.push({ id: t.id, waiting: input.waiting });
     }
     return { glyphs, unread, waiting: waitingCount(waiting, prefs.archived) };
-  }, [summaries, localWaiting, openWaiting, latestSeq, prefs.seenSeq, prefs.unreadSince, prefs.markedUnread, prefs.archived, drafts, selectedId]);
+  }, [summaries, localWaiting, openWaiting, latestSeq, prefs.seenSeq, prefs.unreadSince, prefs.markedUnread, prefs.archived, drafts, visibleIds]);
   // The dock (macOS) shows how many threads are waiting for you.
   useEffect(() => {
     if (!inDesktopShell()) return;
@@ -764,15 +960,21 @@ export function App() {
   onArchiveRef.current = onArchive;
 
   const selection = place.view === "thread" ? place.selection : null;
-  const selectedEntry: ThreadEntry | null = useMemo(() => {
-    if (!selection) return null;
-    if (selection.mode === "local") {
-      const meta = localThreads.find(m => m.id === selection.id);
-      return meta ? { mode: "local", meta } : null;
-    }
-    const thread = cloudThreads.find(t => t.id === selection.id);
-    return thread ? { mode: "cloud", thread } : null;
-  }, [selection, localThreads, cloudThreads]);
+  const entryFor = useCallback(
+    (sel: Selection): ThreadEntry | null => {
+      if (sel.mode === "local") {
+        const meta = localThreads.find(m => m.id === sel.id);
+        return meta ? { mode: "local", meta } : null;
+      }
+      const thread = cloudThreads.find(t => t.id === sel.id);
+      return thread ? { mode: "cloud", thread } : null;
+    },
+    [localThreads, cloudThreads],
+  );
+  const selectedEntry: ThreadEntry | null = useMemo(() => (selection ? entryFor(selection) : null), [selection, entryFor]);
+  // The sidebar marks the thread with the keyboard (the active pane, in a split).
+  const activePane = splitShown ? findPane(layout, layout.active) : undefined;
+  const sidebarSelected = activePane ? (activePane.content.kind === "thread" ? activePane.content.id : null) : (selection?.id ?? null);
 
   const saveAll = (s: Settings) => {
     saveSettings(s);
@@ -819,19 +1021,25 @@ export function App() {
       { id: "theme:system", label: "Match the system theme", keywords: "appearance colour auto" },
     ];
     // "settings" is the same as Settings: Account; thread commands only make sense in one.
-    const skip: ShortcutId[] = ["settings", ...(inThread ? [] : (["pin-thread", "archive-thread", "find"] as const))];
+    // Pane commands only while split, and only for panes that are there.
+    const paneCount = inThread && layout ? panes(layout).length : 0;
+    const paneCommands = (["maximise-pane", "focus-pane-1", "focus-pane-2", "focus-pane-3", "focus-pane-4", "focus-pane-5", "focus-pane-6"] as const).filter(
+      id => paneCount === 0 || (id !== "maximise-pane" && Number(id.slice(-1)) > paneCount),
+    );
+    const skip: ShortcutId[] = ["settings", ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "split-right"] as const)), ...paneCommands];
     // Unarchived threads first, as in the sidebar.
     const sortedThreads = [...threads.filter(t => !t.detail?.endsWith(", archived")), ...threads.filter(t => t.detail?.endsWith(", archived"))];
     return [...sortedThreads, ...projects, ...appCommands(extras, skip)];
-  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, inThread]);
+  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, inThread, layout]);
 
-  const runPaletteItem = (item: PaletteItem) => {
+  const runPaletteItem = (item: PaletteItem, opts: { split?: boolean } = {}) => {
     setPaletteRecents(r => rememberPick(r, item.id));
     const [kind, ...rest] = item.id.split(":");
     const value = rest.join(":");
     if (kind === "thread") {
       const t = summaries.find(x => x.id === value);
-      if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
+      if (t && opts.split) openInSplit({ mode: t.mode, id: t.id });
+      else if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
       return;
     }
     if (kind === "project") {
@@ -893,6 +1101,118 @@ export function App() {
     go({ view: "home" });
   };
 
+  /** A thread's full view; in a split it also gets the pane's state and slim header. */
+  const renderThread = (entry: ThreadEntry, pane?: { info: PaneInfo; id: string }) => {
+    const summaryId = entry.mode === "local" ? entry.meta.id : entry.thread.id;
+    const paneProps = pane
+      ? {
+          active: pane.info.active,
+          focusNonce: focusReq.pane === pane.id ? focusReq.n : 0,
+          ...(pane.info.split
+            ? {
+                room: pane.info.width,
+                paneControls: {
+                  maximised: pane.info.maximised,
+                  onMaximise: () => layoutRef.current && commitLayout(toggleMaximise(layoutRef.current, pane.id)),
+                  onClose: () => closePaneById(pane.id),
+                  maximiseKeys: keysFor("maximise-pane", prefs.shortcuts),
+                },
+              }
+            : {}),
+        }
+      : {};
+    return (
+      <ThreadView
+        key={`${entry.mode}:${summaryId}`}
+        {...paneProps}
+        entry={entry}
+        runnerUp={entry.mode === "local" && running.has(entry.meta.id)}
+        runnerPath={settings.runnerPath}
+        cloudApi={cloudApi}
+        onLocalProgress={onLocalProgress}
+        onLocalStatus={onLocalStatus}
+        onLocalPromptSent={onLocalPromptSent}
+        onStopLocal={onStopLocal}
+        onRemoveLocal={onRemoveLocal}
+        onCloudRefresh={refreshCloud}
+        onRunnersChanged={refreshRunners}
+        {...(cloudConfigured || entry.mode === "cloud" ? { onMove: moveThread } : {})}
+        followUp={prefs.followUp}
+        {...(entry.mode === "local" && inDesktopShell()
+          ? {
+              onOpenFolder: () => {
+                const m = entry.meta;
+                void threadFolder(m.repoPath, m.id)
+                  .then(dir => openFolder(dir, prefs.editor))
+                  .catch(err => console.warn("Couldn't open the thread's folder", err));
+              },
+            }
+          : {})}
+        foldFinished={prefs.collapseFinished}
+        notifyWhenFocused={prefs.notifications.whenFocused}
+        {...(prefs.notifications.enabled && prefs.notifications.needsInput
+          ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
+          : {})}
+        onWaiting={onWaiting}
+        computerLevel={prefs.computerAccess[entry.mode === "cloud" ? entry.thread.id : ""] ?? "off"}
+        onComputerLevel={level => {
+          if (entry.mode !== "cloud") return;
+          const id = entry.thread.id;
+          // The native side keeps the level, and asks before raising it.
+          void setComputerAccess(id, level).then(now => onPrefs({ computerAccess: { ...prefs.computerAccess, [id]: now } }));
+        }}
+      />
+    );
+  };
+
+  const renderPane = (pane: PaneNode, info: PaneInfo) => {
+    const controls = {
+      maximised: info.maximised,
+      onMaximise: () => layoutRef.current && commitLayout(toggleMaximise(layoutRef.current, pane.id)),
+      onClose: () => closePaneById(pane.id),
+      maximiseKeys: keysFor("maximise-pane", prefs.shortcuts),
+    };
+    if (pane.content.kind === "new") {
+      return (
+        <div className="flex min-w-0 flex-1 flex-col">
+          <PaneHeader active={info.active} title="New thread" controls={controls} />
+          <Home
+            cloudAvailable={cloudConfigured}
+            threadCount={summaries.length}
+            prefs={prefs}
+            onPrefs={onPrefs}
+            onCreate={input => createInPane(pane.id, input)}
+            onConnectCloud={() => go({ view: "settings", page: "account" })}
+            acpAgents={settings.acpAgents}
+            {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
+          />
+        </div>
+      );
+    }
+    const entry = entryFor(pane.content);
+    if (entry) return renderThread(entry, { info, id: pane.id });
+    // A cloud thread whose list hasn't come in yet.
+    return (
+      <div className="flex min-w-0 flex-1 flex-col">
+        {info.split && <PaneHeader active={info.active} title="Loading…" controls={controls} />}
+        <div role="status" className="flex flex-1 items-center justify-center gap-2 text-[14px] text-ink-soft">
+          <Spinner />
+          Loading the thread…
+        </div>
+      </div>
+    );
+  };
+
+  // A new-thread pane becomes the thread it starts.
+  const createInPane = async (paneId: string, input: NewThreadInput) => {
+    const sel = await createThread(input, false);
+    if (!sel) return;
+    const l = layoutRef.current;
+    if (!l || !findPane(l, paneId)) return go({ view: "thread", selection: sel });
+    commitLayout(replacePane(l, paneId, threadPane(sel)));
+    requestFocus(paneId);
+  };
+
   if (setupOpen) {
     return (
       <TipProvider>
@@ -937,7 +1257,11 @@ export function App() {
         cloudConfigured={cloudConfigured}
         cloudLoading={cloudLoading}
         cloudError={cloudError}
-        selectedId={selection?.id ?? null}
+        selectedId={sidebarSelected}
+        openInSplit={layout ? openThreadIds(layout) : undefined}
+        onOpenInSplit={t => openInSplit({ mode: t.mode, id: t.id })}
+        // Set after the drag has begun: changing the page during dragstart can cancel it.
+        onDragThread={t => requestAnimationFrame(() => setDragThread(t ? { mode: t.mode, id: t.id } : null))}
         prefs={prefs}
         onPrefs={onPrefs}
         onSelect={(t: ThreadSummary) => go({ view: "thread", selection: { mode: t.mode, id: t.id } })}
@@ -1055,45 +1379,15 @@ export function App() {
                   ctx={settingsCtx}
                   importTab={<section className="mb-8 rounded-xl border border-line bg-paper p-5">{importChats()}</section>}
                 />
-              ) : place.view === "thread" && selectedEntry ? (
-                <ThreadView
-                  key={`${selectedEntry.mode}:${selection?.id}`}
-                  entry={selectedEntry}
-                  runnerUp={selectedEntry.mode === "local" && running.has(selectedEntry.meta.id)}
-                  runnerPath={settings.runnerPath}
-                  cloudApi={cloudApi}
-                  onLocalProgress={onLocalProgress}
-                  onLocalStatus={onLocalStatus}
-                  onLocalPromptSent={onLocalPromptSent}
-                  onStopLocal={onStopLocal}
-                  onRemoveLocal={onRemoveLocal}
-                  onCloudRefresh={refreshCloud}
-                  onRunnersChanged={refreshRunners}
-                  {...(cloudConfigured || selectedEntry.mode === "cloud" ? { onMove: moveThread } : {})}
-                  followUp={prefs.followUp}
-                  {...(selectedEntry.mode === "local" && inDesktopShell()
-                    ? {
-                        onOpenFolder: () => {
-                          const m = selectedEntry.meta;
-                          void threadFolder(m.repoPath, m.id)
-                            .then(dir => openFolder(dir, prefs.editor))
-                            .catch(err => console.warn("Couldn't open the thread's folder", err));
-                        },
-                      }
-                    : {})}
-                  foldFinished={prefs.collapseFinished}
-                  notifyWhenFocused={prefs.notifications.whenFocused}
-                  {...(prefs.notifications.enabled && prefs.notifications.needsInput
-                    ? { onNeedsInput: (title: string) => void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.") }
-                    : {})}
-                  onWaiting={onWaiting}
-                  computerLevel={prefs.computerAccess[selectedEntry.mode === "cloud" ? selectedEntry.thread.id : ""] ?? "off"}
-                  onComputerLevel={level => {
-                    if (selectedEntry.mode !== "cloud") return;
-                    const id = selectedEntry.thread.id;
-                    // The native side keeps the level, and asks before raising it.
-                    void setComputerAccess(id, level).then(now => onPrefs({ computerAccess: { ...prefs.computerAccess, [id]: now } }));
-                  }}
+              ) : place.view === "thread" && (layout || selectedEntry) ? (
+                <SplitView
+                  layout={layout ?? singlePane(threadPane(selection!), SOLO_PANE)}
+                  renderPane={renderPane}
+                  onFocusPane={id => layout && commitLayout(focusPane(layout, id))}
+                  onResize={(start, d, delta, total) => setLayout(resizeSplit(start, d.splitId, d.index, delta, total))}
+                  onEven={id => setLayout(l => l && evenSplit(l, id))}
+                  dragging={dragThread !== null}
+                  onDrop={dropThread}
                 />
               ) : (
                 <Home
@@ -1101,7 +1395,7 @@ export function App() {
                   threadCount={summaries.length}
                   prefs={prefs}
                   onPrefs={onPrefs}
-                  onCreate={createThread}
+                  onCreate={async input => void (await createThread(input))}
                   onConnectCloud={() => go({ view: "settings", page: "account" })}
                   draft={draft}
                   acpAgents={settings.acpAgents}

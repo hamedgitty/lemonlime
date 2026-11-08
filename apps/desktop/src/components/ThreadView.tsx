@@ -59,6 +59,7 @@ import { clampPanelWidth, loadPanelWidth, saveDraft, savePanelWidth, THREAD_PANE
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
+import { PaneButton, PaneHeader, type PaneControls } from "./SplitView.tsx";
 
 export interface ThreadViewProps {
   /** What Enter does while the agent works: queue (default) or steer. */
@@ -88,7 +89,18 @@ export interface ThreadViewProps {
   onComputerLevel: (level: ComputerLevel) => void;
   /** How many answers the agent is waiting for in this thread (for the sidebar and dock badge). */
   onWaiting?: (threadId: string, count: number) => void;
+  /** Split view: whether this pane has the keyboard (shortcuts, find, inserted text). Default true. */
+  active?: boolean;
+  /** A new number moves the keyboard to the composer. */
+  focusNonce?: number;
+  /** Split view: a slim header with the pane's maximise and close buttons. */
+  paneControls?: PaneControls;
+  /** Split view: the pane's width in pixels, so the side panel fits inside it. */
+  room?: number;
 }
+
+/** Below this width a pane's side panel lies over the conversation, and only in the active pane. */
+const NARROW_PANE_PX = 680;
 
 export function ThreadView(props: ThreadViewProps) {
   const { entry, cloudApi } = props;
@@ -126,7 +138,13 @@ function ThreadSessionView({
   notifyWhenFocused = false,
   onOpenFolder,
   onWaiting,
+  active = true,
+  focusNonce = 0,
+  paneControls,
+  room,
 }: ThreadViewProps & { target: SessionTarget }) {
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
   const session = useThreadSession(target, {
@@ -255,14 +273,14 @@ function ThreadSessionView({
   const [panelOpen, setPanelOpen] = useState(false);
   // The side-panel shortcut (handled by the app) toggles it.
   useEffect(() => {
-    const toggle = () => setPanelOpen(o => !o);
+    const toggle = () => activeRef.current && setPanelOpen(o => !o);
     window.addEventListener("lemonlime:toggle-panel", toggle);
     return () => window.removeEventListener("lemonlime:toggle-panel", toggle);
   }, []);
   // Find in thread (⌘F, handled by the app): pressing it again focuses the bar.
   const [find, setFind] = useState<number | null>(null);
   useEffect(() => {
-    const open = () => setFind(n => (n ?? 0) + 1);
+    const open = () => activeRef.current && setFind(n => (n ?? 0) + 1);
     window.addEventListener("lemonlime:find", open);
     return () => window.removeEventListener("lemonlime:find", open);
   }, []);
@@ -343,7 +361,7 @@ function ThreadSessionView({
   useEffect(() => {
     const onInsert = (e: Event) => {
       const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
-      if (typeof text === "string" && text) insertRef.current(text);
+      if (typeof text === "string" && text && activeRef.current) insertRef.current(text);
     };
     window.addEventListener("lemonlime:composer-insert", onInsert);
     return () => window.removeEventListener("lemonlime:composer-insert", onInsert);
@@ -357,143 +375,172 @@ function ThreadSessionView({
     setPanelTab("changes");
     setPanelOpen(true);
   };
+  // Split view: focusing the pane (⌘1…⌘6, or a new split) puts the cursor in its composer.
+  useEffect(() => {
+    if (!focusNonce) return;
+    const r = requestAnimationFrame(() => composerRef.current?.focus());
+    return () => cancelAnimationFrame(r);
+  }, [focusNonce]);
+  // A narrow pane has no room beside the conversation: its panel lies on top, in the active pane only.
+  const narrow = room !== undefined && room > 0 && room < NARROW_PANE_PX;
+  const panelShown = panelOpen && (!narrow || active);
+
+  const runAction =
+    entry.mode === "local"
+      ? session.state === "offline" || session.state === "error"
+        ? { label: "Start", icon: <Play aria-hidden="true" className="size-3.5" />, onClick: session.restart, disabled: busy }
+        : { label: "Stop", icon: <Power aria-hidden="true" className="size-3.5" />, onClick: stopLocal, disabled: busy || session.state === "starting" }
+      : cloudStatus === "paused" || cloudStatus === "stopped"
+        ? { label: "Resume", icon: <Play aria-hidden="true" className="size-3.5" />, onClick: resumeCloud, disabled: busy }
+        : {
+            label: "Pause",
+            icon: <Pause aria-hidden="true" className="size-3.5" />,
+            onClick: pauseCloud,
+            disabled: busy || cloudStatus === "provisioning" || cloudStatus === "failed",
+          };
+
+  const compact = paneControls !== undefined;
+  const optionsMenu = (entry.mode === "local" || entry.mode === "cloud" || summary.agent.kind === "claude-code") && (
+    <Menu
+      align="end"
+      trigger={
+        <button
+          type="button"
+          aria-label="Thread options"
+          className={cx(
+            "inline-flex items-center justify-center text-ink-soft hover:bg-cream-deep data-[popup-open]:bg-cream-deep",
+            compact ? "size-7 shrink-0 rounded-md" : "size-8 rounded-lg",
+          )}
+        >
+          <Ellipsis aria-hidden="true" className={compact ? "size-3.5" : "size-4"} />
+        </button>
+      }
+    >
+      {summary.agent.kind === "claude-code" && (
+        <MenuItem icon={<Shrink />} disabled={session.state !== "live" || working} onSelect={session.compact}>
+          Compact conversation
+        </MenuItem>
+      )}
+      {onMove && (
+        <MenuItem
+          icon={entry.mode === "local" ? <CloudUpload /> : <Laptop />}
+          disabled={!session.connection || working || moving !== null}
+          onSelect={() => void move()}
+        >
+          {entry.mode === "local" ? "Move to the cloud" : "Move to this computer"}
+        </MenuItem>
+      )}
+      {entry.mode === "cloud" && (summary.agent.kind === "claude-code" || summary.agent.kind === "codex") && (
+        <MenuItem icon={<KeyRound />} disabled={session.state !== "live"} onSelect={() => setShowSignIn(true)}>
+          Sign the agent in…
+        </MenuItem>
+      )}
+      {entry.mode === "cloud" && (
+        <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
+          <MenuLabel>What the agent may do on this computer</MenuLabel>
+          <MenuChoice
+            value={computerLevel}
+            onChange={onComputerLevel}
+            options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
+          />
+        </SubMenu>
+      )}
+      {entry.mode === "local" && onOpenFolder && (
+        <MenuItem icon={<FolderOpen />} onSelect={onOpenFolder}>
+          Open in editor
+        </MenuItem>
+      )}
+      {entry.mode === "local" && (
+        <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
+          Remove thread
+        </MenuItem>
+      )}
+    </Menu>
+  );
+  const panelToggle = (
+    <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
+      <button
+        type="button"
+        aria-label={panelOpen ? "Hide panel" : "Show changes and terminal"}
+        aria-pressed={panelOpen}
+        onClick={() => setPanelOpen(o => !o)}
+        className={cx(
+          "inline-flex items-center justify-center text-ink-soft hover:bg-cream-deep",
+          compact ? "size-7 shrink-0 rounded-md" : "size-8 rounded-lg",
+          panelOpen && "bg-cream-deep text-ink",
+        )}
+      >
+        <PanelRight aria-hidden="true" className={compact ? "size-3.5" : "size-4"} />
+      </button>
+    </Tip>
+  );
 
   return (
-    <div className="flex min-w-0 flex-1">
+    <div className="relative flex min-w-0 flex-1">
       <section className="flex min-w-0 flex-1 flex-col" aria-label={`Thread ${summary.title}`}>
-        <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
-          <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2.5">
-            <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
-            <span className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex" title={summary.repo}>
-              {summary.mode === "local" ? (
-                <Laptop aria-hidden="true" className="size-3.5 shrink-0" />
-              ) : (
-                <Cloud aria-hidden="true" className="size-3.5 shrink-0" />
-              )}
-              <span className="truncate">{repoName(summary.repo)}</span>
-            </span>
-          </div>
-          {git.available && (git.status || entry.mode === "cloud") && <GitActionsButton git={git} mode={entry.mode} />}
-          {!online ? (
-            <span
-              role="status"
-              className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-cream-deep px-2.5 text-[12.5px] font-medium text-ink-soft"
-            >
-              <span aria-hidden="true" className="size-1.5 rounded-full bg-control" />
-              Offline
-            </span>
-          ) : (
-            <ConnectionBadge state={session.state} status={liveStatus} />
-          )}
-          {entry.mode === "local" ? (
-            session.state === "offline" || session.state === "error" ? (
-              <Button size="sm" variant="ghost" onClick={session.restart} disabled={busy}>
-                <Play aria-hidden="true" className="size-3.5" />
-                Start
-              </Button>
+        {paneControls ? (
+          <PaneHeader
+            active={active}
+            title={summary.title}
+            controls={paneControls}
+            glyph={!online ? <ConnectionGlyph state="offline" status={null} label="Offline" /> : <ConnectionGlyph state={session.state} status={liveStatus} />}
+          >
+            <PaneButton label={runAction.label} onClick={() => void runAction.onClick()} disabled={runAction.disabled}>
+              {runAction.icon}
+            </PaneButton>
+            {optionsMenu}
+            {panelToggle}
+          </PaneHeader>
+        ) : (
+          <header data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+            <div data-tauri-drag-region className="flex min-w-0 flex-1 items-center gap-2.5">
+              <h1 className="min-w-0 truncate font-sans text-[15px] font-semibold tracking-normal text-ink">{summary.title}</h1>
+              <span className="hidden min-w-0 items-center gap-1.5 truncate text-[13.5px] text-ink-faint md:inline-flex" title={summary.repo}>
+                {summary.mode === "local" ? (
+                  <Laptop aria-hidden="true" className="size-3.5 shrink-0" />
+                ) : (
+                  <Cloud aria-hidden="true" className="size-3.5 shrink-0" />
+                )}
+                <span className="truncate">{repoName(summary.repo)}</span>
+              </span>
+            </div>
+            {git.available && (git.status || entry.mode === "cloud") && <GitActionsButton git={git} mode={entry.mode} />}
+            {!online ? (
+              <span
+                role="status"
+                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-line bg-cream-deep px-2.5 text-[12.5px] font-medium text-ink-soft"
+              >
+                <span aria-hidden="true" className="size-1.5 rounded-full bg-control" />
+                Offline
+              </span>
             ) : (
-              <Button size="sm" variant="ghost" onClick={stopLocal} disabled={busy || session.state === "starting"}>
-                <Power aria-hidden="true" className="size-3.5" />
-                Stop
-              </Button>
-            )
-          ) : cloudStatus === "paused" || cloudStatus === "stopped" ? (
-            <Button size="sm" variant="ghost" onClick={resumeCloud} disabled={busy}>
-              <Play aria-hidden="true" className="size-3.5" />
-              Resume
+              <ConnectionBadge state={session.state} status={liveStatus} />
+            )}
+            <Button size="sm" variant="ghost" onClick={runAction.onClick} disabled={runAction.disabled}>
+              {runAction.icon}
+              {runAction.label}
             </Button>
-          ) : (
-            <Button size="sm" variant="ghost" onClick={pauseCloud} disabled={busy || cloudStatus === "provisioning" || cloudStatus === "failed"}>
-              <Pause aria-hidden="true" className="size-3.5" />
-              Pause
-            </Button>
-          )}
-          {(entry.mode === "local" || entry.mode === "cloud" || summary.agent.kind === "claude-code") && (
-            <Menu
-              align="end"
-              trigger={
+            {optionsMenu}
+            {outdated && (
+              <Tip label={outdated.command ? `${outdated.message} Click to copy the command.` : outdated.message} side="bottom">
                 <button
                   type="button"
-                  aria-label="Thread options"
-                  className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep data-[popup-open]:bg-cream-deep"
+                  onClick={() => {
+                    if (!outdated.command) return;
+                    void navigator.clipboard?.writeText(outdated.command);
+                    setCopiedUpdate(true);
+                    setTimeout(() => setCopiedUpdate(false), 2000);
+                  }}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#f0d95c] bg-lemon-soft px-2.5 text-[12.5px] font-medium text-ink hover:bg-lemon"
                 >
-                  <Ellipsis aria-hidden="true" className="size-4" />
+                  <ArrowUpCircle aria-hidden="true" className="size-3.5" />
+                  {copiedUpdate ? "Copied update command" : `Update ${AGENT_LABELS[summary.agent.kind]}`}
                 </button>
-              }
-            >
-              {summary.agent.kind === "claude-code" && (
-                <MenuItem icon={<Shrink />} disabled={session.state !== "live" || working} onSelect={session.compact}>
-                  Compact conversation
-                </MenuItem>
-              )}
-              {onMove && (
-                <MenuItem
-                  icon={entry.mode === "local" ? <CloudUpload /> : <Laptop />}
-                  disabled={!session.connection || working || moving !== null}
-                  onSelect={() => void move()}
-                >
-                  {entry.mode === "local" ? "Move to the cloud" : "Move to this computer"}
-                </MenuItem>
-              )}
-              {entry.mode === "cloud" && (summary.agent.kind === "claude-code" || summary.agent.kind === "codex") && (
-                <MenuItem icon={<KeyRound />} disabled={session.state !== "live"} onSelect={() => setShowSignIn(true)}>
-                  Sign the agent in…
-                </MenuItem>
-              )}
-              {entry.mode === "cloud" && (
-                <SubMenu icon={<Monitor />} label={`This computer: ${COMPUTER_LEVELS.find(l => l.value === computerLevel)?.label ?? "Off"}`}>
-                  <MenuLabel>What the agent may do on this computer</MenuLabel>
-                  <MenuChoice
-                    value={computerLevel}
-                    onChange={onComputerLevel}
-                    options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
-                  />
-                </SubMenu>
-              )}
-              {entry.mode === "local" && onOpenFolder && (
-                <MenuItem icon={<FolderOpen />} onSelect={onOpenFolder}>
-                  Open in editor
-                </MenuItem>
-              )}
-              {entry.mode === "local" && (
-                <MenuItem icon={<Trash2 />} onSelect={() => void removeLocal()}>
-                  Remove thread
-                </MenuItem>
-              )}
-            </Menu>
-          )}
-          {outdated && (
-            <Tip label={outdated.command ? `${outdated.message} Click to copy the command.` : outdated.message} side="bottom">
-              <button
-                type="button"
-                onClick={() => {
-                  if (!outdated.command) return;
-                  void navigator.clipboard?.writeText(outdated.command);
-                  setCopiedUpdate(true);
-                  setTimeout(() => setCopiedUpdate(false), 2000);
-                }}
-                className="inline-flex h-7 items-center gap-1.5 rounded-full border border-[#f0d95c] bg-lemon-soft px-2.5 text-[12.5px] font-medium text-ink hover:bg-lemon"
-              >
-                <ArrowUpCircle aria-hidden="true" className="size-3.5" />
-                {copiedUpdate ? "Copied update command" : `Update ${AGENT_LABELS[summary.agent.kind]}`}
-              </button>
-            </Tip>
-          )}
-          <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
-            <button
-              type="button"
-              aria-label={panelOpen ? "Hide panel" : "Show changes and terminal"}
-              aria-pressed={panelOpen}
-              onClick={() => setPanelOpen(o => !o)}
-              className={cx(
-                "inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep",
-                panelOpen && "bg-cream-deep text-ink",
-              )}
-            >
-              <PanelRight aria-hidden="true" className="size-4" />
-            </button>
-          </Tip>
-        </header>
+              </Tip>
+            )}
+            {panelToggle}
+          </header>
+        )}
 
         {denial && (
           <div className="flex items-center gap-3 border-b border-[#f0d95c] bg-lemon-soft px-6 py-2.5 text-[13.5px] text-ink" role="alert">
@@ -680,7 +727,11 @@ function ThreadSessionView({
         </div>
       </section>
       {panelOpen && (
+        // Kept mounted while hidden, so a terminal keeps its screen.
         <SidePanel
+          hidden={!panelShown}
+          room={room ?? window.innerWidth}
+          overlay={narrow}
           tab={panelTab}
           onTab={setPanelTab}
           session={session}
@@ -700,6 +751,9 @@ function ThreadSessionView({
 
 /** The right panel: the files the agent changed, and the thread's terminal. */
 function SidePanel({
+  hidden,
+  room,
+  overlay,
   tab,
   onTab,
   session,
@@ -709,6 +763,11 @@ function SidePanel({
   refreshKey,
   onAddToChat,
 }: {
+  hidden: boolean;
+  /** The width the panel and the conversation share (the window, or a split pane). */
+  room: number;
+  /** Lie over the conversation instead of beside it (narrow split panes). */
+  overlay: boolean;
   refreshKey: string;
   onAddToChat: (text: string) => void;
   tab: "changes" | "terminal" | "side" | "browser";
@@ -718,7 +777,9 @@ function SidePanel({
   runnerPath: string;
   onClose: () => void;
 }) {
-  const [width, setWidth] = useState(() => clampPanelWidth(loadPanelWidth(), window.innerWidth));
+  const [saved, setWidth] = useState(() => loadPanelWidth());
+  // In a narrow pane the panel covers the conversation, leaving a sliver of it showing.
+  const width = overlay ? (room - 48 >= THREAD_PANEL.min ? Math.min(THREAD_PANEL.default, room - 48) : room) : clampPanelWidth(saved, room);
   const changed = useMemo(() => new Set(session.events.filter(e => e.type === "file_diff").map(e => (e as { path: string }).path)).size, [session.events]);
   // Mounted once opened, so switching tabs doesn't drop the terminal's screen.
   const [terminalSeen, setTerminalSeen] = useState(tab === "terminal");
@@ -731,9 +792,21 @@ function SidePanel({
       on ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60 hover:text-ink",
     );
   return (
-    <aside aria-label="Thread panel" style={{ width }} className="relative flex shrink-0 flex-col border-l border-line bg-cream">
-      <PanelResizer width={width} onWidth={setWidth} />
-      <div role="tablist" aria-label="Panel" className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3">
+    <aside
+      aria-label="Thread panel"
+      style={{ width }}
+      className={cx(
+        "shrink-0 flex-col border-l border-line bg-cream",
+        hidden ? "hidden" : "flex",
+        overlay ? "absolute top-10 right-0 bottom-0 z-20 shadow-pop" : "relative",
+      )}
+    >
+      {!overlay && <PanelResizer width={width} room={room} onWidth={setWidth} />}
+      <div
+        role="tablist"
+        aria-label="Panel"
+        className={cx("flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3", overlay && "scroll-thin overflow-x-auto")}
+      >
         <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => onTab("changes")} className={tabClass(tab === "changes")}>
           <FileDiff aria-hidden="true" className="size-3.5" />
           Changes
@@ -756,7 +829,10 @@ function SidePanel({
           type="button"
           aria-label="Close panel"
           onClick={onClose}
-          className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep"
+          className={cx(
+            "inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep",
+            overlay && "sticky right-0 shrink-0 bg-cream",
+          )}
         >
           <X aria-hidden="true" className="size-4" />
         </button>
@@ -779,10 +855,10 @@ function SidePanel({
  * The panel's left edge: drag to resize (arrow keys too, double-click for the default).
  * The width is remembered on this computer.
  */
-function PanelResizer({ width, onWidth }: { width: number; onWidth: (w: number) => void }) {
+function PanelResizer({ width, room, onWidth }: { width: number; room: number; onWidth: (w: number) => void }) {
   const drag = useRef<{ x: number; w: number } | null>(null);
   const set = (w: number, save: boolean) => {
-    const next = clampPanelWidth(w, window.innerWidth);
+    const next = clampPanelWidth(w, room);
     onWidth(next);
     if (save) savePanelWidth(next);
   };
@@ -909,19 +985,35 @@ const STATE_LABEL: Record<SessionState, string> = {
   error: "Not connected",
 };
 
-function ConnectionBadge({ state, status }: { state: SessionState; status: ThreadStatus | null }) {
+function connectionLabel(state: SessionState, status: ThreadStatus | null): string {
   const offlineStatus = state === "offline" && (status === "paused" || status === "provisioning" || status === "failed");
-  const label = (state === "live" || offlineStatus) && status ? STATUS_LABELS[status] : STATE_LABEL[state];
-  const dot =
-    state === "live" ? (
-      <StatusDot status={status ?? "idle"} />
-    ) : state === "error" ? (
-      <StatusDot status="failed" />
-    ) : state === "offline" ? (
-      <StatusDot status="offline" />
-    ) : (
-      <span className="inline-block size-2 animate-pulse-soft rounded-full bg-lemon" aria-hidden="true" />
-    );
+  return (state === "live" || offlineStatus) && status ? STATUS_LABELS[status] : STATE_LABEL[state];
+}
+
+function connectionDot(state: SessionState, status: ThreadStatus | null) {
+  return state === "live" ? (
+    <StatusDot status={status ?? "idle"} />
+  ) : state === "error" ? (
+    <StatusDot status="failed" />
+  ) : state === "offline" ? (
+    <StatusDot status="offline" />
+  ) : (
+    <span className="inline-block size-2 animate-pulse-soft rounded-full bg-lemon" aria-hidden="true" />
+  );
+}
+
+/** The connection as a single mark, for a pane's slim header. */
+function ConnectionGlyph({ state, status, label = connectionLabel(state, status) }: { state: SessionState; status: ThreadStatus | null; label?: string }) {
+  return (
+    <span role="status" aria-label={label} title={label} className="inline-flex size-4 shrink-0 items-center justify-center [&_[role=img]]:pointer-events-none">
+      {connectionDot(state, status)}
+    </span>
+  );
+}
+
+function ConnectionBadge({ state, status }: { state: SessionState; status: ThreadStatus | null }) {
+  const label = connectionLabel(state, status);
+  const dot = connectionDot(state, status);
   return (
     <span
       className={cx(

@@ -274,9 +274,15 @@ export class RunnerClient {
           break;
       }
     };
-    ws.onclose = () => {
+    ws.onclose = ev => {
       this.live = false;
       if (this.ws === ws) this.ws = null;
+      // The runner closes a connection when its token runs out (4001): reconnect at once with
+      // a fresh one, without showing the thread as reconnecting.
+      if (ev?.code === 4001 && !this.closedByUser) {
+        this.timer = setTimeout(() => void this.open(), 0);
+        return;
+      }
       if (!this.closedByUser) this.scheduleReconnect();
       else this.setState("closed");
     };

@@ -130,10 +130,15 @@ export class TerminalClient {
           break;
       }
     };
-    ws.onclose = () => {
+    ws.onclose = ev => {
       if (this.ws !== ws) return;
       this.live = false;
       if (unavailable || this.closedByUser) return;
+      // Its token ran out (4001): reconnect at once with a fresh one.
+      if (ev?.code === 4001) {
+        this.timer = setTimeout(() => void this.open(), 0);
+        return;
+      }
       this.retry();
     };
   }

@@ -333,7 +333,10 @@ control plane, which keeps it encrypted for the user's next sandboxes.
 The control plane derives a per-thread secret with `deriveThreadSecret(master, threadId)`
 and gives only that to the runner. The desktop app does the same with a secret it
 generates locally. Tokens are short-lived HMAC-signed claims (`packages/protocol/src/token.ts`);
-the runner refuses any that claim to live longer than 15 minutes.
+the runner refuses any that claim to live longer than 15 minutes. A thread or terminal
+connection is closed (code 4001) when the token it opened with runs out; apps reconnect at
+once with a fresh token, so removing someone from a workspace cuts them off within one
+token's lifetime.
 
 The agent never gets the thread secret. The runner removes `LEMONLIME_THREAD_SECRET` from
 the environment the agent and everything it starts inherit, and sets `LEMONLIME_AGENT_KEY`

@@ -56,6 +56,19 @@ function agentKeyFor(threadSecret: string): Promise<string> {
   return key;
 }
 
+/**
+ * A connection lives only as long as the token it opened with. When it runs out, the
+ * connection is closed (code 4001) and the app reconnects at once with a fresh token, which
+ * only someone still allowed to open the thread can get: removing a member cuts them off
+ * within one token's lifetime instead of whenever they happen to disconnect.
+ */
+export const TOKEN_EXPIRED_CLOSE = 4001;
+function closeAtExpiry(ws: WebSocket, exp: number): () => void {
+  const timer = setTimeout(() => ws.close(TOKEN_EXPIRED_CLOSE, "token expired"), Math.max(0, exp * 1000 - Date.now()));
+  timer.unref?.();
+  return () => clearTimeout(timer);
+}
+
 /** verifyToken, also refusing tokens that claim to live longer than any LemonLime app makes them. */
 async function verifyCapped(token: string, key: string): Promise<VerifyResult> {
   const result = await verifyToken(token, key);
@@ -174,6 +187,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
   };
   let unsubscribe: (() => void) | null = null;
   let authed = false;
+  let stopExpiry: () => void = () => {};
 
   const helloTimer = setTimeout(() => {
     if (!authed) {
@@ -204,6 +218,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       }
       authed = true;
       clearTimeout(helloTimer);
+      stopExpiry = closeAtExpiry(ws, result.claims.exp);
       send({ type: "welcome", thread, latestSeq: thread.latestSeq, runnerVersion: opts.version, options: runner.currentOptions });
       // Subscribe before replaying so nothing appended in between is lost; the
       // client drops anything at or below the seq it already has.
@@ -329,6 +344,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
 
   ws.on("close", () => {
     clearTimeout(helloTimer);
+    stopExpiry();
     unsubscribe?.();
   });
   ws.on("error", () => ws.terminate());
@@ -353,6 +369,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
     }
   };
   let authed = false;
+  let stopExpiry: () => void = () => {};
   let unsubscribe: (() => void) | null = null;
   const helloTimer = setTimeout(() => {
     if (!authed) ws.close(4401, "unauthorized");
@@ -373,6 +390,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
       }
       authed = true;
       clearTimeout(helloTimer);
+      stopExpiry = closeAtExpiry(ws, result.claims.exp);
       if (!terminal) {
         send({ type: "error", code: "unavailable", message: "This runner can't open a terminal on this computer." });
         return ws.close(1011, "unavailable");
@@ -406,6 +424,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
   });
   ws.on("close", () => {
     clearTimeout(helloTimer);
+    stopExpiry();
     unsubscribe?.();
   });
 }

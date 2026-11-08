@@ -17,6 +17,8 @@ export const LIMITS = {
   /** Threads one user can create, and cloud sandboxes one user can start or resume. */
   threadsPerUser: { max: 30, windowSeconds: 60 },
   sandboxStartsPerUser: { max: 30, windowSeconds: 60 },
+  /** Phone bridge links one user's desktop apps can open or renew (a few per computer each 15 minutes). */
+  phoneLinks: { max: 30, windowSeconds: 60 },
 } satisfies Record<string, Limit>;
 
 /**

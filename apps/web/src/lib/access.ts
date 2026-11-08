@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, sql } from "drizzle-orm";
-import { accessTokens, threads, workspaceMembers, workspaces, type Db, type ThreadRow } from "@lemonlime/db";
+import { accessTokens, computers, threads, workspaceMembers, workspaces, type ComputerRow, type Db, type ThreadRow } from "@lemonlime/db";
 import { HttpError } from "./errors.ts";
 
 /**
@@ -13,6 +13,8 @@ import { HttpError } from "./errors.ts";
  *   so ids do not leak.
  * - Asking for a workspace you are not in is a 403.
  * - Access tokens belong to one user; only that user can list or revoke them.
+ * - Computers (phone access to local threads) belong to one user: only that user sees or
+ *   reaches them, and only while still a member of the workspace the computer is in.
  *
  * The runner heartbeat and the scheduled sweep are not user requests: they are
  * authenticated by the thread's runner token and the cron secret instead.
@@ -98,6 +100,29 @@ export async function getThreadForUser(db: Db, userId: string, threadId: string)
 export async function listThreadsForUser(db: Db, userId: string, workspaceId: string, limit = 200): Promise<ThreadRow[]> {
   await requireWorkspaceMember(db, userId, workspaceId);
   return db.select().from(threads).where(eq(threads.workspaceId, workspaceId)).orderBy(desc(threads.updatedAt)).limit(limit);
+}
+
+// ─── Computers ───────────────────────────────────────────────────────────────
+
+/** The computer, if it is the user's and they are still in its workspace; otherwise null. */
+export async function findComputerForUser(db: Db, userId: string, computerId: string): Promise<ComputerRow | null> {
+  const row = await db
+    .select({ computer: computers })
+    .from(computers)
+    .innerJoin(workspaceMembers, and(eq(workspaceMembers.workspaceId, computers.workspaceId), eq(workspaceMembers.userId, userId)))
+    .where(and(eq(computers.id, computerId), eq(computers.userId, userId)))
+    .get();
+  return row?.computer ?? null;
+}
+
+/** The user's own computers in a workspace. 403 unless the user is a member. */
+export async function listComputersForUser(db: Db, userId: string, workspaceId: string): Promise<ComputerRow[]> {
+  await requireWorkspaceMember(db, userId, workspaceId);
+  return db
+    .select()
+    .from(computers)
+    .where(and(eq(computers.userId, userId), eq(computers.workspaceId, workspaceId)))
+    .orderBy(desc(computers.updatedAt));
 }
 
 // ─── Personal access tokens ──────────────────────────────────────────────────

@@ -23,7 +23,8 @@ export const SETTINGS_PAGES: { id: SettingsPage; label: string; icon: typeof Use
     id: "general",
     label: "General",
     icon: SettingsIcon,
-    keywords: "runner path follow up queue steer enter open new threads notifications notify test keep awake sleep screen files editor vs code cursor zed",
+    keywords:
+      "runner path follow up queue steer enter open new threads notifications notify test keep awake sleep screen files editor vs code cursor zed phone mobile remote",
   },
   {
     id: "agents",

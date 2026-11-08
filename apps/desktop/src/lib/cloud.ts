@@ -4,6 +4,7 @@ import {
   Thread,
   ThreadHistoryResponse,
   ThreadWithEndpoint,
+  type ComputerUpdate,
   type CreateThreadRequest as CreateThreadRequestT,
   type PendingMessage,
 } from "@lemonlime/protocol";
@@ -217,6 +218,30 @@ export class CloudApi {
 
   async reviewAllRuns(): Promise<void> {
     await this.request("POST", "/api/automations/runs/review-all");
+  }
+
+  /** Phone access: register this computer, turn phone access on or off, share its thread list. */
+  async saveComputer(id: string, body: ComputerUpdate): Promise<{ bridgeAvailable: boolean }> {
+    const r = (await this.request("PUT", `/api/computers/${encodeURIComponent(id)}`, body)) as { computer?: { bridgeAvailable?: unknown } } | null;
+    return { bridgeAvailable: r?.computer?.bridgeAvailable === true };
+  }
+
+  /** Forget this computer (on sign-out): the dashboard stops listing it and its phones are cut off. */
+  async forgetComputer(id: string): Promise<void> {
+    await this.request("DELETE", `/api/computers/${encodeURIComponent(id)}`);
+  }
+
+  /** Where to open this computer's link to the phone bridge, and a short-lived ticket for it. */
+  async phoneLink(id: string): Promise<{ url: string; ticket: string; expiresAt: string }> {
+    const r = (await this.request("POST", `/api/computers/${encodeURIComponent(id)}/link`, undefined, false)) as {
+      url?: unknown;
+      ticket?: unknown;
+      expiresAt?: unknown;
+    } | null;
+    if (typeof r?.url !== "string" || !/^wss?:\/\//.test(r.url) || typeof r.ticket !== "string" || typeof r.expiresAt !== "string") {
+      throw new CloudError("The control plane sent a phone link this app does not understand.", 200);
+    }
+    return { url: r.url, ticket: r.ticket, expiresAt: r.expiresAt };
   }
 
   /** Stored history after `after`; works while the sandbox is paused, without waking it. */

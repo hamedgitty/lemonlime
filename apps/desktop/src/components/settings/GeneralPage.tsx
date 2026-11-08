@@ -4,9 +4,11 @@ import { listEditors, notificationPermission, notify, type EditorInfo } from "..
 import type { UiPrefs } from "../../lib/storage.ts";
 import { Button, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
-import { Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, useSaved } from "./parts.tsx";
+import { ErrorText, Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, useSaved } from "./parts.tsx";
+import { normalizeBaseUrl } from "../../lib/cloud.ts";
+import { computerPlatform, defaultComputerName, type PhoneLinkState } from "../../lib/phoneBridge.ts";
 
-type Tab = "general" | "notifications" | "awake" | "files";
+type Tab = "general" | "notifications" | "awake" | "files" | "phone";
 
 export function GeneralPage({ ctx }: { ctx: SettingsCtx }) {
   const [tab, setTab] = useState<Tab>("general");
@@ -20,12 +22,14 @@ export function GeneralPage({ ctx }: { ctx: SettingsCtx }) {
           { id: "notifications", label: "Notifications" },
           { id: "awake", label: "Keep awake" },
           { id: "files", label: "Files" },
+          { id: "phone", label: "Phone" },
         ]}
       />
       {tab === "general" && <GeneralTab ctx={ctx} />}
       {tab === "notifications" && <NotificationsTab ctx={ctx} />}
       {tab === "awake" && <AwakeTab ctx={ctx} />}
       {tab === "files" && <FilesTab ctx={ctx} />}
+      {tab === "phone" && <PhoneTab ctx={ctx} />}
     </>
   );
 }
@@ -180,5 +184,101 @@ function FilesTab({ ctx }: { ctx: SettingsCtx }) {
         <Select label="Open folders in" value={ctx.prefs.editor} onChange={editor => ctx.onPrefs({ editor })} options={options} />
       </Row>
     </Section>
+  );
+}
+
+const PHONE_STATE: Record<PhoneLinkState, { label: string; tone: "plain" | "good" | "warn" | "bad" }> = {
+  off: { label: "Off", tone: "plain" },
+  connecting: { label: "Connecting", tone: "warn" },
+  live: { label: "Ready for your phone", tone: "good" },
+  unavailable: { label: "Not available", tone: "warn" },
+  error: { label: "Can't connect", tone: "bad" },
+};
+
+/** Phone access: drive this computer's threads from the dashboard in your phone's browser. */
+function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
+  const { prefs, onPrefs, cloudApi, phone, settings } = ctx;
+  const platform = computerPlatform();
+  const [name, setName] = useState(prefs.computerName);
+  const [copied, markCopied] = useSaved();
+  const signedIn = cloudApi !== null;
+  const on = prefs.phoneAccess && signedIn;
+  const state = phone?.state ?? "off";
+  const dashboard = normalizeBaseUrl(settings.controlPlaneUrl);
+  const saveName = () => {
+    const clean = name.replace(/\s+/g, " ").trim().slice(0, 100);
+    setName(clean);
+    if (clean !== prefs.computerName) onPrefs({ computerName: clean });
+  };
+  return (
+    <>
+      <Section
+        title="Your phone"
+        description="Read and answer the agents on this computer from LemonLime in your phone's browser. It stays off unless you turn it on."
+        aside={on ? <Pill tone={PHONE_STATE[state].tone}>{PHONE_STATE[state].label}</Pill> : undefined}
+      >
+        <ToggleRow
+          label="Use my local threads from my phone"
+          description={
+            signedIn
+              ? "While it's on, this computer keeps a connection open to your dashboard, and only you can open its threads there. Turning it off cuts your phone off at once."
+              : "Sign in to your dashboard under Account first. Your phone reaches this computer through it."
+          }
+          checked={on}
+          disabled={!signedIn || !inDesktopShell()}
+          onChange={next => {
+            if (!next) void phone?.turnOff();
+            onPrefs({ phoneAccess: next });
+          }}
+        />
+        <Row label="This computer's name" htmlFor="computer-name" description="How the dashboard on your phone lists this computer.">
+          <TextInput
+            id="computer-name"
+            value={name}
+            maxLength={100}
+            onChange={e => setName(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={e => e.key === "Enter" && saveName()}
+            placeholder={defaultComputerName(platform)}
+            className="w-[240px]"
+            autoComplete="off"
+          />
+        </Row>
+        {on && state === "unavailable" && (
+          <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[13.5px]">
+            Your dashboard's server doesn't have phone access set up yet. Whoever runs it can turn it on.
+          </p>
+        )}
+        {on && state === "error" && phone?.detail && <ErrorText>{phone.detail}</ErrorText>}
+        {on && dashboard && (
+          <Row
+            label="On your phone"
+            description={
+              <>
+                Open <span className="text-ink">{dashboard}</span> in your phone's browser and sign in with the same account. This computer's threads are listed
+                on the home page.
+              </>
+            }
+          >
+            <Button
+              onClick={() => {
+                void navigator.clipboard?.writeText(dashboard).then(markCopied, () => undefined);
+              }}
+            >
+              Copy link
+            </Button>
+            <SavedNote show={copied} text="Copied" />
+          </Row>
+        )}
+      </Section>
+      {on && (
+        <Section title="What your phone can do">
+          <p className="text-[13.5px] text-ink-soft">
+            Your phone can follow a thread, send messages, answer questions and approve or decline what the agent asks to do. It can't open a terminal, browse
+            or download files, use this computer's apps, sign the agent in, or give the agent full access. Those stay here.
+          </p>
+        </Section>
+      )}
+    </>
   );
 }

@@ -33,6 +33,7 @@ import {
   removeLocalThread,
   saveAccessToken,
   setRunnerDefaults,
+  startLocalRunner,
   stopLocalRunner,
 } from "./lib/native.ts";
 import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
@@ -54,6 +55,9 @@ import {
   type UiPrefs,
 } from "./lib/storage.ts";
 import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
+import { computerId, threadSnapshots } from "./lib/phoneBridge.ts";
+import { usePhoneLink } from "./lib/usePhoneLink.ts";
+import { joinCommand } from "./lib/command.ts";
 import { sortByActivity, summarize, type ThreadEntry, type ThreadSummary } from "./lib/threads.ts";
 
 type Selection = { mode: "local" | "cloud"; id: string };
@@ -290,6 +294,38 @@ export function App() {
     const t = setInterval(refreshRunners, RUNNER_POLL_MS);
     return () => clearInterval(t);
   }, [refreshRunners]);
+
+  // ── Phone access (docs/phone-access.md) ──────────────────
+  const phoneSnapshots = useMemo(
+    () => threadSnapshots(localThreads, { archived: prefs.archived, status: localStatus, seq: localSeq }),
+    [localThreads, prefs.archived, localStatus, localSeq],
+  );
+  const phoneThreadsRef = useRef({ localThreads, archived: prefs.archived, runnerPath: settings.runnerPath });
+  phoneThreadsRef.current = { localThreads, archived: prefs.archived, runnerPath: settings.runnerPath };
+  /** A phone opened one of this computer's threads: start its runner if needed. Only threads in the list. */
+  const phoneRunner = useCallback(async (threadId: string) => {
+    const { localThreads: list, archived, runnerPath } = phoneThreadsRef.current;
+    const meta = list.find(m => m.id === threadId);
+    if (!meta || archived[meta.id]) return null;
+    const info = await startLocalRunner({
+      threadId: meta.id,
+      agent: meta.agent.kind,
+      agentCommand: meta.agent.command ? joinCommand(meta.agent.command) : undefined,
+      model: meta.agent.model,
+      reasoning: meta.agent.reasoning,
+      workdir: meta.repoPath,
+      baseBranch: meta.baseBranch,
+      runnerPath,
+    });
+    return { port: info.port, secret: info.secret };
+  }, []);
+  const phone = usePhoneLink({
+    enabled: prefs.phoneAccess && inDesktopShell(),
+    api: cloudApi,
+    name: prefs.computerName.trim(),
+    snapshots: phoneSnapshots,
+    runner: phoneRunner,
+  });
 
   // ── Cloud threads ────────────────────────────────────────
   const refreshCloud = useCallback(() => {
@@ -868,7 +904,11 @@ export function App() {
     onOpenThread: t => go({ view: "thread", selection: { mode: t.mode, id: t.id } }),
     agents,
     refreshAgents,
+    phone,
     onSignOut: () => {
+      // The dashboard stops listing this computer, and any phone on it is cut off.
+      void phone.turnOff();
+      void cloudApi?.forgetComputer(computerId()).catch(() => undefined);
       saveAll({ ...settings, accessToken: "", cloudWorkspaceId: "" });
       setSignedIn(false);
     },

@@ -1,6 +1,6 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
-import type { AgentConfig, RepoRef, SandboxSize, ThreadMode, ThreadStatus, UserSkill } from "@lemonlime/protocol";
+import type { AgentConfig, ComputerPlatform, LocalThreadSnapshot, RepoRef, SandboxSize, ThreadMode, ThreadStatus, UserSkill } from "@lemonlime/protocol";
 
 /**
  * LemonLime control plane schema (SQLite: Cloudflare D1 or a local SQLite file).
@@ -446,6 +446,45 @@ export const accessTokens = sqliteTable(
     check("access_tokens_name_length", sql`length(${t.name}) between 1 and 100`),
   ],
 );
+
+// ─── Computers (phone access to local threads) ──────────────────────────────
+
+/**
+ * A computer running the desktop app, registered by its owner when they turn on phone
+ * access (docs/phone-access.md). Only its owner can see or reach it.
+ */
+export const computers = sqliteTable(
+  "computers",
+  {
+    /** Chosen at random by the desktop app and kept on the computer. */
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    /** The workspace the desktop app is signed in to; the owner must stay a member. */
+    workspaceId: text("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    platform: text("platform").$type<ComputerPlatform>().notNull().default("other"),
+    phoneAccess: integer("phone_access", { mode: "boolean" }).notNull().default(false),
+    /** Goes up each time phone access is turned off; tickets from before stop working. */
+    epoch: integer("epoch").notNull().default(0),
+    /** The local threads it shares while phone access is on; emptied when it's turned off. */
+    threads: text("threads", { mode: "json" }).$type<LocalThreadSnapshot[]>().notNull().default([]),
+    /** When the desktop app last checked in while phone access was on. */
+    lastSeenAt: text("last_seen_at"),
+    createdAt: text("created_at").notNull().$defaultFn(nowIso),
+    updatedAt: text("updated_at").notNull().$defaultFn(nowIso).$onUpdate(nowIso),
+  },
+  t => [
+    index("computers_user_idx").on(t.userId),
+    check("computers_name_length", sql`length(${t.name}) between 1 and 100`),
+    check("computers_platform", sql`${t.platform} in ('mac', 'windows', 'linux', 'other')`),
+  ],
+);
+
+export type ComputerRow = typeof computers.$inferSelect;
 
 export type UserRow = typeof user.$inferSelect;
 export type WorkspaceRow = typeof workspaces.$inferSelect;

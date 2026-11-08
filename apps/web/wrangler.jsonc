@@ -35,6 +35,13 @@
   // LEMONLIME_EMAIL_FROM must be onboarded (`wrangler email sending enable <domain>`).
   // Remove this block to send through Resend (RESEND_API_KEY) instead.
   "send_email": [{ "name": "EMAIL" }],
+  // Phone access to threads on users' own computers (docs/phone-access.md): one PhoneBridge
+  // Durable Object per computer pipes the phone's WebSocket to the desktop app's link.
+  // Remove the binding (and the migration) to turn phone access off for this deployment.
+  "durable_objects": {
+    "bindings": [{ "name": "PHONE_BRIDGE", "class_name": "PhoneBridge" }],
+  },
+  "migrations": [{ "tag": "v1-phone-bridge", "new_sqlite_classes": ["PhoneBridge"] }],
   // Pause idle sandboxes every minute (scheduled() in worker.ts).
   "triggers": {
     "crons": ["* * * * *"],

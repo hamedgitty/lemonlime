@@ -22,4 +22,6 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 LEMONLIME_DATABASE_URL=file:/d
 VOLUME /data
 EXPOSE 3000
 WORKDIR /app/apps/web
-CMD ["./node_modules/.bin/next", "start", "-p", "3000", "-H", "0.0.0.0"]
+# server.ts is `next start` plus the phone bridge's WebSockets (docs/phone-access.md).
+ENV PORT=3000
+CMD ["node", "server.ts"]

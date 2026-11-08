@@ -16,9 +16,10 @@ import {
   type ThreadOptions,
 } from "@lemonlime/protocol";
 import { DeniedNotice } from "@/components/denied-notice.tsx";
-import { AGENT_LABELS, StatusPill, repoName } from "@/components/status-pill.tsx";
+import { AGENT_LABELS, StatusPill, repoName, timeAgo } from "@/components/status-pill.tsx";
 import { apiFetch } from "@/lib/api-client.ts";
 import type { ThreadResponse } from "@/lib/threads.ts";
+import type { BridgedThreadResponse, ComputerSummary } from "@/lib/computers.ts";
 import { addEvent, buildTimeline, type PendingMessage } from "@/lib/timeline.ts";
 import { SignInPanel, type LoginUpdate } from "./sign-in-panel.tsx";
 import { Timeline } from "./timeline.tsx";
@@ -36,9 +37,16 @@ const CONN_LABEL: Record<Conn, { text: string; dot: string }> = {
 
 const INITIAL_PROMPT_ID = "initial-prompt";
 
-export function ThreadView({ initial }: { initial: ThreadResponse }) {
+/**
+ * One thread, live. A cloud thread connects to its sandbox; a thread on one of your own
+ * computers (`computer` set, phone access on) connects through the phone bridge.
+ */
+export function ThreadView({ initial, computer: initialComputer }: { initial: ThreadResponse; computer?: ComputerSummary }) {
   const router = useRouter();
   const id = initial.thread.id;
+  const [computer, setComputer] = useState<ComputerSummary | null>(initialComputer ?? null);
+  const bridged = initialComputer !== undefined;
+  const apiPath = initialComputer ? `/api/computers/${encodeURIComponent(initialComputer.id)}/threads/${encodeURIComponent(id)}` : `/api/threads/${id}`;
   const [thread, setThread] = useState<Thread>(initial.thread);
   const [endpointUrl, setEndpointUrl] = useState<string | null>(initial.endpoint?.url ?? null);
   const [events, setEvents] = useState<ThreadEvent[]>([]);
@@ -70,16 +78,17 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
 
   const apply = useCallback((data: ThreadResponse) => {
     setThread(data.thread);
+    if ("computer" in data) setComputer((data as BridgedThreadResponse).computer);
     if (data.endpoint) tokenRef.current = { token: data.endpoint.token, expiresAt: data.endpoint.expiresAt };
     setEndpointUrl(data.endpoint?.url ?? null);
   }, []);
 
   const refresh = useCallback(async (): Promise<ThreadResponse | null> => {
-    const res = await apiFetch<ThreadResponse>(`/api/threads/${id}`);
+    const res = await apiFetch<ThreadResponse>(apiPath);
     if (!res.ok) return null;
     apply(res.data);
     return res.data;
-  }, [id, apply]);
+  }, [apiPath, apply]);
 
   // One live connection per runner URL. Events survive reconnects and resumes.
   useEffect(() => {
@@ -96,7 +105,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
         if (cached && Date.parse(cached.expiresAt) - Date.now() > 60_000) return cached.token;
         const data = await refresh();
         tokenRef.current = null;
-        if (!data?.endpoint) throw new Error("the sandbox is not running");
+        if (!data?.endpoint) throw new Error(bridged ? "your computer is offline" : "the sandbox is not running");
         return data.endpoint.token;
       },
       onEvent: event => {
@@ -136,7 +145,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
       client.close();
       if (clientRef.current === client) clientRef.current = null;
     };
-  }, [endpointUrl, refresh, initial.initialPrompt]);
+  }, [endpointUrl, refresh, initial.initialPrompt, bridged]);
 
   // The stored history, so a paused thread can be read without waking its sandbox. The
   // live connection then resumes after the last stored event.
@@ -159,14 +168,15 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
     };
   }, [id, isCloud]);
 
-  // While not connected, poll so a resume from another device or an automatic pause shows up.
+  // While not connected, poll so a resume from another device, an automatic pause or the
+  // computer coming back online shows up.
   useEffect(() => {
-    if (endpointUrl || !isCloud || closed) return;
+    if (endpointUrl || !(isCloud || bridged) || closed) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
     }, 15_000);
     return () => clearInterval(timer);
-  }, [endpointUrl, isCloud, closed, refresh]);
+  }, [endpointUrl, isCloud, bridged, closed, refresh]);
 
   const resume = useCallback(async () => {
     setBusy("resume");
@@ -252,7 +262,9 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
   function implementPlan() {
     const client = clientRef.current;
     if (!client) return;
-    client.setOptions({ permission: modeAfterPlan(threadOptions) });
+    const next = modeAfterPlan(threadOptions);
+    // From a phone, full access is only turned on at the computer.
+    client.setOptions({ permission: bridged && next === "full" ? "edits" : next });
     const clientMsgId = crypto.randomUUID();
     setPending(p => [...p, { clientMsgId, text: IMPLEMENT_PLAN_PROMPT, at: new Date().toISOString() }]);
     client.send(IMPLEMENT_PLAN_PROMPT, clientMsgId);
@@ -296,8 +308,22 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
           <span aria-hidden>·</span>
           <span className="font-mono text-[0.8125rem] text-ink">{thread.branch}</span>
           <span aria-hidden>·</span>
-          <span>{isCloud ? `Cloud, ${thread.sandboxSize}` : "This computer"}</span>
+          <span>{isCloud ? `Cloud, ${thread.sandboxSize}` : computer ? `On ${computer.name}` : "This computer"}</span>
         </p>
+
+        {bridged && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="mr-auto inline-flex items-center gap-2 text-sm text-muted" aria-live="polite">
+              <span aria-hidden className={`h-2 w-2 rounded-full ${endpointUrl ? connLabel.dot : CONN_LABEL.offline.dot}`} />
+              {endpointUrl ? connLabel.text : offlineTitle(computer)}
+            </span>
+            {isRunning && conn === "live" && (
+              <button type="button" className="btn-ghost h-8" onClick={() => clientRef.current?.interrupt()}>
+                Interrupt
+              </button>
+            )}
+          </div>
+        )}
 
         {isCloud && !closed && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -369,7 +395,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
         </div>
       </header>
 
-      {!isCloud ? (
+      {!isCloud && !bridged ? (
         <section className="card my-8 p-6">
           <h2 className="text-lg font-semibold">This thread runs on your computer</h2>
           <p className="mt-1 text-sm text-muted">
@@ -378,16 +404,27 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
         </section>
       ) : (
         <>
+          {bridged && !endpointUrl && (
+            <section className="card mt-8 p-6" aria-live="polite">
+              <h2 className="text-lg font-semibold">{offlineTitle(computer)}</h2>
+              <p className="mt-1 text-sm text-muted">
+                Last we heard{computer?.lastSeenAt ? `, ${timeAgo(computer.lastSeenAt)}` : ""}, this thread was{" "}
+                <span className="text-ink">{LAST_STATE[thread.status]}</span>. Wake your computer and open LemonLime, and this page connects again by itself.
+              </p>
+            </section>
+          )}
           <section aria-label="Thread history" className="flex-1 py-6">
             {items.length === 0 ? (
-              <EmptyState status={thread.status} connected={conn === "live"} />
+              bridged && !endpointUrl ? null : (
+                <EmptyState status={thread.status} connected={conn === "live"} />
+              )
             ) : (
               <Timeline items={items} onApprove={(id, d) => clientRef.current?.approve(id, d)} onImplementPlan={live ? implementPlan : undefined} />
             )}
             <div ref={bottomRef} />
           </section>
 
-          {!closed && (
+          {!closed && (!bridged || endpointUrl) && (
             <form onSubmit={send} className="sticky bottom-0 -mx-5 border-t border-line bg-cream/95 px-5 pb-5 pt-3 backdrop-blur">
               {loop.question && (
                 <QuestionForm
@@ -420,6 +457,7 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
                   options={threadOptions}
                   working={isRunning}
                   disabled={!live}
+                  noFullAccess={bridged}
                   onChange={change => clientRef.current?.setOptions(change)}
                 />
                 <p className="text-xs text-muted">Enter to send, Shift+Enter for a new line.</p>
@@ -441,6 +479,21 @@ export function ThreadView({ initial }: { initial: ThreadResponse }) {
     </main>
   );
 }
+
+/** "Your Mac is offline", or the computer's own name when it isn't a Mac. */
+function offlineTitle(computer: ComputerSummary | null): string {
+  if (!computer || computer.platform === "mac") return "Your Mac is offline";
+  return `${computer.name} is offline`;
+}
+
+const LAST_STATE: Record<Thread["status"], string> = {
+  provisioning: "starting",
+  idle: "waiting for you",
+  running: "working",
+  paused: "paused",
+  stopped: "closed",
+  failed: "stopped by an error",
+};
 
 function Banner({ tone, children }: { tone: "error" | "muted"; children: ReactNode }) {
   return (

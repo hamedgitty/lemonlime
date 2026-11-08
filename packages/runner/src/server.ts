@@ -112,6 +112,15 @@ function drained(ws: WebSocket): Promise<void> {
 }
 const TERMINAL_SLOW_MS = 10_000;
 
+/**
+ * What a phone (a `phone` token, through the control plane's phone bridge) may not do on a
+ * thread that runs on the user's computer: answer the agent's requests for the computer,
+ * or sign the agent in. Nor may it give the agent full access (see handleConnection).
+ * Phone tokens open only the thread's WebSocket: the terminal, previews, files, uploads and
+ * downloads all still want a `client` token.
+ */
+const PHONE_REFUSED = new Set<string>(["computer_result", "start_login", "login_input", "cancel_login"]);
+
 /** HTTP health endpoint + the thread's WebSocket. */
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
@@ -198,6 +207,8 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
   };
   let unsubscribe: (() => void) | null = null;
   let authed = false;
+  /** Reached through the phone bridge (a `phone` token): fewer powers, see PHONE_REFUSED. */
+  let phone = false;
   let stopExpiry: () => void = () => {};
 
   const helloTimer = setTimeout(() => {
@@ -222,12 +233,13 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       }
       const result = await verifyUser(msg.token, opts, runner.thread.id);
       const thread = runner.thread;
-      if (!result.ok || result.claims.scope !== "client" || result.claims.threadId !== thread.id) {
+      if (!result.ok || (result.claims.scope !== "client" && result.claims.scope !== "phone") || result.claims.threadId !== thread.id) {
         send({ type: "error", code: "unauthorized", message: result.ok ? "Token is not valid for this thread" : `Token ${result.reason.replace("_", " ")}` });
         ws.close(4401, "unauthorized");
         return;
       }
       authed = true;
+      phone = result.claims.scope === "phone";
       clearTimeout(helloTimer);
       stopExpiry = closeAtExpiry(ws, result.claims.exp);
       send({ type: "welcome", thread, latestSeq: thread.latestSeq, runnerVersion: opts.version, options: runner.currentOptions });
@@ -249,13 +261,14 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       replaying = false;
       for (const m of buffered) send(m);
       send({ type: "caught_up", latestSeq: runner.store.latestSeq });
-      // Sign-in progress goes to live connections only; it is never part of history.
-      const offLogin = runner.onLogin(u => send({ type: "login", ...u }));
+      // Sign-in progress goes to live connections only; it is never part of history. Not to
+      // a phone: signing the agent in is done at the computer.
+      const offLogin = phone ? () => undefined : runner.onLogin(u => send({ type: "login", ...u }));
       // Side chats too: live only, never in the thread's history.
       send({ type: "side_chats", chats: runner.side.list() });
       const offSide = runner.side.subscribe((sideId, event) => send({ type: "side_event", sideId, event }));
       const offSideList = runner.side.onList(chats => send({ type: "side_chats", chats }));
-      const offComputer = msg.computer ? runner.computer.addClient(send) : () => undefined;
+      const offComputer = msg.computer && !phone ? runner.computer.addClient(send) : () => undefined;
       const offEvents = unsubscribe;
       unsubscribe = () => {
         offEvents?.();
@@ -264,6 +277,15 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         offSideList();
         offComputer();
       };
+      return;
+    }
+
+    if (phone && PHONE_REFUSED.has(msg.type)) {
+      send({ type: "error", code: "bad_request", message: "That can only be done on the computer itself." });
+      return;
+    }
+    if (phone && msg.type === "set_options" && msg.permission === "full" && runner.currentOptions.permission !== "full") {
+      send({ type: "error", code: "bad_request", message: "Turn on full access on the computer itself." });
       return;
     }
 

@@ -9,6 +9,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "serve": "node server.ts",
+    "dev:serve": "node server.ts --dev",
     "typecheck": "tsc --noEmit",
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare build && wrangler dev",
@@ -34,6 +36,7 @@
     "next": "^16.4.5",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
+    "ws": "^8.22.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
@@ -41,6 +44,7 @@
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
     "postcss": "^8.5.32",
     "tailwindcss": "^4.3.4",
     "wrangler": "^4.158.0"

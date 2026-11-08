@@ -2,6 +2,7 @@ import type { CloudApi } from "../../lib/cloud.ts";
 import type { LocalThreadMeta, Settings, UiPrefs } from "../../lib/storage.ts";
 import type { AgentInstall } from "../../lib/system.ts";
 import type { ThreadSummary } from "../../lib/threads.ts";
+import type { PhoneAccess } from "../../lib/usePhoneLink.ts";
 
 /** Everything a Settings page may read or change. */
 export interface SettingsCtx {
@@ -20,6 +21,8 @@ export interface SettingsCtx {
   agents: AgentInstall[] | null;
   refreshAgents: () => void;
   onSignOut: () => void;
+  /** Phone access to this computer's threads (Settings → General). */
+  phone?: PhoneAccess;
   /** Adds threads made by importing chats. */
   onImported: (metas: LocalThreadMeta[]) => void;
   /** Opens another Settings page. */

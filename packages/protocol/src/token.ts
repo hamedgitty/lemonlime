@@ -9,8 +9,11 @@ import { ThreadId } from "./thread.ts";
  * - `runner` tokens let a runner post heartbeats for its own thread.
  * - `relay` tokens let the control plane collect and answer a runner's relayed calls,
  *   when the runner can't reach the control plane itself (see RelayedRequest).
+ * - `phone` tokens let the user's phone open a local thread's WebSocket through the
+ *   control plane's phone bridge. The desktop app signs them on this computer; they get
+ *   fewer powers than `client` (see docs/phone-access.md).
  */
-export const TokenScope = z.enum(["client", "runner", "relay"]);
+export const TokenScope = z.enum(["client", "runner", "relay", "phone"]);
 export type TokenScope = z.infer<typeof TokenScope>;
 
 export const TokenClaims = z.object({
@@ -98,4 +101,28 @@ export async function verifyToken(token: string, secret: string, nowSec = Math.f
   }
   if (claims.exp <= nowSec) return { ok: false, reason: "expired" };
   return { ok: true, claims };
+}
+
+/**
+ * Sign any JSON claims (the phone bridge's tickets, see phone.ts) the same way as runner
+ * tokens. `kind` is part of the signed payload, so one kind can never pass for another.
+ */
+export async function signClaims(claims: Record<string, unknown>, secret: string): Promise<string> {
+  const payload = b64url(enc.encode(JSON.stringify(claims)));
+  const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(payload));
+  return `${payload}.${b64url(new Uint8Array(sig))}`;
+}
+
+/** The claims of a token made by signClaims, or null if it is malformed or the signature is wrong. */
+export async function verifyClaims(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  const parts = token.split(".");
+  if (parts.length !== 2 || !parts[0] || !parts[1] || token.length > 4096) return null;
+  try {
+    const valid = await crypto.subtle.verify("HMAC", await hmacKey(secret), fromB64url(parts[1]), enc.encode(parts[0]));
+    if (!valid) return null;
+    const claims = JSON.parse(dec.decode(fromB64url(parts[0]))) as unknown;
+    return claims && typeof claims === "object" && !Array.isArray(claims) ? (claims as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
 }

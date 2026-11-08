@@ -16,5 +16,6 @@ export * from "./agent-loop.ts";
 export * from "./turns.ts";
 export * from "./background.ts";
 export * from "./phone.ts";
+export * from "./accounts.ts";
 
 export const PROTOCOL_VERSION = "1";

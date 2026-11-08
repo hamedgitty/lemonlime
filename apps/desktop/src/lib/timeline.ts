@@ -95,7 +95,19 @@ export type TimelineItem =
       state: "waiting" | "answered" | "declined";
       by?: "user" | "timeout" | "interrupted" | "expired";
     }
-  | { kind: "options"; key: string; seq: number; at: string; options: ThreadOptions };
+  | { kind: "options"; key: string; seq: number; at: string; options: ThreadOptions }
+  /**
+   * The agent hit its usage limit. `open` while the thread is still stopped there (no turn
+   * has started since); `waiting` while LemonLime waits to try again, until when if known.
+   */
+  | { kind: "limit"; key: string; seq: number; at: string; hit: EventOf<"limit_hit">; open: boolean; waiting: { until: string | null } | null }
+  /** The thread carried on with another account or agent. */
+  | { kind: "switch"; key: string; seq: number; at: string; event: EventOf<"agent_switch"> };
+
+/** Notices that say LemonLime is waiting to try again after a limit: shown in the limit row instead. */
+const LIMIT_WAITING = new Set(["usage_limited", "retry_scheduled"]);
+/** Notices that say it stopped waiting. */
+const LIMIT_NOT_WAITING = new Set(["retry_cancelled", "retry_given_up", "usage_limit_no_retry"]);
 
 /**
  * Turns an event history into what the thread view shows:
@@ -116,6 +128,8 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   const approvalIndex = new Map<string, number>();
   const questionIndex = new Map<string, number>();
   let lastPlan = -1;
+  // The limit row the thread may still be stopped on.
+  let openLimit: Extract<TimelineItem, { kind: "limit" }> | null = null;
   let lastUserSeq = 0;
   const confirmed = new Set<string>();
   let queue: EventOf<"queue_update">["queue"] = [];
@@ -260,6 +274,12 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         });
         break;
       case "status_change":
+        // A new turn carries the thread on past the limit.
+        if (ev.to === "running" && openLimit) {
+          openLimit.open = false;
+          openLimit.waiting = null;
+          openLimit = null;
+        }
         items.push({
           kind: "status",
           key: `e${ev.seq}`,
@@ -272,6 +292,11 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         });
         break;
       case "notice":
+        if (openLimit && LIMIT_WAITING.has(ev.code)) {
+          openLimit.waiting = { until: ev.untilAt ?? null };
+          break;
+        }
+        if (openLimit && LIMIT_NOT_WAITING.has(ev.code)) openLimit.waiting = null;
         items.push({
           kind: "notice",
           key: `e${ev.seq}`,
@@ -336,6 +361,22 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
       }
       case "options_change":
         items.push({ kind: "options", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, options: ev.options });
+        break;
+      case "limit_hit":
+        if (openLimit) {
+          openLimit.open = false;
+          openLimit.waiting = null;
+        }
+        openLimit = { kind: "limit", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, hit: ev, open: true, waiting: null };
+        items.push(openLimit);
+        break;
+      case "agent_switch":
+        if (openLimit) {
+          openLimit.open = false;
+          openLimit.waiting = null;
+          openLimit = null;
+        }
+        items.push({ kind: "switch", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, event: ev });
         break;
       case "error":
         items.push({
@@ -464,7 +505,14 @@ export function foldFinishedTurns(items: readonly TimelineItem[]): Array<Timelin
     }
     const lastAgent = turn.map(it => it.kind).lastIndexOf("agent");
     const keep = (it: TimelineItem, i: number) =>
-      i === 0 || i === lastAgent || it.kind === "error" || it.kind === "approval" || it.kind === "plan" || it.kind === "question";
+      i === 0 ||
+      i === lastAgent ||
+      it.kind === "error" ||
+      it.kind === "approval" ||
+      it.kind === "plan" ||
+      it.kind === "question" ||
+      it.kind === "limit" ||
+      it.kind === "switch";
     const folded = turn.filter((it, i) => !keep(it, i));
     out.push(turn[0]!);
     const end = turn.find(it => it.kind === "status" && it.workedMs !== undefined);

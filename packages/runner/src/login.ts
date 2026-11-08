@@ -21,7 +21,7 @@ export interface AgentCredential {
   value: string;
 }
 
-interface LoginPlan {
+export interface LoginPlan {
   command: string[];
   /** The credential, from the command's output or the files it wrote. */
   credential(output: string, home: string): AgentCredential | null;
@@ -70,12 +70,23 @@ export class LoginSession {
   constructor(
     private readonly kind: AgentKind,
     private readonly onUpdate: (u: LoginUpdate) => void,
-    private readonly opts: { cwd: string; command?: string[]; home?: string; usePty?: boolean } = { cwd: process.cwd() },
+    private readonly opts: {
+      cwd: string;
+      command?: string[];
+      home?: string;
+      usePty?: boolean;
+      /** Another plan than the agent's sandbox one (signing in to an account on the user's own computer). */
+      plan?: LoginPlan;
+      /** More environment for the sign-in, e.g. the account's config folder. */
+      env?: Record<string, string>;
+      /** Let the CLI open the user's browser (their own computer, not a sandbox). */
+      openBrowser?: boolean;
+    } = { cwd: process.cwd() },
   ) {}
 
   /** Start the sign-in. Resolves with the credential, or null if it failed or was cancelled. */
   run(): Promise<AgentCredential | null> {
-    const plan = LOGIN_PLANS[this.kind];
+    const plan = this.opts.plan ?? LOGIN_PLANS[this.kind];
     if (!plan) {
       this.finish({ state: "failed", message: "Signing this agent in from LemonLime isn't supported yet. Add an API key as a secret instead." });
       return Promise.resolve(null);
@@ -89,7 +100,13 @@ export class LoginSession {
       const child = spawn(cmd, args, {
         cwd: this.opts.cwd,
         // Nothing should try to open a browser inside a sandbox.
-        env: { ...process.env, BROWSER: "true", NO_COLOR: "1", TERM: usePty ? "xterm-256color" : "dumb" },
+        env: {
+          ...process.env,
+          ...(this.opts.openBrowser ? {} : { BROWSER: "true" }),
+          NO_COLOR: "1",
+          TERM: usePty ? "xterm-256color" : "dumb",
+          ...this.opts.env,
+        },
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });

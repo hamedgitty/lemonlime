@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { PermissionMode, ReasoningLevel, ThreadOptions } from "./capabilities.ts";
+import { AccountId } from "./accounts.ts";
 import { ThreadEvent } from "./events.ts";
-import { Thread } from "./thread.ts";
+import { AgentKind, Thread } from "./thread.ts";
 
 /**
  * Messages on the WebSocket between a client (desktop or web) and a runner.
@@ -130,6 +131,22 @@ export const ClientStartLogin = z.object({ type: z.literal("start_login") });
 export const ClientLoginInput = z.object({ type: z.literal("login_input"), text: z.string().min(1).max(10_000) });
 export const ClientCancelLogin = z.object({ type: z.literal("cancel_login") });
 
+/**
+ * What to do about a usage limit the thread stopped on (see `limit_hit`):
+ * - `switch_account`: carry on with another account of the same agent (`accountId`);
+ * - `switch_agent`: carry on with another agent (`agent`, and `model`, null for its default);
+ * - `wait`: try again once the limit resets.
+ * Refused with an error when it can't be done here.
+ */
+export const ClientLimitAction = z.object({
+  type: z.literal("limit_action"),
+  action: z.enum(["switch_account", "switch_agent", "wait"]),
+  accountId: AccountId.optional(),
+  agent: AgentKind.optional(),
+  model: z.string().min(1).max(200).nullable().optional(),
+});
+export type ClientLimitAction = z.infer<typeof ClientLimitAction>;
+
 export const ClientMessage = z.discriminatedUnion("type", [
   ClientHello,
   ClientSendMessage,
@@ -149,6 +166,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientComputerResult,
   ClientSetOptions,
   ClientAnswerQuestion,
+  ClientLimitAction,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

@@ -3,11 +3,17 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { installCoauthorHooks } from "./coauthors.ts";
 import {
+  DEFAULT_ACCOUNT_ID,
+  hasAccounts,
   PERMISSION_MODES,
   PermissionMode,
   ReasoningLevel,
   withoutRewound,
+  type AccountRef,
   type AgentCommand,
+  type AgentConfig,
+  type AgentKind,
+  type OnLimit,
   type NewEvent,
   type Preview,
   type Question,
@@ -19,7 +25,22 @@ import {
 } from "@lemonlime/protocol";
 import { capabilitiesFor } from "./capabilities.ts";
 import { randomUUID } from "node:crypto";
-import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
+import { adapterFor, detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
+import {
+  ACCOUNT_ENV,
+  accountDir,
+  accountEnv,
+  accountRef,
+  accountsOf,
+  carrySession,
+  defaultAccount,
+  loadAccounts,
+  looksSignedIn,
+  nextAccount,
+  signedInAgents,
+  usualAgentDir,
+} from "./accounts.ts";
+import { buildHandoff } from "./handoff.ts";
 import { SideChats } from "./side-chats.ts";
 import { Subagents } from "./subagents.ts";
 import { ComputerBridge } from "./computer.ts";
@@ -94,6 +115,30 @@ export interface ThreadRunnerOptions {
   retryMinWaitMs?: number;
   /** Output of the sandbox's setup script, shown in the thread once (see SETUP_LOG in cli.ts). */
   setupLog?: string;
+  /**
+   * LemonLime's home on the user's own computer, where their extra agent accounts live
+   * (see accounts.ts). Unset (cloud sandboxes): the agent's one sign-in, no switching.
+   */
+  accountsHome?: string | null;
+  /** What to do at a usage limit; default: the user's setting in accountsHome, else wait. */
+  onLimit?: () => OnLimit;
+  /** Other agents signed in here (default: a look at their config folders). */
+  signedInAgents?: () => AgentKind[];
+  /** Whether an account looks signed in (default: a look at its folder). */
+  accountSignedIn?: (agent: AgentKind, accountId: string) => boolean;
+  /** The adapter for another agent, when the thread moves to it (tests swap it). */
+  adapterFor?: (kind: AgentKind) => AgentAdapter;
+}
+
+/** A turn that stopped on a usage limit, until something carries the thread on. */
+interface LimitStop {
+  clientMsgId: string;
+  /** The message as the agent first got it, to run again. */
+  prompt: string;
+  agent: AgentKind;
+  account: string | null;
+  resetAt: string | null;
+  at: string;
 }
 
 /** A turn waiting to be run again after the provider was busy or a limit was hit. */
@@ -189,6 +234,12 @@ interface SavedState {
   retry?: PendingRetry;
   /** Model, reasoning and permission mode, once changed from what the thread started with. */
   options?: ThreadOptions;
+  /** The agent, once the thread moved to another one than it started with. */
+  agent?: AgentConfig;
+  /** The account the agent uses (see accounts.ts), on computers with more than one. */
+  account?: string;
+  /** The turn stopped on a usage limit, until something carried the thread on. */
+  limitStop?: LimitStop;
 }
 
 /** A change to the thread's options (see ThreadRunner.setOptions). */
@@ -255,7 +306,18 @@ export class ThreadRunner {
       opts.stripCoauthors && opts.git !== false
         ? installCoauthorHooks(opts.dataDir ? join(opts.dataDir, "git-hooks") : mkdtempSync(join(tmpdir(), "lemonlime-hooks-")))
         : null;
-    this.sessionOpts = hooksEnv ? { ...opts.session, env: { ...opts.session.env, ...hooksEnv } } : { ...opts.session };
+    // The environment object is shared with subagents and side chats, and changed in place
+    // (accounts), so they all follow the thread's account.
+    this.sessionOpts = { ...opts.session, env: { ...opts.session.env, ...hooksEnv } };
+    this.adapter = opts.adapter;
+    // Subagents and side chats use whichever agent the thread uses now.
+    const live: AgentAdapter = {
+      get kind() {
+        return runnerAdapter().kind;
+      },
+      createSession: o => runnerAdapter().createSession(o),
+    };
+    const runnerAdapter = () => this.adapter;
     const startMode = PermissionMode.safeParse(opts.session.autonomy);
     const reasoning = ReasoningLevel.safeParse(opts.session.reasoning ?? opts.thread.agent.reasoning);
     this.options = {
@@ -269,7 +331,7 @@ export class ThreadRunner {
     this.git = opts.git === false ? null : new GitWorkspace(opts.workdir, opts.credentialHelper);
     this.attachments = new Attachments(opts.workdir);
     this.subagents = new Subagents({
-      adapter: opts.adapter,
+      adapter: live,
       session: this.sessionOpts,
       cwd: opts.workdir,
       toMain: (text, id) => {
@@ -283,7 +345,7 @@ export class ThreadRunner {
     const { autonomy: _a, ...session } = this.sessionOpts;
     this.side = new SideChats({
       threadId: opts.thread.id,
-      adapter: opts.adapter,
+      adapter: live,
       session,
       cwd: opts.workdir,
       dir: opts.dataDir ? join(opts.dataDir, "side-chats") : null,
@@ -324,7 +386,7 @@ export class ThreadRunner {
 
   /** Slash commands for the composer's `/` menu: what the agent reported, plus command files and skills. */
   get agentCommands(): AgentCommand[] {
-    return listCommands({ kind: this.opts.adapter.kind, workdir: this.opts.workdir, reported: this.session?.commands?.() ?? [] });
+    return listCommands({ kind: this.adapter.kind, workdir: this.opts.workdir, reported: this.session?.commands?.() ?? [] });
   }
 
   private reviewer: GitReview | null | undefined;
@@ -351,7 +413,13 @@ export class ThreadRunner {
   }
 
   get thread(): Thread {
-    return { ...this.opts.thread, status: this.status, latestSeq: this.store.latestSeq, updatedAt: new Date().toISOString() };
+    return {
+      ...this.opts.thread,
+      agent: this.threadAgent ?? this.opts.thread.agent,
+      status: this.status,
+      latestSeq: this.store.latestSeq,
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   get idle(): string | null {
@@ -366,6 +434,16 @@ export class ThreadRunner {
   /** Prepare the repo and branch, restore any saved agent session, and become idle. */
   async init(): Promise<void> {
     const saved = this.loadState();
+    // A thread that moved to another agent carries on with it.
+    if (saved?.agent && saved.agent.kind !== this.adapter.kind) {
+      this.adapter = (this.opts.adapterFor ?? adapterFor)(saved.agent.kind);
+      this.threadAgent = saved.agent;
+      delete this.sessionOpts.command;
+    }
+    if (saved?.limitStop) this.limitStop = saved.limitStop;
+    // A thread keeps its account. One that ran before accounts existed ran on the usual sign-in.
+    const ranBefore = Object.keys(saved?.agentState ?? {}).length > 0;
+    this.setAccount(typeof saved?.account === "string" ? saved.account : ranBefore ? DEFAULT_ACCOUNT_ID : null);
     if (this.git) {
       if (this.opts.sourceRepo) {
         await this.git.ensureWorktree(this.opts.sourceRepo, this.opts.thread.branch, this.opts.thread.repo.baseBranch);
@@ -384,7 +462,7 @@ export class ThreadRunner {
     try {
       skills = await installSkills({
         workdir: this.opts.workdir,
-        kind: this.opts.adapter.kind,
+        kind: this.adapter.kind,
         git: this.git,
         bundled: this.opts.bundledSkills ?? true,
         extraDirs: this.opts.extraSkillDirs ?? [],
@@ -477,7 +555,7 @@ export class ThreadRunner {
       const { plugins, problems } = this.opts.pluginsDir ? loadEnabledPlugins(this.opts.pluginsDir) : { plugins: [], problems: [] };
       const result = await installPluginsIntoThread({
         workdir: this.opts.workdir,
-        kind: this.opts.adapter.kind,
+        kind: this.adapter.kind,
         git: this.git,
         plugins,
         takenSkills,
@@ -535,7 +613,7 @@ export class ThreadRunner {
   agentVersion: string | null = null;
 
   private async checkVersion(): Promise<void> {
-    const kind = this.opts.adapter.kind;
+    const kind = this.adapter.kind;
     const tested = (TESTED_AGENTS as Record<string, { binary: string } | undefined>)[kind];
     if (!tested) return;
     const binary = this.opts.session.command?.[0] ?? tested.binary;
@@ -557,12 +635,15 @@ export class ThreadRunner {
     }
     this.seen.add(clientMsgId);
     // The user carried on themselves: no automatic continue on top.
-    if (!clientMsgId.startsWith("auto-continue-")) this.clearUsageLimit();
+    if (!clientMsgId.startsWith("auto-continue-")) {
+      this.clearUsageLimit();
+      this.limitTried = null;
+    }
     // ...and no retry of the last message either: theirs comes first.
     this.cancelRetry("You sent a new message, so LemonLime stopped waiting to try the last one again.");
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
-    if (this.status === "running" || this.current || this.queue.length > 0 || this.held) {
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching) {
       this.queue.push({ clientMsgId, text, queuedAt: new Date().toISOString(), ...(attachments.length ? { attachments } : {}) });
       this.publishQueue();
       this.saveState();
@@ -591,7 +672,7 @@ export class ThreadRunner {
       return;
     }
     const session = new LoginSession(
-      this.opts.adapter.kind,
+      this.adapter.kind,
       u => {
         this.lastLogin = u;
         for (const l of this.loginListeners) l(u);
@@ -710,7 +791,7 @@ export class ThreadRunner {
     if (!retry || this.closing) return;
     if (!now && Date.parse(retry.at) > Date.now() + 1000) return this.scheduleRetryTimer(); // a long wait, woken early
     // Something else is happening: the user wrote, or the computer is out of room. Try again in a minute.
-    if (this.status === "running" || this.current || this.queue.length > 0 || this.held) {
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching) {
       this.retry = { ...retry, at: new Date(Date.now() + 60_000).toISOString() };
       this.saveState();
       return this.scheduleRetryTimer();
@@ -794,13 +875,322 @@ export class ThreadRunner {
     }
   }
 
+  // ── Usage limits: other accounts, other agents ─────────────────────────────
+
+  /** The agent the thread uses now, once it moved from the one it started with. */
+  private threadAgent: AgentConfig | null = null;
+  private adapter: AgentAdapter;
+  /** The account the agent signs in with (see accounts.ts); null: its one sign-in. */
+  private account: string | null = null;
+  private limitStop: LimitStop | null = null;
+  /** Accounts that hit a limit on the message being tried, so switching never goes round in circles. */
+  private limitTried: { clientMsgId: string; ids: string[] } | null = null;
+  /** Switch to this account once the current turn has wrapped up (the "switch" setting). */
+  private pendingSwitch: string | null = null;
+  /** A switch is under way: new messages wait in the queue until it's done. */
+  private switching = false;
+
+  /** The usage limit the thread stopped on, if it's still stopped there (for /healthz). */
+  get limitStopped(): { agent: AgentKind; account: string | null; resetAt: string | null } | null {
+    const s = this.limitStop;
+    return s ? { agent: s.agent, account: s.account, resetAt: s.resetAt } : null;
+  }
+
+  /** The agent's account, if this computer keeps several. */
+  get currentAccount(): string | null {
+    return this.account;
+  }
+
+  private get accountsHome(): string | null {
+    return this.opts.accountsHome ?? null;
+  }
+
+  /** Use this account for the agent from its next session (null: the thread's or the user's default). */
+  private setAccount(id: string | null): void {
+    const env = this.sessionOpts.env!;
+    for (const name of Object.values(ACCOUNT_ENV)) delete env[name];
+    const kind = this.adapter.kind;
+    const home = this.accountsHome;
+    if (!home || !hasAccounts(kind)) {
+      this.account = null;
+      return;
+    }
+    const data = loadAccounts(home);
+    const known = id !== null && accountsOf(data, kind).some(a => a.id === id);
+    this.account = known ? id : defaultAccount(data, kind);
+    const { name, value } = accountEnv(home, kind, this.account!);
+    if (value) env[name] = value;
+  }
+
+  private accountRefFor(id: string | null): AccountRef | null {
+    const kind = this.adapter.kind;
+    const home = this.accountsHome;
+    if (!home || !id || !hasAccounts(kind)) return null;
+    const data = loadAccounts(home);
+    // Only worth naming when there's more than one.
+    return accountsOf(data, kind).length > 1 ? accountRef(data, kind, id) : null;
+  }
+
+  private accountSignedIn(kind: AgentKind, id: string): boolean {
+    if (this.opts.accountSignedIn) return this.opts.accountSignedIn(kind, id);
+    const home = this.accountsHome;
+    return Boolean(home && hasAccounts(kind) && looksSignedIn(kind, accountDir(home, kind, id)));
+  }
+
+  /** Other accounts of this agent that look signed in. */
+  private otherAccounts(): AccountRef[] {
+    const kind = this.adapter.kind;
+    const home = this.accountsHome;
+    if (!home || !hasAccounts(kind)) return [];
+    return accountsOf(loadAccounts(home), kind)
+      .filter(a => a.id !== this.account && this.accountSignedIn(kind, a.id))
+      .map(a => ({ id: a.id, label: a.label }));
+  }
+
+  private otherAgents(): AgentKind[] {
+    const all = this.opts.signedInAgents ? this.opts.signedInAgents() : signedInAgents();
+    return [...new Set(all)].filter(k => k !== this.adapter.kind && k !== "acp");
+  }
+
+  private limitPolicy(): OnLimit {
+    if (this.opts.onLimit) return this.opts.onLimit();
+    const home = this.accountsHome;
+    return home ? loadAccounts(home).onLimit : "wait";
+  }
+
+  /**
+   * A turn stopped on the plan's usage limit: show it (limit_hit), then do what the user
+   * chose for limits: switch to their next signed-in account, wait for the reset, or leave
+   * it to them.
+   */
+  private handleLimit(clientMsgId: string, prompt: string, hit: { resetAt: string | null; message: string }, aborted: boolean): void {
+    const agent = this.adapter.kind;
+    const tried = this.limitTried?.clientMsgId === clientMsgId ? this.limitTried.ids : [];
+    if (this.account && !tried.includes(this.account)) tried.push(this.account);
+    this.limitTried = { clientMsgId, ids: tried };
+    this.limitStop = { clientMsgId, prompt, agent, account: this.account, resetAt: hit.resetAt, at: new Date().toISOString() };
+    this.saveState();
+    const account = this.accountRefFor(this.account);
+    this.store.append({
+      type: "limit_hit",
+      agent,
+      ...(account ? { account } : {}),
+      ...(hit.resetAt ? { resetAt: hit.resetAt } : {}),
+      message: hit.message,
+      accounts: this.otherAccounts(),
+      agents: this.otherAgents(),
+    });
+    if (aborted || this.closing) return;
+    const policy = this.limitPolicy();
+    if (policy === "switch") {
+      const home = this.accountsHome;
+      const ids = home && hasAccounts(agent) ? accountsOf(loadAccounts(home), agent).map(a => a.id) : [];
+      const next = this.account ? nextAccount(ids, this.account, new Set(tried), id => this.accountSignedIn(agent, id)) : null;
+      if (next) {
+        this.pendingSwitch = next; // once this turn has wrapped up (see begin)
+        return;
+      }
+      this.store.append({
+        type: "notice",
+        code: "no_account_to_switch",
+        message: "There's no other signed-in account of this agent with room left, so LemonLime waits for the limit to reset instead.",
+      });
+    }
+    if (policy === "ask") return;
+    this.waitForLimit();
+  }
+
+  /** Try again once the limit resets (the "wait and try again" way). */
+  private waitForLimit(): void {
+    const stop = this.limitStop;
+    if (!stop) return;
+    if (this.usageLimit || this.retry) return; // already waiting
+    if ((this.opts.retryMaxWaitMs ?? 0) > 0) this.scheduleRetry(stop.clientMsgId, stop.prompt, "usage_limit", stop.resetAt);
+    else this.onUsageLimit(stop.resetAt);
+  }
+
+  /** What the user picked on a limit row. */
+  async limitAction(
+    action: { action: "switch_account"; accountId: string } | { action: "switch_agent"; agent: AgentKind; model: string | null } | { action: "wait" },
+  ): Promise<{ ok: true } | { error: string }> {
+    if (action.action === "switch_account") return this.switchAccount(action.accountId);
+    if (action.action === "switch_agent") return this.switchAgent(action.agent, action.model);
+    if (!this.limitStop) return { error: "This thread isn't stopped on a usage limit." };
+    this.waitForLimit();
+    return { ok: true };
+  }
+
+  /** Stop waiting for a reset (quietly: a switch says what happened instead). */
+  private stopWaitingForLimit(): void {
+    this.clearUsageLimit();
+    if (this.retry?.reason === "usage_limit") {
+      if (this.retryTimer) clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+      this.retry = null;
+    }
+  }
+
+  /** The folder an account's agent keeps its sessions in. */
+  private agentDirFor(kind: AgentKind, id: string | null): string | null {
+    const home = this.accountsHome;
+    if (!home || !hasAccounts(kind)) return null;
+    return (id ? accountDir(home, kind, id) : null) ?? usualAgentDir(kind);
+  }
+
+  /**
+   * Carry on with another account of the same agent. The agent's own record of the
+   * conversation is copied to that account's folder so it goes on where it stopped; if it
+   * can't be, a fresh conversation starts from a handoff note. Then the message that hit
+   * the limit runs again.
+   */
+  async switchAccount(id: string, o: { auto?: boolean } = {}): Promise<{ ok: true } | { error: string }> {
+    return this.whileSwitching(() => this.doSwitchAccount(id, o));
+  }
+
+  /** Run a switch with new turns held back until it's done. */
+  private async whileSwitching(run: () => Promise<{ ok: true } | { error: string }>): Promise<{ ok: true } | { error: string }> {
+    if (this.switching) return { error: "Already switching. Try again in a moment." };
+    this.switching = true;
+    let done = false;
+    try {
+      const r = await run();
+      done = "ok" in r;
+      return r;
+    } finally {
+      this.switching = false;
+      // The message that hit the limit goes first; then anything that queued meanwhile.
+      if (done) this.continueAfterSwitch();
+      this.startNext();
+    }
+  }
+
+  private async doSwitchAccount(id: string, o: { auto?: boolean }): Promise<{ ok: true } | { error: string }> {
+    const kind = this.adapter.kind;
+    const home = this.accountsHome;
+    if (!home || !hasAccounts(kind)) return { error: "Switching accounts isn't available for this thread." };
+    if (this.closing) return { error: "The thread is closing." };
+    const data = loadAccounts(home);
+    const to = accountRef(data, kind, id);
+    if (!to) return { error: "There's no such account. Add it under Settings → Agents first." };
+    if (id === this.account) return { error: "The thread already uses that account." };
+    if (this.status === "running" || this.current) return { error: "Wait for the agent to stop, then switch." };
+    const from = this.account ? accountRef(data, kind, this.account) : null;
+    const fromDir = this.agentDirFor(kind, this.account);
+    const toDir = this.agentDirFor(kind, id);
+    if (this.session) this.agentState = this.session.saveState();
+    await this.session?.dispose().catch(() => undefined);
+    this.session = null;
+    let carried = Object.keys(this.agentState).length === 0;
+    if (!carried && fromDir && toDir) {
+      try {
+        carried = carrySession(kind, this.agentState, fromDir, toDir);
+      } catch {
+        carried = false;
+      }
+    }
+    if (!carried) {
+      this.agentState = {};
+      this.recap = buildHandoff(this.store.since(0), { from: kind, reason: "the plan's usage limit was reached on another account" });
+    }
+    this.setAccount(id);
+    this.store.append({
+      type: "agent_switch",
+      from: { agent: kind, ...(from ? { account: from } : {}) },
+      to: { agent: kind, account: to },
+      carried: carried ? "session" : "handoff",
+      auto: Boolean(o.auto),
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Carry on with another agent, in the same working folder and branch. The new agent
+   * starts a fresh conversation from a handoff note built from the thread's history, with a
+   * model of the same tier where the app picked one.
+   */
+  async switchAgent(kind: AgentKind, model: string | null, o: { auto?: boolean } = {}): Promise<{ ok: true } | { error: string }> {
+    return this.whileSwitching(() => this.doSwitchAgent(kind, model, o));
+  }
+
+  private async doSwitchAgent(kind: AgentKind, model: string | null, o: { auto?: boolean }): Promise<{ ok: true } | { error: string }> {
+    const fromKind = this.adapter.kind;
+    if (kind === fromKind) return { error: "The thread already uses that agent." };
+    if (kind === "acp") return { error: "Pick Claude Code, Codex or OpenCode." };
+    if (this.closing) return { error: "The thread is closing." };
+    if (this.status === "running" || this.current) return { error: "Wait for the agent to stop, then switch." };
+    const from = this.accountRefFor(this.account);
+    const stopped = this.limitStop;
+    await this.session?.dispose().catch(() => undefined);
+    this.session = null;
+    this.adapter = (this.opts.adapterFor ?? adapterFor)(kind);
+    const cleanModel = model?.trim() || null;
+    this.threadAgent = { kind, ...(cleanModel ? { model: cleanModel } : {}) };
+    delete this.sessionOpts.command;
+    this.setAccount(null);
+    // Keep what the new agent can do; the rest goes back to its defaults.
+    const caps = capabilitiesFor(kind, { agentVersion: null });
+    const permission = caps.permissions.includes(this.options.permission) ? this.options.permission : "edits";
+    this.options = {
+      model: cleanModel,
+      reasoning: this.options.reasoning && caps.reasoning.includes(this.options.reasoning) ? this.options.reasoning : null,
+      permission,
+      ...(permission === "plan" && this.options.exitPlanTo && caps.permissions.includes(this.options.exitPlanTo)
+        ? { exitPlanTo: this.options.exitPlanTo }
+        : {}),
+    };
+    this.applyOptionsToSession();
+    this.agentState = {};
+    this.recap = buildHandoff(this.store.since(0), {
+      from: fromKind,
+      ...(stopped ? { reason: "its plan's usage limit was reached" } : {}),
+    });
+    try {
+      await installSkills({
+        workdir: this.opts.workdir,
+        kind,
+        git: this.git,
+        bundled: this.opts.bundledSkills ?? true,
+        extraDirs: this.opts.extraSkillDirs ?? [],
+        disabled: this.opts.disabledSkills ?? [],
+      });
+    } catch {
+      // The agent works without them; the thread said so when it started if they failed.
+    }
+    const account = this.accountRefFor(this.account);
+    this.store.append({ type: "options_change", options: { ...this.options } });
+    this.store.append({
+      type: "agent_switch",
+      from: { agent: fromKind, ...(from ? { account: from } : {}) },
+      to: { agent: kind, ...(account ? { account } : {}), ...(cleanModel ? { model: cleanModel } : {}) },
+      carried: "handoff",
+      auto: Boolean(o.auto),
+    });
+    return { ok: true };
+  }
+
+  /** After a switch: run the message that hit the limit again, now (or after what's queued). */
+  private continueAfterSwitch(): void {
+    const stop = this.limitStop;
+    this.stopWaitingForLimit();
+    this.saveState();
+    if (!stop || this.closing) return;
+    if (this.status === "running" || this.current || this.held) {
+      // Something else already carries the thread on; it picks up the new account or agent.
+      this.limitStop = null;
+      this.saveState();
+      return;
+    }
+    this.store.append({ type: "notice", code: "retry_started", message: "Trying the last message again." });
+    this.begin(retryPrompt(stop.prompt, "usage_limit"), stop.clientMsgId, stop.prompt);
+  }
+
   /**
    * Change the model, reasoning level or permission mode. A change made while the agent works
    * applies from its next turn, in the same conversation. Returns why not, if the agent
    * can't change that.
    */
   setOptions(change: OptionsChange): { ok: true } | { error: string } {
-    const kind = this.opts.adapter.kind;
+    const kind = this.adapter.kind;
     const caps = capabilitiesFor(kind, { agentVersion: null });
     const next: ThreadOptions = { ...this.options };
     if (change.permission !== undefined && change.permission !== next.permission) {
@@ -957,20 +1347,25 @@ export class ThreadRunner {
 
   /** Run one turn: `prompt` goes to the agent; `original` is what a retry would send again. */
   private begin(prompt: string, clientMsgId: string, original: string): void {
+    // A new turn carries the thread on: the limit it stopped on is behind it.
+    this.limitStop = null;
     this.setStatus("running");
     const abort = new AbortController();
     this.abort = abort;
     this.turnMsgId = clientMsgId;
     const turn = this.runTurn(prompt, abort, original).finally(() => {
       if (this.current === turn) this.current = null;
-      this.startNext();
+      const next = this.pendingSwitch;
+      this.pendingSwitch = null;
+      if (next) void this.switchAccount(next, { auto: true }).then(() => this.startNext());
+      else this.startNext();
     });
     this.current = turn;
   }
 
   /** Start the oldest queued message if the agent is free. */
   private startNext(): void {
-    if (this.closing || this.held || this.status === "running" || this.current || !this.queue.length) return;
+    if (this.closing || this.held || this.switching || this.status === "running" || this.current || !this.queue.length) return;
     const next = this.queue.shift()!;
     this.publishQueue();
     this.startTurn(next.text, next.clientMsgId, next.attachments ?? []);
@@ -982,7 +1377,7 @@ export class ThreadRunner {
 
   private newSession(): AgentSession {
     this.sessionStale = false;
-    return this.opts.adapter.createSession({ ...this.sessionOpts, autonomy: this.options.permission, cwd: this.opts.workdir, saved: this.agentState });
+    return this.adapter.createSession({ ...this.sessionOpts, autonomy: this.options.permission, cwd: this.opts.workdir, saved: this.agentState });
   }
 
   private async runTurn(prompt: string, abort: AbortController, original = prompt): Promise<void> {
@@ -1019,7 +1414,7 @@ export class ThreadRunner {
     );
     watchdog.unref?.();
 
-    let usageLimitAt: { resetAt: string | null } | null = null;
+    let limitHit: { resetAt: string | null; message: string } | null = null;
     let retryable: { reason: PendingRetry["reason"]; resetAt: string | null } | null = null;
     const retrying = (this.opts.retryMaxWaitMs ?? 0) > 0;
     try {
@@ -1050,14 +1445,17 @@ export class ThreadRunner {
       const message = err instanceof Error ? err.message : String(err);
       const resetAt = (err as { resetAt?: string }).resetAt ?? null;
       if (code === "agent_crashed") await this.handleCrash(message, emit);
-      else if (code === "usage_limit" || (code === "overloaded" && retrying)) {
+      else if (code === "usage_limit") {
+        // Shown as a limit row (limit_hit) once the turn is wrapped up, not as an error.
+        this.crashes = 0;
+        limitHit = { resetAt, message };
+      } else if (code === "overloaded" && retrying) {
         this.crashes = 0;
         emit({ type: "error", message, code, fatal: false });
-        if (retrying) retryable = { reason: code, resetAt };
-        else usageLimitAt = { resetAt };
+        retryable = { reason: code, resetAt };
       } else {
         this.crashes = 0;
-        const hint = fixHint(code, this.opts.adapter.kind);
+        const hint = fixHint(code, this.adapter.kind);
         emit({ type: "error", message: hint ? `${message}\n\n${hint}` : message, ...(code ? { code } : {}), fatal: false });
       }
     } finally {
@@ -1080,8 +1478,8 @@ export class ThreadRunner {
     this.abort = null;
     this.idleSince = new Date().toISOString();
     this.setStatus("idle", timedOut ? "timed out" : abort.signal.aborted ? "interrupted" : undefined);
-    if (usageLimitAt) this.onUsageLimit(usageLimitAt.resetAt);
-    if (retryable && !abort.signal.aborted && !this.closing) this.scheduleRetry(clientMsgId, original, retryable.reason, retryable.resetAt);
+    if (limitHit) this.handleLimit(clientMsgId, original, limitHit, abort.signal.aborted);
+    else if (retryable && !abort.signal.aborted && !this.closing) this.scheduleRetry(clientMsgId, original, retryable.reason, retryable.resetAt);
     else if (this.retry?.clientMsgId === clientMsgId && !this.closing) {
       // This was a retry and it went through (or failed for another reason): nothing more to wait for.
       this.retry = null;
@@ -1282,7 +1680,7 @@ export class ThreadRunner {
 
   /** Shrink the agent's conversation. Only Claude Code has a way to do it from outside. */
   compact(): boolean {
-    if (this.opts.adapter.kind !== "claude-code") return false;
+    if (this.adapter.kind !== "claude-code") return false;
     this.sendMessage("/compact");
     return true;
   }
@@ -1326,6 +1724,9 @@ export class ThreadRunner {
       ...(this.recap ? { recap: this.recap } : {}),
       ...(this.retry ? { retry: this.retry } : {}),
       options: this.options,
+      ...(this.threadAgent ? { agent: this.threadAgent } : {}),
+      ...(this.account ? { account: this.account } : {}),
+      ...(this.limitStop ? { limitStop: this.limitStop } : {}),
     };
     // Write a new file and move it into place, so a crash or a full disk mid-write leaves the
     // previous state whole rather than a torn file. A failed save is retried at the next one.

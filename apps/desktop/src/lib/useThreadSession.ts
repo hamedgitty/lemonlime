@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { RunnerClient } from "@lemonlime/client";
 import {
   signToken,
+  type ClientLimitAction,
   type ClientSetOptions,
   type ComputerRequest,
   type SideChatSummary,
@@ -83,6 +84,8 @@ export interface ThreadSession {
   setOptions: (change: Omit<ClientSetOptions, "type">) => void;
   /** Answer the agent's questions (one list per question), or decline with null. */
   answerQuestion: (requestId: string, answers: string[][] | null) => void;
+  /** After a usage limit: another account, another agent, or wait for the reset. */
+  limitAction: (action: Omit<ClientLimitAction, "type">) => void;
   /** Signing a cloud thread's agent in to the user's own account (never part of the history). */
   login: {
     update: LoginUpdate | null;
@@ -364,6 +367,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const compact = useCallback(() => clientRef.current?.compact(), []);
   const setOptions = useCallback((change: Omit<ClientSetOptions, "type">) => clientRef.current?.setOptions(change), []);
   const answerQuestion = useCallback((requestId: string, answers: string[][] | null) => clientRef.current?.answerQuestion(requestId, answers), []);
+  const limitAction = useCallback((action: Omit<ClientLimitAction, "type">) => clientRef.current?.limitAction(action), []);
   const sideAsk = useCallback(
     (text: string, sideId?: string) =>
       new Promise<string>((resolve, reject) => {
@@ -423,6 +427,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     options,
     setOptions,
     answerQuestion,
+    limitAction,
     login,
     side,
     restart,

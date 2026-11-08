@@ -25,9 +25,12 @@ import {
   backgroundWork,
   childrenSettled,
   AGENT_CAPABILITIES,
+  DEFAULT_ACCOUNT_ID,
   IMPLEMENT_PLAN_PROMPT,
   modeAfterPlan,
   type ChildWork,
+  type AccountsList,
+  type AgentKind,
   type PolicyDenied,
   type ThreadOptions,
   type ThreadStatus,
@@ -45,6 +48,9 @@ import { AGENT_LABELS, STATUS_LABELS, repoName } from "../lib/format.ts";
 import { CloudError, type CloudApi } from "../lib/cloud.ts";
 import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
+import type { LimitActions } from "./LimitRow.tsx";
+import { limitChoices, listAccounts, threadsOnSameLimit } from "../lib/accounts.ts";
+import { localRunnerStatuses, type AgentInstall } from "../lib/system.ts";
 import { FindBar } from "./FindBar.tsx";
 import { SelectionQuote } from "./SelectionQuote.tsx";
 import { Composer, type ComposerHandle } from "./Composer.tsx";
@@ -109,6 +115,12 @@ export interface ThreadViewProps {
   onChildren?: (threadId: string, children: ChildWork[]) => void;
   /** Shortcuts the user changed (for menu hints). */
   shortcuts?: Record<string, string>;
+  /** The agents on this computer (for carrying a thread on past a usage limit). */
+  agents?: AgentInstall[] | null;
+  /** A local thread moved to another agent. */
+  onLocalAgent?: (id: string, agent: { kind: AgentKind; model?: string | undefined }) => void;
+  /** Switch these other local threads to an account too (they stopped on the same limit). */
+  onSwitchOthers?: (threadIds: string[], accountId: string) => Promise<number>;
 }
 
 /** Below this width a pane's side panel lies over the conversation, and only in the active pane. */
@@ -158,6 +170,9 @@ function ThreadSessionView({
   suggestNext = true,
   onChildren,
   shortcuts = {},
+  agents,
+  onLocalAgent,
+  onSwitchOthers,
 }: ThreadViewProps & { target: SessionTarget }) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -332,6 +347,60 @@ function ThreadSessionView({
       setMoving(null);
     }
   };
+  // ── Usage limits: carry on with another account or agent ───────
+  const lastLimit = useMemo(() => items.findLast(i => i.kind === "limit"), [items]);
+  const limitOpen = lastLimit?.kind === "limit" && lastLimit.open;
+  const [accountList, setAccountList] = useState<AccountsList | null>(null);
+  useEffect(() => {
+    if (entry.mode !== "local" || !limitOpen) return;
+    let live = true;
+    void listAccounts()
+      .then(l => live && setAccountList(l))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [entry.mode, limitOpen]);
+  const [others, setOthers] = useState<{ ids: string[]; accountId: string } | null>(null);
+  const { limitAction } = session;
+  const limitActions = useMemo<LimitActions | undefined>(() => {
+    if (session.state !== "live") return undefined;
+    return {
+      choices: hit => limitChoices({ hit, mode: entry.mode, model: threadOptions.model, accounts: accountList, agents: agents ?? null }),
+      canSwitchAccount: entry.mode === "local",
+      switchAccount: accountId => {
+        limitAction({ action: "switch_account", accountId });
+        if (entry.mode !== "local" || lastLimit?.kind !== "limit") return;
+        const hit = lastLimit.hit;
+        void localRunnerStatuses().then(statuses => {
+          const ids = threadsOnSameLimit(statuses, entry.meta.id, hit.agent, hit.account?.id ?? DEFAULT_ACCOUNT_ID);
+          setOthers(ids.length ? { ids, accountId } : null);
+        });
+      },
+      switchAgent: (agent, model) => limitAction({ action: "switch_agent", agent, model }),
+      wait: () => limitAction({ action: "wait" }),
+      others:
+        others && onSwitchOthers
+          ? {
+              count: others.ids.length,
+              switchThem: async () => {
+                await onSwitchOthers(others.ids, others.accountId);
+                setOthers(null);
+              },
+            }
+          : null,
+    };
+  }, [session.state, entry, threadOptions.model, accountList, agents, limitAction, lastLimit, others, onSwitchOthers]);
+  // A local thread that moved to another agent remembers it, for the sidebar and its next start.
+  const lastSwitch = useMemo(() => session.events.findLast(e => e.type === "agent_switch"), [session.events]);
+  useEffect(() => {
+    if (entry.mode !== "local" || lastSwitch?.type !== "agent_switch") return;
+    const to = lastSwitch.to;
+    if (to.agent !== entry.meta.agent.kind || (to.agent !== lastSwitch.from.agent && to.model !== entry.meta.agent.model)) {
+      onLocalAgent?.(entry.meta.id, { kind: to.agent, model: to.model });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastSwitch?.seq]);
   const composerRef = useRef<ComposerHandle>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const files = useAttachments(session.connection);
@@ -662,6 +731,7 @@ function ThreadSessionView({
             onEditQueued={session.editQueued}
             onRewind={rewindTo}
             onImplementPlan={session.state === "live" ? implementPlan : undefined}
+            limit={limitActions}
           />
           {find !== null && <FindBar root={timelineRef} version={items} focusNonce={find} onClose={() => setFind(null)} />}
           <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} />

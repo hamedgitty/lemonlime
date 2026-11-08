@@ -39,12 +39,23 @@ const time = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-di
 
 export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
 
-export function Timeline({ items, onApprove, onImplementPlan }: { items: TimelineItem[]; onApprove?: ApproveFn; onImplementPlan?: (() => void) | undefined }) {
+export function Timeline({
+  items,
+  onApprove,
+  onImplementPlan,
+  onLimitWait,
+}: {
+  items: TimelineItem[];
+  onApprove?: ApproveFn;
+  onImplementPlan?: (() => void) | undefined;
+  /** Ask the runner to try again once the usage limit resets (while connected). */
+  onLimitWait?: (() => void) | undefined;
+}) {
   return (
     <ol className="space-y-4">
       {items.map(item => (
         <li key={item.key}>
-          <Item item={item} onApprove={onApprove} onImplementPlan={onImplementPlan} />
+          <Item item={item} onApprove={onApprove} onImplementPlan={onImplementPlan} onLimitWait={onLimitWait} />
         </li>
       ))}
     </ol>
@@ -94,7 +105,17 @@ function Approval({ item, onApprove }: { item: Extract<TimelineItem, { kind: "ap
   );
 }
 
-function Item({ item, onApprove, onImplementPlan }: { item: TimelineItem; onApprove?: ApproveFn | undefined; onImplementPlan?: (() => void) | undefined }) {
+function Item({
+  item,
+  onApprove,
+  onImplementPlan,
+  onLimitWait,
+}: {
+  item: TimelineItem;
+  onApprove?: ApproveFn | undefined;
+  onImplementPlan?: (() => void) | undefined;
+  onLimitWait?: (() => void) | undefined;
+}) {
   switch (item.kind) {
     case "plan":
       return <PlanCard plan={item.event.plan} open={item.open} onImplement={onImplementPlan} />;
@@ -147,6 +168,10 @@ function Item({ item, onApprove, onImplementPlan }: { item: TimelineItem; onAppr
           </p>
         </div>
       );
+    case "limit":
+      return <LimitItem item={item} onWait={onLimitWait} />;
+    case "switch":
+      return <SwitchItem event={item.event} />;
     case "error":
       return (
         <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
@@ -252,6 +277,64 @@ function DiffItem({ event }: { event: EventOf<"file_diff"> }) {
 }
 
 /** When a limit resets, in the reader's own time zone (rendered in the browser). */
+const AGENT_NAMES: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", acp: "The agent" };
+
+function LimitItem({ item, onWait }: { item: Extract<TimelineItem, { kind: "limit" }>; onWait?: (() => void) | undefined }) {
+  const [sent, setSent] = useState(false);
+  const e = item.event;
+  const agent = AGENT_NAMES[e.agent] ?? e.agent;
+  const who = e.account ? ` on ${e.account.label}` : "";
+  if (!item.open) {
+    return (
+      <p role="note" className="px-1 text-[13.5px] text-muted">
+        {agent} hit its usage limit{who}.{e.resetAt ? <ResetTime iso={e.resetAt} /> : null}
+      </p>
+    );
+  }
+  return (
+    <div role="group" aria-label={`${agent} hit its usage limit`} className="rounded-2xl border border-line bg-paper px-4 py-3.5 text-sm">
+      <p className="font-medium">
+        {agent} hit its usage limit{who}
+      </p>
+      <p className="mt-1 text-[13.5px] text-muted">
+        {e.resetAt ? <ResetTime iso={e.resetAt} /> : "It didn't say when it resets."}{" "}
+        {item.waiting
+          ? item.waitingUntil
+            ? `LemonLime will try again at ${new Date(item.waitingUntil).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" })}.`
+            : "LemonLime will try again later."
+          : "Switch account or carry on with another agent from the desktop app, or try again when it resets."}
+      </p>
+      {e.message && <p className="mt-1.5 text-[13px] break-words text-muted">“{e.message.trim().slice(0, 300)}”</p>}
+      {!item.waiting && onWait && (
+        <button
+          type="button"
+          className="btn-ghost mt-3 h-8"
+          disabled={sent}
+          onClick={() => {
+            setSent(true);
+            onWait();
+          }}
+        >
+          Try again at reset
+        </button>
+      )}
+    </div>
+  );
+}
+
+function SwitchItem({ event }: { event: EventOf<"agent_switch"> }) {
+  const { from, to } = event;
+  const text =
+    from.agent === to.agent
+      ? `${event.auto ? "Switched by itself" : "Switched"} to ${to.account ? `the ${to.account.label} account` : "another account"}${event.carried === "session" ? ", in the same conversation." : ", with a summary of the thread so far."}`
+      : `Carried on with ${AGENT_NAMES[to.agent] ?? to.agent}${to.model ? ` (${to.model})` : ""}, starting from a summary of what ${AGENT_NAMES[from.agent] ?? from.agent} did.`;
+  return (
+    <p role="note" className="px-1 text-[13.5px] text-muted">
+      {text}
+    </p>
+  );
+}
+
 function ResetTime({ iso }: { iso: string }) {
   const d = new Date(iso);
   return (

@@ -98,23 +98,48 @@ const OVERLOADED =
 
 const LIMIT = /usage limit|limit reached|hit your (usage )?limit|usage_limit_reached|out of (extra )?usage|rate limit exceeded|quota (exceeded|reached)/i;
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+
+function hour24(h: number, ap: string | undefined): number {
+  const a = ap?.toLowerCase();
+  if (a === "pm" && h < 12) return h + 12;
+  if (a === "am" && h === 12) return 0;
+  return h;
+}
+
 /**
  * When a usage limit lifts, from what agents print: Claude's `…|1731000000`, "resets 3pm",
- * "resets at 3:30 PM", "try again at 15:00", or "try again in 2 hours 5 minutes". Null if
- * it doesn't say. Clock times are taken as local and as the next time that comes round.
+ * "resets Nov 10, 3pm", "resets at 3:30 PM", "try again at 15:00", "try again at Nov 9th,
+ * 2026 3:05 PM", or "try again in 2 days 3 hours 5 minutes". Null if it doesn't say.
+ * Times are taken as local, and without a date as the next time that comes round.
  */
 export function limitResetAt(reason: string, now = new Date()): string | null {
   const epoch = /\|(\d{10})\b/.exec(reason);
   if (epoch) return new Date(Number(epoch[1]) * 1000).toISOString();
-  const rel = /\bin\s+(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:ute)?s?)?)?/i.exec(reason);
-  if (rel && (rel[1] || rel[2])) return new Date(now.getTime() + (Number(rel[1] ?? 0) * 60 + Number(rel[2] ?? 0)) * 60_000).toISOString();
+  const rel = /\b(?:in|after)\s+((?:\d+\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m)\b[\s,]*(?:and\s+)?)+)/i.exec(reason);
+  if (rel) {
+    let minutes = 0;
+    for (const m of rel[1]!.matchAll(/(\d+)\s*(d|h|m)/gi)) minutes += Number(m[1]) * ({ d: 1440, h: 60, m: 1 }[m[2]!.toLowerCase() as "d" | "h" | "m"] ?? 0);
+    if (minutes > 0) return new Date(now.getTime() + minutes * 60_000).toISOString();
+  }
+  const dated =
+    /\b(?:resets?|try again)(?:\s+(?:at|on))?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(?:(\d{4}),?\s*)?(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(
+      reason,
+    );
+  if (dated) {
+    const month = MONTHS.indexOf(dated[1]!.toLowerCase());
+    const day = Number(dated[2]);
+    const h = hour24(Number(dated[4]), dated[6]);
+    const m = Number(dated[5] ?? 0);
+    if (day < 1 || day > 31 || h > 23 || m > 59) return null;
+    const t = new Date(dated[3] ? Number(dated[3]) : now.getFullYear(), month, day, h, m, 0, 0);
+    if (!dated[3] && t.getTime() <= now.getTime()) t.setFullYear(t.getFullYear() + 1);
+    return t.toISOString();
+  }
   const clock = /\b(?:resets?|try again)(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(reason);
   if (clock) {
-    let h = Number(clock[1]);
+    const h = hour24(Number(clock[1]), clock[3]);
     const m = Number(clock[2] ?? 0);
-    const ap = clock[3]?.toLowerCase();
-    if (ap === "pm" && h < 12) h += 12;
-    if (ap === "am" && h === 12) h = 0;
     if (h > 23 || m > 59) return null;
     const t = new Date(now);
     t.setHours(h, m, 0, 0);

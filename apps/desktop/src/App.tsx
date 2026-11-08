@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
-import { branchForThread, isSafeBranchPrefix, newThreadId, type ChildWork, type Thread, type ThreadStatus } from "@lemonlime/protocol";
+import { branchForThread, isSafeBranchPrefix, newThreadId, type AgentKind, type ChildWork, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
 import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
@@ -40,6 +40,7 @@ import {
   stopLocalRunner,
 } from "./lib/native.ts";
 import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
+import { setAccountsRunnerPath, switchThreadsAccount } from "./lib/accounts.ts";
 import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
@@ -332,6 +333,8 @@ export function App() {
     });
   }, [settings.instructions, settings.stripCoauthors, settings.branchPrefix, settings.retryMaxWaitMinutes, settings.disabledSkills, settings.commandGuard]);
 
+  useEffect(() => setAccountsRunnerPath(settings.runnerPath), [settings.runnerPath]);
+
   // ── Local runners ────────────────────────────────────────
   // What each local runner is doing, including threads that aren't open (for notifications and keep awake).
   const [localStatus, setLocalStatus] = useState<Record<string, ThreadStatus>>({});
@@ -575,6 +578,24 @@ export function App() {
     [patchLocal],
   );
   const onLocalStatus = useCallback((id: string, status: ThreadStatus) => patchLocal(id, m => (m.status === status ? null : { ...m, status })), [patchLocal]);
+  // The thread moved to another agent past a usage limit (its runner keeps that too).
+  const onLocalAgent = useCallback(
+    (id: string, agent: { kind: AgentKind; model?: string | undefined }) =>
+      patchLocal(id, m => {
+        if (m.agent.kind === agent.kind && m.agent.model === agent.model) return null;
+        return { ...m, agent: { kind: agent.kind, ...(agent.model ? { model: agent.model } : {}) } };
+      }),
+    [patchLocal],
+  );
+  const localThreadsRef = useRef(localThreads);
+  localThreadsRef.current = localThreads;
+  const onSwitchOthers = useCallback(
+    (ids: string[], accountId: string) => {
+      const metas = localThreadsRef.current.filter(m => ids.includes(m.id)).map(meta => ({ meta, latestSeq: meta.lastSeq ?? 0 }));
+      return switchThreadsAccount(metas, settings.runnerPath, accountId);
+    },
+    [settings.runnerPath],
+  );
   const onLocalPromptSent = useCallback(
     (id: string) =>
       patchLocal(id, m => {
@@ -1331,6 +1352,9 @@ export function App() {
         suggestNext={prefs.suggestNextPrompt}
         onChildren={onChildren}
         shortcuts={prefs.shortcuts}
+        agents={agents}
+        onLocalAgent={onLocalAgent}
+        onSwitchOthers={onSwitchOthers}
         computerLevel={prefs.computerAccess[entry.mode === "cloud" ? entry.thread.id : ""] ?? "off"}
         onComputerLevel={level => {
           if (entry.mode !== "cloud") return;

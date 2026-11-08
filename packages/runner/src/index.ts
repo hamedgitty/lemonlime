@@ -34,6 +34,9 @@ export {
 export { gitConfigParameters, hookScript, installCoauthorHooks, stripCoauthorTrailers } from "./coauthors.ts";
 export { retryPrompt } from "./thread-runner.ts";
 export { RUNNER_VERSION } from "./version.ts";
+export * from "./accounts.ts";
+export { accountsCommand } from "./accounts-cli.ts";
+export { buildHandoff } from "./handoff.ts";
 export { createRedactor, secretsFromEnv } from "./redact.ts";
 export { LOGIN_PLANS, LoginSession, type AgentCredential, type LoginUpdate } from "./login.ts";
 export { credentialHelperCommand, gitCredential, RUNNER_BIN } from "./git-credential.ts";

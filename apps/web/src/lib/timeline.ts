@@ -16,7 +16,18 @@ export type TimelineItem =
   /** A plan from plan mode; `open` while nothing has been sent after it. */
   | { kind: "plan"; key: string; event: EventOf<"plan_proposal">; open: boolean }
   /** The agent's questions (answered in the form above the composer) and what came of them. */
-  | { kind: "question"; key: string; request: EventOf<"question_request">; result: EventOf<"question_result"> | null };
+  | { kind: "question"; key: string; request: EventOf<"question_request">; result: EventOf<"question_result"> | null }
+  /**
+   * The agent hit its usage limit: `open` while the thread is still stopped there (no turn
+   * since), `waitingUntil` while the runner waits to try again (null: it didn't say when).
+   */
+  | { kind: "limit"; key: string; event: EventOf<"limit_hit">; open: boolean; waiting: boolean; waitingUntil: string | null }
+  /** The thread carried on with another account or agent. */
+  | { kind: "switch"; key: string; event: EventOf<"agent_switch"> };
+
+/** Notices folded into the limit row: the runner waits to try again, or stopped waiting. */
+const LIMIT_WAITING = new Set(["usage_limited", "retry_scheduled"]);
+const LIMIT_NOT_WAITING = new Set(["retry_cancelled", "retry_given_up", "usage_limit_no_retry"]);
 
 export interface PendingMessage {
   clientMsgId: string;
@@ -41,6 +52,11 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   const approvals = new Map<string, Extract<TimelineItem, { kind: "approval" }>>();
   const questions = new Map<string, Extract<TimelineItem, { kind: "question" }>>();
   let lastPlan: Extract<TimelineItem, { kind: "plan" }> | null = null;
+  let openLimit: Extract<TimelineItem, { kind: "limit" }> | null = null;
+  const closeLimit = () => {
+    if (openLimit) Object.assign(openLimit, { open: false, waiting: false, waitingUntil: null });
+    openLimit = null;
+  };
   let streaming: Extract<TimelineItem, { kind: "agent" }> | null = null;
   let thinking: Extract<TimelineItem, { kind: "reasoning" }> | null = null;
   let prevAt: string | null = null;
@@ -127,13 +143,29 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         items.push({ kind: "diff", key: `e${e.seq}`, event: e });
         break;
       case "status_change":
+        if (e.to === "running") closeLimit();
         items.push({ kind: "status", key: `e${e.seq}`, event: e, ...(worked.has(e.seq) ? { workedMs: worked.get(e.seq)! } : {}) });
         break;
       case "error":
         items.push({ kind: "error", key: `e${e.seq}`, event: e });
         break;
       case "notice":
+        if (openLimit && LIMIT_WAITING.has(e.code)) {
+          openLimit.waiting = true;
+          openLimit.waitingUntil = e.untilAt ?? null;
+          break;
+        }
+        if (openLimit && LIMIT_NOT_WAITING.has(e.code)) Object.assign(openLimit, { waiting: false, waitingUntil: null });
         items.push({ kind: "notice", key: `e${e.seq}`, event: e });
+        break;
+      case "limit_hit":
+        closeLimit();
+        openLimit = { kind: "limit", key: `e${e.seq}`, event: e, open: true, waiting: false, waitingUntil: null };
+        items.push(openLimit);
+        break;
+      case "agent_switch":
+        closeLimit();
+        items.push({ kind: "switch", key: `e${e.seq}`, event: e });
         break;
       case "rewind":
         items.push({ kind: "notice", key: `e${e.seq}`, event: { ...e, type: "notice", code: "rewind", message: rewindMessage(e) } });

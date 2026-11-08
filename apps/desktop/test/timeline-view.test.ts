@@ -208,3 +208,16 @@ describe("the New divider", () => {
     expect(unreadIndex(items, 0)).toBe(-1);
   });
 });
+
+describe("standing warnings", () => {
+  it("keep only the latest disk warning, and leave other notices alone", async () => {
+    const { buildTimeline } = await import("../src/lib/timeline.ts");
+    const at = (s: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, s)).toISOString();
+    const items = buildTimeline([
+      { threadId: "tl-test-1", seq: 1, at: at(0), type: "notice", code: "disk_low", message: "3 GB left" },
+      { threadId: "tl-test-1", seq: 2, at: at(1), type: "notice", code: "other", message: "hello" },
+      { threadId: "tl-test-1", seq: 3, at: at(2), type: "notice", code: "disk_low", message: "2 GB left" },
+    ] as never);
+    expect(items.map(i => (i.kind === "notice" ? i.message : i.kind))).toEqual(["hello", "2 GB left"]);
+  });
+});

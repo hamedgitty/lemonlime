@@ -121,6 +121,19 @@ const LIMIT_NOT_WAITING = new Set(["retry_cancelled", "retry_given_up", "usage_l
  *
  * Events must be in seq order. Duplicate seqs are ignored.
  */
+/** Notices that repeat a standing condition rather than report something new. */
+const REPEATING_NOTICES = new Set(["disk_low"]);
+
+/** Keep only the latest of each standing warning (it says the same each time the runner starts). */
+export function latestStandingNotices(items: TimelineItem[]): TimelineItem[] {
+  const last = new Map<string, number>();
+  items.forEach((it, i) => {
+    if (it.kind === "notice" && REPEATING_NOTICES.has(it.code)) last.set(it.code, i);
+  });
+  if (!last.size) return items;
+  return items.filter((it, i) => !(it.kind === "notice" && REPEATING_NOTICES.has(it.code) && last.get(it.code) !== i));
+}
+
 export function buildTimeline(all: readonly ThreadEvent[], pending: readonly PendingMessage[] = []): TimelineItem[] {
   const events = withoutRewound(all);
   const items: TimelineItem[] = [];
@@ -416,7 +429,7 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
     if (confirmed.has(p.clientMsgId) || queuedIds.has(p.clientMsgId)) continue;
     items.push({ kind: "user", key: `p${p.clientMsgId}`, seq: null, at: p.at, text: p.text, pending: true });
   }
-  return items;
+  return latestStandingNotices(items);
 }
 
 /** Images the runner sends back for showing (see its `GET /attachments/<id>/image`). */

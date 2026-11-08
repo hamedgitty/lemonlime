@@ -1,6 +1,7 @@
 //! LemonLime desktop shell: the window, native dialogs, and the local runner
 //! processes that back local threads.
 
+mod accounts;
 mod computer;
 mod history;
 mod host_terminal;
@@ -41,6 +42,7 @@ pub fn run() {
         .manage(system::Awake::default())
         .manage(host_terminal::HostTerminals::default())
         .manage(computer::ComputerAccess::default())
+        .manage(accounts::AccountLogin::default())
         .invoke_handler(tauri::generate_handler![
             runner::start_local_runner,
             runner::stop_local_runner,
@@ -87,6 +89,10 @@ pub fn run() {
             plugins::remove_plugin,
             plugins::check_plugin_updates,
             plugins::plugins_folder,
+            accounts::agent_accounts,
+            accounts::account_login_start,
+            accounts::account_login_input,
+            accounts::account_login_cancel,
             confirm_quit,
         ])
         .build(tauri::generate_context!())
@@ -106,6 +112,7 @@ pub fn run() {
                 app.state::<previews::Tunnels>().stop_all();
                 app.state::<system::Awake>().release();
                 app.state::<host_terminal::HostTerminals>().close_all();
+                app.state::<accounts::AccountLogin>().stop();
             }
             _ => {}
         });

@@ -78,6 +78,28 @@ struct StartRequest {
     workdir: String,
     base_branch: Option<String>,
     runner_path: Option<String>,
+    settings: RunnerSettings,
+}
+
+/// The user's settings for local threads, passed to the runner as flags.
+#[derive(Default)]
+struct RunnerSettings {
+    /// Custom instructions; written to a file in the app's data folder (--instructions-file).
+    instructions: Option<String>,
+    strip_coauthors: bool,
+    branch_prefix: Option<String>,
+    retry_max_wait_minutes: Option<u32>,
+    disabled_skills: Vec<String>,
+    /// False turns the command guard off (--no-command-guard).
+    command_guard: bool,
+}
+
+/// What a skill name may look like, so nothing odd ends up on the runner's command line.
+fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && !name.starts_with(['-', '.'])
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Starts the runner for a thread, or returns the one already running.
@@ -93,8 +115,22 @@ pub async fn start_local_runner(
     workdir: String,
     base_branch: Option<String>,
     runner_path: Option<String>,
+    instructions: Option<String>,
+    strip_coauthors: Option<bool>,
+    branch_prefix: Option<String>,
+    retry_max_wait_minutes: Option<f64>,
+    disabled_skills: Option<Vec<String>>,
+    command_guard: Option<bool>,
 ) -> Result<RunnerInfo, String> {
-    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, workdir, base_branch, runner_path };
+    let settings = RunnerSettings {
+        instructions: non_empty(instructions),
+        strip_coauthors: strip_coauthors.unwrap_or(false),
+        branch_prefix: non_empty(branch_prefix),
+        retry_max_wait_minutes: retry_max_wait_minutes.filter(|m| m.is_finite() && *m > 0.0).map(|m| m.round().min(u32::MAX as f64) as u32),
+        disabled_skills: disabled_skills.unwrap_or_default().into_iter().filter(|s| valid_skill_name(s)).collect(),
+        command_guard: command_guard.unwrap_or(true),
+    };
+    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, workdir, base_branch, runner_path, settings };
     tauri::async_runtime::spawn_blocking(move || start_blocking(&app, req))
         .await
         .map_err(|e| format!("Could not start the runner: {e}"))?
@@ -193,6 +229,21 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
     let log_dir = app.path().app_log_dir().map_err(|e| format!("Could not find the log folder: {e}"))?;
     fs::create_dir_all(&log_dir).map_err(|e| format!("Could not create {}: {e}", log_dir.display()))?;
     let log_path = log_dir.join(format!("runner-{}.log", req.thread_id));
+    // Instructions go in a file of their own per thread; the runner reads it when it starts.
+    let instructions_path = match &req.settings.instructions {
+        Some(text) => {
+            let dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("Could not find the app's data folder: {e}"))?
+                .join("instructions");
+            fs::create_dir_all(&dir).map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
+            let file = dir.join(format!("{}.md", req.thread_id));
+            fs::write(&file, text).map_err(|e| format!("Could not save the instructions: {e}"))?;
+            Some(file)
+        }
+        None => None,
+    };
 
     let state = app.state::<Runners>();
     let (info, log_path) = {
@@ -239,6 +290,26 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         }
         if let Some(b) = non_empty(req.base_branch) {
             cmd.arg("--base").arg(b);
+        }
+        let s = &req.settings;
+        if let Some(file) = &instructions_path {
+            cmd.arg("--instructions-file").arg(file);
+        }
+        if s.strip_coauthors {
+            cmd.arg("--strip-coauthors");
+        }
+        // The runner checks the prefix is a safe branch name; "--" would read as a flag, so not that.
+        if let Some(p) = s.branch_prefix.as_ref().filter(|p| !p.starts_with('-')) {
+            cmd.arg("--branch-prefix").arg(p);
+        }
+        if let Some(m) = s.retry_max_wait_minutes {
+            cmd.arg("--retry-max-wait").arg(m.to_string());
+        }
+        if !s.disabled_skills.is_empty() {
+            cmd.arg("--disable-skills").arg(s.disabled_skills.join(","));
+        }
+        if !s.command_guard {
+            cmd.arg("--no-command-guard");
         }
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.
         if let Ok(pty) = app.path().resolve("node-pty", tauri::path::BaseDirectory::Resource) {

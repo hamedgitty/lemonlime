@@ -126,15 +126,7 @@ export function StatusDot({ status, className }: { status: DisplayStatus; classN
 }
 
 /** A lemon-and-lime mark drawn with CSS so it needs no image asset. */
-export function LogoMark({ size = 24 }: { size?: number }) {
-  return (
-    <span aria-hidden="true" className="relative inline-block shrink-0" style={{ width: size, height: size }}>
-      <span className="absolute inset-0 rounded-full bg-lime" style={{ clipPath: "inset(0 0 0 50%)" }} />
-      <span className="absolute inset-0 rounded-full bg-lemon" style={{ clipPath: "inset(0 50% 0 0)" }} />
-      <span className="absolute inset-[22%] rounded-full border-2 border-rind/25" />
-    </span>
-  );
-}
+export { LogoMark } from "./LogoMark.tsx";
 
 export function SegmentedControl<T extends string>({
   value,

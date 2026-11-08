@@ -229,16 +229,20 @@ function renderBlocks(blocks: Block[], onLink?: (url: string) => void): ReactNod
 
 function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const highlighted = useHighlighted(code, lang);
+  // The copy button sits in a sticky strip as tall as itself, so on a long block it stays in
+  // view while the block scrolls past, and never hangs below the block's end.
   return (
     <div className="group/code relative">
+      <div className="pointer-events-none sticky top-1.5 z-[1] -mb-8 flex h-8 justify-end pt-1.5 pr-1.5">
+        <CopyButton
+          text={code}
+          label="Copy code"
+          className="pointer-events-auto opacity-0 transition-opacity group-hover/code:opacity-100 focus-visible:opacity-100"
+        />
+      </div>
       <pre className={highlighted ? "md-code" : undefined}>
         <code>{highlighted ?? code}</code>
       </pre>
-      <CopyButton
-        text={code}
-        label="Copy code"
-        className="absolute top-1.5 right-1.5 opacity-0 transition-opacity group-hover/code:opacity-100 focus-visible:opacity-100"
-      />
     </div>
   );
 }

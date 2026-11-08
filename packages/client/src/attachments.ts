@@ -65,3 +65,20 @@ export async function uploadAttachment(o: UploadOptions): Promise<string> {
   o.onProgress?.(o.file.size, o.file.size);
   return o.id;
 }
+
+/** A sent image, fetched back from the thread's runner (`GET /attachments/<id>/image`). */
+export async function fetchAttachmentImage(o: {
+  base: string;
+  token: () => Promise<string>;
+  id: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<Blob> {
+  const f = o.fetchImpl ?? fetch;
+  const res = await f(`${o.base}/attachments/${encodeURIComponent(o.id)}/image`, {
+    headers: { authorization: `Bearer ${await o.token()}` },
+    ...(o.signal ? { signal: o.signal } : {}),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.blob();
+}

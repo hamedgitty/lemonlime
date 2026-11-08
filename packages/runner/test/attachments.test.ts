@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { branchForThread, RunnerCapabilities, signToken, type Thread } from "@lemonlime/protocol";
 import { startServer, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 import { cleanName, MAX_IMAGE_BYTES } from "../src/attachments.ts";
-import { runnerHttpBase, uploadAttachment } from "@lemonlime/client";
+import { fetchAttachmentImage, runnerHttpBase, uploadAttachment } from "@lemonlime/client";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const cleanups: (() => unknown)[] = [];
@@ -45,7 +45,7 @@ async function boot() {
   const base = `http://127.0.0.1:${server.port}`;
   const token = await signToken({ threadId: thread.id, scope: "client", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
   const call = (path: string, init: RequestInit = {}) => fetch(`${base}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, ...init.headers } });
-  return { dir, runner, prompts, base, call };
+  return { dir, runner, prompts, base, call, token };
 }
 
 describe("attachments", () => {
@@ -105,5 +105,45 @@ describe("attachments", () => {
     expect(progress.at(-1)).toBe(10_000);
     expect(new Uint8Array(readFileSync(join(dir, ".lemonlime-attachments/upload-0003/data.bin"))).every((b, i) => b === i % 251)).toBe(true);
     expect(runnerHttpBase("wss://host.example/sandbox/lemonlime-abc123/ws")).toBe("https://host.example/sandbox/lemonlime-abc123");
+  });
+
+  it("sends a sent image back, only to the thread's own clients and only from its attachments folder", async () => {
+    const { dir, base, call, token } = await boot();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+    await uploadAttachment({ base, token: async () => token, file: Object.assign(new Blob([png]), { name: "shot.png" }), id: "upload-0004" });
+
+    const res = await call("/attachments/upload-0004/image");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(Buffer.from(await res.arrayBuffer()).equals(png)).toBe(true);
+    const blob = await fetchAttachmentImage({ base, token: async () => token, id: "upload-0004" });
+    expect(blob.size).toBe(png.length);
+
+    // No token, another thread's token, or a runner token: refused.
+    expect((await fetch(`${base}/attachments/upload-0004/image`)).status).toBe(401);
+    const other = await signToken({ threadId: "another-thread", scope: "client", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
+    expect((await fetch(`${base}/attachments/upload-0004/image`, { headers: { authorization: `Bearer ${other}` } })).status).toBe(401);
+    const agent = await signToken({ threadId: "attach-thread-1", scope: "runner", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
+    expect((await fetch(`${base}/attachments/upload-0004/image`, { headers: { authorization: `Bearer ${agent}` } })).status).toBe(401);
+
+    // Odd ids and paths never leave the folder.
+    expect((await call("/attachments/..%2F..%2Fetc/image")).status).toBe(400);
+    expect((await call("/attachments/%2E%2E/image")).status).not.toBe(200);
+    expect((await call("/attachments/upload-9999/image")).status).toBe(404);
+
+    // Not an image: not served.
+    await uploadAttachment({ base, token: async () => token, file: Object.assign(new Blob(["secret"]), { name: "notes.txt" }), id: "upload-0005" });
+    expect((await call("/attachments/upload-0005/image")).status).toBe(415);
+
+    // A link planted in the folder, pointing outside it, is not followed.
+    writeFileSync(join(dir, "outside.png"), png);
+    mkdirSync(join(dir, ".lemonlime-attachments", "upload-0006"));
+    symlinkSync(join(dir, "outside.png"), join(dir, ".lemonlime-attachments", "upload-0006", "x.png"));
+    expect((await call("/attachments/upload-0006/image")).status).toBe(404);
+    mkdirSync(join(dir, "elsewhere"));
+    writeFileSync(join(dir, "elsewhere", "y.png"), png);
+    symlinkSync(join(dir, "elsewhere"), join(dir, ".lemonlime-attachments", "upload-0007"));
+    expect((await call("/attachments/upload-0007/image")).status).toBe(404);
   });
 });

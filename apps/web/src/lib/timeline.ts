@@ -1,12 +1,15 @@
-import { rewindMessage, withoutRewound, type EventOf, type ThreadEvent } from "@lemonlime/protocol";
+import { elapsedMs, rewindMessage, turnSpans, withoutRewound, type EventOf, type ThreadEvent } from "@lemonlime/protocol";
 
 /** What the thread view renders, built from the raw event history. */
 export type TimelineItem =
   | { kind: "user"; key: string; text: string; at: string; pending?: boolean; queued?: boolean }
   | { kind: "agent"; key: string; text: string; at: string; streaming: boolean }
+  /** The agent's reasoning; it took from `startedAt` (the event before it) to `endedAt`. */
+  | { kind: "reasoning"; key: string; text: string; at: string; streaming: boolean; startedAt: string; endedAt: string }
   | { kind: "tool"; key: string; call: EventOf<"tool_call">; result: EventOf<"tool_result"> | null }
   | { kind: "diff"; key: string; event: EventOf<"file_diff"> }
-  | { kind: "status"; key: string; event: EventOf<"status_change"> }
+  /** `workedMs`: on the status change that ended a turn, how long the turn took. */
+  | { kind: "status"; key: string; event: EventOf<"status_change">; workedMs?: number }
   | { kind: "error"; key: string; event: EventOf<"error"> }
   | { kind: "notice"; key: string; event: EventOf<"notice"> }
   | { kind: "approval"; key: string; request: EventOf<"approval_request">; result: EventOf<"approval_result"> | null }
@@ -24,6 +27,8 @@ export interface PendingMessage {
 /**
  * Turn events (sorted by seq) into timeline items:
  * - streaming `agent_message` chunks are joined; a whole message replaces the chunks before it,
+ *   and `agent_reasoning` streams the same way,
+ * - the status change that ends a turn says how long the turn took,
  * - each `tool_result` is attached to its `tool_call`,
  * - messages in the runner's queue show as queued, other optimistic messages as pending,
  *   until the runner echoes them back.
@@ -37,9 +42,18 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   const questions = new Map<string, Extract<TimelineItem, { kind: "question" }>>();
   let lastPlan: Extract<TimelineItem, { kind: "plan" }> | null = null;
   let streaming: Extract<TimelineItem, { kind: "agent" }> | null = null;
+  let thinking: Extract<TimelineItem, { kind: "reasoning" }> | null = null;
+  let prevAt: string | null = null;
+  const worked = new Map<number, number>();
+  for (const t of turnSpans(events)) {
+    const ms = t.endAt && t.endSeq !== null ? elapsedMs(t.startAt, t.endAt) : null;
+    if (ms !== null) worked.set(t.endSeq!, ms);
+  }
 
   let queue: EventOf<"queue_update">["queue"] = [];
   for (const e of events) {
+    const before = prevAt;
+    if (e.type !== "queue_update") prevAt = e.at;
     // The queue changing doesn't interrupt what the agent is writing.
     if (e.type === "queue_update") {
       queue = e.queue;
@@ -47,8 +61,28 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
     }
     // Neither do these, which show around the composer rather than in the timeline.
     if (e.type === "todo_snapshot" || e.type === "context_usage" || e.type === "options_change") continue;
-    if (e.type !== "agent_message") streaming = null;
+    // Anything else ends a streaming message or reasoning.
+    if (e.type !== "agent_message" && streaming) {
+      streaming.streaming = false;
+      streaming = null;
+    }
+    if (e.type !== "agent_reasoning" && thinking) {
+      thinking.streaming = false;
+      thinking = null;
+    }
     switch (e.type) {
+      case "agent_reasoning":
+        if (thinking) {
+          thinking.text = e.partial ? thinking.text + e.text : e.text;
+          thinking.streaming = e.partial;
+          thinking.endedAt = e.at;
+          if (!e.partial) thinking = null;
+        } else {
+          const item = { kind: "reasoning" as const, key: `e${e.seq}`, text: e.text, at: e.at, streaming: e.partial, startedAt: before ?? e.at, endedAt: e.at };
+          items.push(item);
+          if (e.partial) thinking = item;
+        }
+        break;
       case "user_message":
         if (lastPlan) lastPlan.open = false;
         if (e.clientMsgId) echoed.add(e.clientMsgId);
@@ -93,7 +127,7 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
         items.push({ kind: "diff", key: `e${e.seq}`, event: e });
         break;
       case "status_change":
-        items.push({ kind: "status", key: `e${e.seq}`, event: e });
+        items.push({ kind: "status", key: `e${e.seq}`, event: e, ...(worked.has(e.seq) ? { workedMs: worked.get(e.seq)! } : {}) });
         break;
       case "error":
         items.push({ kind: "error", key: `e${e.seq}`, event: e });

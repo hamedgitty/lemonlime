@@ -474,7 +474,8 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
  * client token (`Authorization: Bearer`):
  * `POST /attachments` {id, name, size} starts an upload; `PUT /attachments/<id>?offset=N`
  * sends the next piece (up to 4 MB); `GET /attachments/<id>` says how much has arrived,
- * to resume after a dropped connection.
+ * to resume after a dropped connection. `GET /attachments/<id>/image` sends a sent image
+ * back, for the apps to show in the thread.
  */
 async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: string, runner: ThreadRunner, opts: ServerOptions): Promise<void> {
   if (req.method === "OPTIONS") {
@@ -655,6 +656,22 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
       from: p.from === "cloud" ? "the cloud" : "another computer",
     });
     return r.ok ? reply(res, 200, { ok: true, already: r.already }) : reply(res, r.status, { error: r.error });
+  }
+  const sent = /^\/attachments\/([^/]+)\/image$/.exec(path);
+  if (sent && req.method === "GET") {
+    const image = runner.attachments.image(sent[1]!);
+    if ("error" in image) return reply(res, image.status, { error: image.error });
+    res.writeHead(200, {
+      "content-type": image.type,
+      "content-length": String(image.size),
+      "cache-control": "private, max-age=3600",
+      "x-content-type-options": "nosniff",
+      // Shown as an image only: an SVG opened on its own can't run anything.
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+      ...CORS,
+    });
+    res.end(readFileSync(image.path));
+    return;
   }
   const id = path.split("/")[2];
   if (path === "/attachments" && req.method === "POST") {

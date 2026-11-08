@@ -307,5 +307,5 @@ function newId(): string {
   return `m-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 export { TerminalClient, terminalUrl, type TerminalClientOptions, type TerminalState } from "./terminal.ts";
-export { runnerHttpBase, uploadAttachment, type UploadOptions } from "./attachments.ts";
+export { fetchAttachmentImage, runnerHttpBase, uploadAttachment, type UploadOptions } from "./attachments.ts";
 export { teleportThread, type RunnerAddress, type TeleportProgress } from "./teleport.ts";

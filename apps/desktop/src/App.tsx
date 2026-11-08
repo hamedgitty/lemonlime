@@ -1121,8 +1121,12 @@ export function App() {
             : {}),
         }
       : {};
+    const summary = summaries.find(x => x.id === summaryId);
+    const seenAt = prefs.seenSeq[summaryId] ?? -1;
+    const unreadAfterSeq = summary && seenAt >= 0 && latestSeq(summary) > seenAt ? seenAt : null;
     return (
       <ThreadView
+        unreadAfterSeq={unreadAfterSeq}
         key={`${entry.mode}:${summaryId}`}
         {...paneProps}
         entry={entry}

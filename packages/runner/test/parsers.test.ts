@@ -48,11 +48,11 @@ describe("Codex exec --json", () => {
       parseCodexLine(
         JSON.stringify({ type: "item.completed", item: { id: "c1", type: "command_execution", aggregated_output: "boom", exit_code: 1, status: "failed" } }),
       ).events,
-    ).toEqual([{ type: "tool_result", callId: "c1", output: "boom", isError: true }]);
+    ).toEqual([{ type: "tool_result", callId: "c1", output: "boom", isError: true, exitCode: 1 }]);
     expect(parseCodexLine(JSON.stringify({ type: "item.completed", item: { id: "m1", type: "agent_message", text: "Done." } })).events).toEqual([
       { type: "agent_message", text: "Done.", partial: false },
     ]);
-    expect(parseCodexLine(JSON.stringify({ type: "item.completed", item: { id: "r", type: "reasoning", text: "hmm" } })).events).toEqual([]);
+    expect(parseCodexLine(JSON.stringify({ type: "item.completed", item: { id: "r", type: "error", message: "unknown model" } })).events).toEqual([]);
   });
 
   it("reports failures", () => {

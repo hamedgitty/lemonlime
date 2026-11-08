@@ -207,6 +207,10 @@ export function parseCodexLine(line: string, todos: CodexTodos = new CodexTodos(
         case "agent_message":
           if (done && item.text?.trim()) events.push({ type: "agent_message", text: item.text, partial: false });
           break;
+        case "reasoning":
+          // A summary of the model's reasoning, sent once it is done.
+          if (done && item.text?.trim()) events.push({ type: "agent_reasoning", text: item.text.trim(), partial: false });
+          break;
         case "command_execution":
           if (!done) events.push({ type: "tool_call", callId: id, name: "shell", input: { command: item.command } });
           else
@@ -215,6 +219,7 @@ export function parseCodexLine(line: string, todos: CodexTodos = new CodexTodos(
               callId: id,
               output: item.aggregated_output ?? "",
               isError: item.status === "failed" || (typeof item.exit_code === "number" && item.exit_code !== 0),
+              ...(typeof item.exit_code === "number" && Number.isInteger(item.exit_code) ? { exitCode: item.exit_code } : {}),
             });
           break;
         case "file_change":
@@ -239,7 +244,7 @@ export function parseCodexLine(line: string, todos: CodexTodos = new CodexTodos(
         // "error" items are Codex's non-fatal warnings (unknown model metadata, skills trimmed to
         // fit, ...). They don't end the turn, so they aren't LemonLime errors; real failures
         // arrive as top-level "error" / "turn.failed" lines.
-        // reasoning and other internal items are not shown either.
+        // Other internal items are not shown either.
       }
       break;
     }

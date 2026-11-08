@@ -171,3 +171,37 @@ mod tests {
         assert_eq!(split_utf8(&joined).0, "éllo");
     }
 }
+
+#[cfg(test)]
+mod live_checks {
+    use super::*;
+
+    /// A real shell in a real pseudo-terminal: type a command, read its answer.
+    #[test]
+    #[ignore]
+    fn live_runs_a_shell() {
+        let pty = native_pty_system().openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 }).unwrap();
+        let mut cmd = CommandBuilder::new(default_shell());
+        cmd.env("PATH", paths::search_path());
+        let mut child = pty.slave.spawn_command(cmd).unwrap();
+        drop(pty.slave);
+        let mut reader = pty.master.try_clone_reader().unwrap();
+        let mut writer = pty.master.take_writer().unwrap();
+        writer.write_all(b"echo lemon$((1+1))lime; exit\r").unwrap();
+        let mut all = Vec::new();
+        let mut buf = [0u8; 4096];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            all.extend_from_slice(&buf[..n]);
+            if String::from_utf8_lossy(&all).contains("lemon2lime") {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let text = String::from_utf8_lossy(&all);
+        assert!(text.contains("lemon2lime"), "shell said: {text}");
+        println!("shell answered");
+    }
+}

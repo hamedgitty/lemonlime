@@ -131,7 +131,9 @@ fn signed_in(kind: &str, path: &PathBuf) -> Option<bool> {
             c.args(["login", "status"]);
             run_with_timeout(c, Duration::from_secs(8)).map(|(ok, text)| ok && !text.to_lowercase().contains("not logged in"))
         }
-        "opencode" => home().map(|h| h.join(".local").join("share").join("opencode").join("auth.json").is_file()),
+        // OpenCode can also run on API keys from the environment or on free models, so no saved
+        // sign-in doesn't mean it can't work: unknown rather than "not signed in".
+        "opencode" => home().filter(|h| h.join(".local").join("share").join("opencode").join("auth.json").is_file()).map(|_| true),
         _ => None,
     }
 }
@@ -462,5 +464,43 @@ mod tests {
         let long = "x".repeat(5000) + "done";
         assert!(tail(&long, 10).ends_with("done"));
         assert_eq!(tail("short", 10), "short");
+    }
+}
+
+#[cfg(test)]
+mod live_checks {
+    //! Run on a real computer with `cargo test --lib live_ -- --ignored --nocapture`.
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn live_detects_agents_and_editors() {
+        for cli in AGENT_CLIS {
+            let a = detect_one(cli);
+            println!("{} installed={} version={:?} signed_in={:?} path={:?}", a.kind, a.installed, a.version, a.signed_in, a.path);
+        }
+        let editors: Vec<&str> = EDITORS.iter().filter(|e| editor_installed(e)).map(|e| e.name).collect();
+        println!("editors: {editors:?}");
+    }
+
+    #[test]
+    #[ignore]
+    fn live_keeps_awake_and_lets_go() {
+        let hold = hold_awake(false).expect("hold");
+        #[cfg(target_os = "macos")]
+        {
+            let out = Command::new("/usr/bin/pmset").args(["-g", "assertions"]).output().unwrap();
+            let text = String::from_utf8_lossy(&out.stdout);
+            assert!(text.contains("caffeinate"), "no caffeinate assertion:\n{text}");
+            println!("caffeinate assertion present");
+        }
+        hold.release();
+        #[cfg(target_os = "macos")]
+        {
+            std::thread::sleep(Duration::from_millis(300));
+            let out = Command::new("/usr/bin/pmset").args(["-g", "assertions"]).output().unwrap();
+            assert!(!String::from_utf8_lossy(&out.stdout).contains("caffeinate"), "assertion still held");
+            println!("released");
+        }
     }
 }

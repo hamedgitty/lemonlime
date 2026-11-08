@@ -14,6 +14,7 @@ import { commitSubject, GitWorkspace } from "./git.ts";
 import { type AgentCredential, LoginSession, type LoginUpdate } from "./login.ts";
 import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
+import { installPluginsIntoThread, loadEnabledPlugins } from "./agent-plugins.ts";
 
 export interface ThreadRunnerOptions {
   /** Shortest wait before continuing after a usage limit (default 5 s; tests use less). */
@@ -45,6 +46,11 @@ export interface ThreadRunnerOptions {
   bundledSkills?: boolean;
   /** More skill folders (each with a SKILL.md inside) to copy into the thread. */
   extraSkillDirs?: string[];
+  /**
+   * The user's agent plugins: a folder holding plugins.json and one folder per plugin
+   * (see agent-plugins.ts). The enabled ones are put into the thread.
+   */
+  pluginsDir?: string;
   /** Secret values (by name) to keep out of every event. */
   redact?: Record<string, string>;
   /** Push the thread branch to origin after every turn that commits (cloud threads). */
@@ -146,7 +152,11 @@ export class ThreadRunner {
   /** Every clientMsgId this thread has accepted, so a resend never runs twice. */
   private readonly seen = new Set<string>();
 
+  /** Session options for the main agent and its subagents; plugins add MCP servers in init(). */
+  private readonly sessionOpts: Omit<SessionOptions, "cwd" | "saved">;
+
   constructor(private readonly opts: ThreadRunnerOptions) {
+    this.sessionOpts = { ...opts.session };
     this.redactions = { ...opts.redact };
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
@@ -154,7 +164,7 @@ export class ThreadRunner {
     this.attachments = new Attachments(opts.workdir);
     this.subagents = new Subagents({
       adapter: opts.adapter,
-      session: opts.session,
+      session: this.sessionOpts,
       cwd: opts.workdir,
       toMain: (text, id) => {
         if (!this.closing) this.sendMessage(text, `subagent-${id}`);
@@ -233,8 +243,9 @@ export class ThreadRunner {
       this.headCommit = await this.git.head();
       await this.git.excludePath(`${ATTACHMENTS_DIR}/`);
     }
+    let skills: string[] = [];
     try {
-      await installSkills({
+      skills = await installSkills({
         workdir: this.opts.workdir,
         kind: this.opts.adapter.kind,
         git: this.git,
@@ -248,6 +259,7 @@ export class ThreadRunner {
         message: `Couldn't add LemonLime's skills to this thread: ${err instanceof Error ? err.message : String(err)}`,
       });
     }
+    await this.installPlugins(skills);
     this.agentState = saved?.agentState ?? {};
     if (typeof saved?.recap === "string" && saved.recap) this.recap = saved.recap;
     this.session = this.newSession();
@@ -288,6 +300,56 @@ export class ThreadRunner {
     if (this.queue.length) this.publishQueue();
     this.startNext();
     if (this.opts.checkAgentVersion) void this.checkVersion();
+  }
+
+  /** Where the list of files plugins put into the workdir is kept, so they can be removed later. */
+  private get pluginFilesPath(): string | null {
+    return this.opts.dataDir ? join(this.opts.dataDir, "plugin-files.json") : null;
+  }
+
+  /** Put the user's enabled agent plugins into the thread (see agent-plugins.ts). */
+  private async installPlugins(takenSkills: string[]): Promise<void> {
+    const listFile = this.pluginFilesPath;
+    let previous: string[] = [];
+    try {
+      if (listFile && existsSync(listFile)) {
+        const parsed = JSON.parse(readFileSync(listFile, "utf8")) as unknown;
+        if (Array.isArray(parsed)) previous = parsed.filter((p): p is string => typeof p === "string");
+      }
+    } catch {
+      /* start afresh */
+    }
+    if (!this.opts.pluginsDir && previous.length === 0) return;
+    try {
+      const { plugins, problems } = this.opts.pluginsDir ? loadEnabledPlugins(this.opts.pluginsDir) : { plugins: [], problems: [] };
+      const result = await installPluginsIntoThread({
+        workdir: this.opts.workdir,
+        kind: this.opts.adapter.kind,
+        git: this.git,
+        plugins,
+        takenSkills,
+        previous,
+      });
+      if (Object.keys(result.mcpServers).length) this.sessionOpts.mcpServers = result.mcpServers;
+      if (listFile) {
+        mkdirSync(this.opts.dataDir!, { recursive: true });
+        writeFileSync(listFile, JSON.stringify(result.paths));
+      }
+      const notes = [...problems.map(p => `${p.name}: ${p.message}`), ...result.warnings];
+      if (notes.length) {
+        this.store.append({
+          type: "notice",
+          code: "plugins_problem",
+          message: `Some of your plugins couldn't be fully added to this thread. ${notes.join(" ")}`,
+        });
+      }
+    } catch (err) {
+      this.store.append({
+        type: "notice",
+        code: "plugins_not_installed",
+        message: `Couldn't add your plugins to this thread: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
   }
 
   /** The agent CLI's version, once known (null if it couldn't be found out). */
@@ -584,7 +646,7 @@ export class ThreadRunner {
   }
 
   private newSession(): AgentSession {
-    return this.opts.adapter.createSession({ ...this.opts.session, cwd: this.opts.workdir, saved: this.agentState });
+    return this.opts.adapter.createSession({ ...this.sessionOpts, cwd: this.opts.workdir, saved: this.agentState });
   }
 
   private async runTurn(prompt: string, abort: AbortController): Promise<void> {

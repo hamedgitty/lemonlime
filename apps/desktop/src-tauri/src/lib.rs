@@ -4,6 +4,7 @@
 mod computer;
 mod history;
 mod paths;
+mod plugins;
 mod previews;
 mod repo;
 mod runner;
@@ -68,6 +69,15 @@ pub fn run() {
             system::save_text_file,
             history::scan_agent_history,
             history::import_agent_sessions,
+            plugins::list_plugins,
+            plugins::read_plugin,
+            plugins::install_plugin_from_git,
+            plugins::install_plugin_from_folder,
+            plugins::set_plugin_enabled,
+            plugins::update_plugin,
+            plugins::remove_plugin,
+            plugins::check_plugin_updates,
+            plugins::plugins_folder,
             confirm_quit,
         ])
         .build(tauri::generate_context!())

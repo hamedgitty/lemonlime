@@ -245,6 +245,10 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         if let Some(b) = non_empty(req.base_branch) {
             cmd.arg("--base").arg(b);
         }
+        // The user's agent plugins; the runner puts the enabled ones into the thread.
+        if let Some(plugins) = crate::plugins::plugins_dir().filter(|d| d.is_dir()) {
+            cmd.arg("--plugins-dir").arg(plugins);
+        }
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.
         if let Ok(pty) = app.path().resolve("node-pty", tauri::path::BaseDirectory::Resource) {
             if pty.join("node_modules").is_dir() {

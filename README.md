@@ -107,6 +107,7 @@ sets up the dashboard, HTTPS and Docker sandboxes on a fresh Ubuntu 24.04 server
 ## Docs
 
 - [Runner](docs/runner.md): command line, queueing, approvals, skills, safety limits
+- [Agent plugins](docs/plugins.md): skills, commands, subagents and MCP servers for every thread
 - [Self-hosting](docs/self-hosting.md)
 - [Contributing](CONTRIBUTING.md) and [security reports](SECURITY.md)
 

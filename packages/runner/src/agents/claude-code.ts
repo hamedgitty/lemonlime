@@ -53,7 +53,8 @@ class ClaudeCodeSession implements AgentSession {
   private async mcpConfig(approvals: boolean): Promise<string> {
     if (approvals && !this.bridge) this.bridge = await ApprovalBridge.start(req => (this.ask ? this.ask(req) : Promise.resolve("deny")));
     this.configDir ??= mkdtempSync(join(tmpdir(), "lemonlime-claude-"));
-    const servers: Record<string, unknown> = {};
+    // The user's plugin servers first, so LemonLime's own always win a name clash.
+    const servers: Record<string, unknown> = { ...this.opts.mcpServers };
     if (approvals && this.bridge) {
       servers.lemonlime = {
         command: approvalMcp()[0],
@@ -76,7 +77,8 @@ class ClaudeCodeSession implements AgentSession {
     const thinking = { low: 4_000, medium: 12_000, high: 31_999, xhigh: 31_999, max: 31_999, ultra: 31_999 }[this.opts.reasoning ?? ""];
     if (thinking) env.MAX_THINKING_TOKENS = String(thinking);
     // Subagent tools, allowed without asking (starting one changes nothing by itself).
-    if (this.opts.subagents !== false && this.opts.autonomy !== "edits") args.push("--mcp-config", await this.mcpConfig(false));
+    const pluginServers = Object.keys(this.opts.mcpServers ?? {}).length > 0;
+    if ((this.opts.subagents !== false || pluginServers) && this.opts.autonomy !== "edits") args.push("--mcp-config", await this.mcpConfig(false));
     if (this.opts.subagents !== false) args.push("--allowedTools", `mcp__${SUBAGENTS_SERVER}`);
     // Hooks run even with permissions skipped, so the guard holds at every autonomy level.
     if (this.opts.commandGuard !== false) args.push("--settings", JSON.stringify(commandGuardSettings()));

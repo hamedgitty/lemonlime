@@ -1,4 +1,5 @@
 import type { AgentKind, NewEvent } from "@lemonlime/protocol";
+import type { McpServerConfig } from "../agent-plugins.ts";
 import type { ApprovalDecision, ApprovalRequest } from "../approvals.ts";
 
 /**
@@ -24,6 +25,8 @@ export interface SessionOptions {
   reasoning?: string;
   /** Offer the subagents tools (an MCP server). On unless set to false (side chats). */
   subagents?: boolean;
+  /** MCP servers from the user's agent plugins, by name (Claude Code and Codex use them). */
+  mcpServers?: Record<string, McpServerConfig>;
 }
 
 export interface TurnContext {

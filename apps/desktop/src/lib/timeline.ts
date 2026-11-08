@@ -538,3 +538,40 @@ export function foldFinishedTurns(items: readonly TimelineItem[]): Array<Timelin
   }
   return out;
 }
+
+// ─── What's waiting on the user (the stack above the composer) ───────────────
+
+export type ApprovalItem = Extract<TimelineItem, { kind: "approval" }>;
+
+/** A message in the runner's queue, waiting for the agent to finish its turn. */
+export interface QueuedMessage {
+  clientMsgId: string;
+  key: string;
+  text: string;
+  at: string;
+  /** Its place in line (0 first) and how many are waiting. */
+  index: number;
+  count: number;
+}
+
+/**
+ * What the agent is waiting on the user for, and what the user has waiting for the agent:
+ * approvals not answered yet (oldest first) and queued messages (in the order they'll run).
+ * They show above the composer; the timeline keeps a one-line record of each approval.
+ */
+export function waitingOnYou(items: readonly TimelineItem[]): { approvals: ApprovalItem[]; queued: QueuedMessage[] } {
+  const approvals: ApprovalItem[] = [];
+  const queued: QueuedMessage[] = [];
+  for (const it of items) {
+    if (it.kind === "approval" && it.state === "waiting") approvals.push(it);
+    else if (it.kind === "user" && it.queued)
+      queued.push({ clientMsgId: it.queued.clientMsgId, key: it.key, text: it.text, at: it.at, index: it.queued.index, count: it.queued.count });
+  }
+  queued.sort((a, b) => a.index - b.index);
+  return { approvals, queued };
+}
+
+/** The timeline without the queued messages (they show above the composer instead). */
+export function withoutQueued(items: TimelineItem[]): TimelineItem[] {
+  return items.some(it => it.kind === "user" && it.queued) ? items.filter(it => !(it.kind === "user" && it.queued)) : items;
+}

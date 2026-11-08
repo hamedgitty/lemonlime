@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { TextQuote } from "lucide-react";
+import { GitFork, TextQuote } from "lucide-react";
 
 /**
- * Select text in an agent's message and a small "Quote" button appears by it; it puts
- * the text in the composer as a `>` quote. Agent messages are marked `data-agent-message`.
+ * Select text in an agent's message and a small menu appears by it: "Quote" puts the text
+ * in the composer as a `>` quote, and "Fork from here" starts a new thread carrying the
+ * conversation up to that message. Agent messages are marked `data-agent-message`, with
+ * their timeline key in `data-message-key`.
  */
-export function SelectionQuote({ root, onQuote }: { root: RefObject<HTMLElement | null>; onQuote: (text: string) => void }) {
-  const [at, setAt] = useState<{ top: number; left: number; text: string } | null>(null);
+export function SelectionQuote({
+  root,
+  onQuote,
+  onFork,
+}: {
+  root: RefObject<HTMLElement | null>;
+  onQuote: (text: string) => void;
+  onFork?: ((messageKey: string, text: string) => void) | undefined;
+}) {
+  const [at, setAt] = useState<{ top: number; left: number; text: string; key: string | null } | null>(null);
   const dragging = useRef(false);
 
   useEffect(() => {
@@ -30,7 +40,7 @@ export function SelectionQuote({ root, onQuote }: { root: RefObject<HTMLElement 
         const last = rects[rects.length - 1];
         if (!last) return setAt(null);
         const box = host.getBoundingClientRect();
-        setAt({ top: last.bottom - box.top + 6, left: Math.min(last.right - box.left, box.width - 90), text });
+        setAt({ top: last.bottom - box.top + 6, left: Math.min(last.right - box.left, box.width - 130), text, key: start.getAttribute("data-message-key") });
       });
     };
     const down = (e: MouseEvent) => {
@@ -57,22 +67,45 @@ export function SelectionQuote({ root, onQuote }: { root: RefObject<HTMLElement 
   }, [root]);
 
   if (!at) return null;
+  const done = () => {
+    document.getSelection()?.removeAllRanges();
+    setAt(null);
+  };
+  const item = "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-ink hover:bg-cream-deep";
   return (
-    <button
-      type="button"
+    <div
       data-quote-button
       data-find-skip
+      role="toolbar"
+      aria-label="Selected text"
       onMouseDown={e => e.preventDefault()}
-      onClick={() => {
-        onQuote(at.text);
-        document.getSelection()?.removeAllRanges();
-        setAt(null);
-      }}
       style={{ top: at.top, left: at.left }}
-      className="absolute z-30 inline-flex h-8 -translate-x-1/2 items-center gap-1.5 rounded-lg border border-line-strong bg-paper px-2.5 text-[13px] font-medium text-ink shadow-pop hover:bg-cream"
+      className="absolute z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-line-strong bg-paper p-0.5 shadow-pop"
     >
-      <TextQuote aria-hidden="true" className="size-3.5" />
-      Quote
-    </button>
+      <button
+        type="button"
+        onClick={() => {
+          onQuote(at.text);
+          done();
+        }}
+        className={item}
+      >
+        <TextQuote aria-hidden="true" className="size-3.5" />
+        Quote
+      </button>
+      {onFork && at.key && (
+        <button
+          type="button"
+          onClick={() => {
+            onFork(at.key!, at.text);
+            done();
+          }}
+          className={item}
+        >
+          <GitFork aria-hidden="true" className="size-3.5" />
+          Fork from here
+        </button>
+      )}
+    </div>
   );
 }

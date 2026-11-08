@@ -175,13 +175,16 @@ export function terminalTail(text: string, maxLines = 24): { shown: string; hidd
 
 // ─── "New" divider and the live clock ────────────────────────────────────────
 
-const seqOf = (it: TimelineItem | FoldedSteps): number | null => (it.kind === "fold" ? (it.items[0]?.seq ?? null) : it.seq);
+/** A row that stands for several items (a folded turn, a bundle of steps). */
+type GroupRow = { kind: string; key: string; items: readonly TimelineItem[] };
+
+const seqOf = (it: TimelineItem | FoldedSteps | GroupRow): number | null => ("items" in it ? (it.items[0]?.seq ?? null) : it.seq);
 
 /**
  * Where the "New" divider goes: before the first item that arrived after `seenSeq`, the
  * last seq the user had seen. -1 for none (nothing new, never seen, or all of it is new).
  */
-export function unreadIndex(shown: readonly (TimelineItem | FoldedSteps)[], seenSeq: number | null | undefined): number {
+export function unreadIndex(shown: readonly (TimelineItem | FoldedSteps | GroupRow)[], seenSeq: number | null | undefined): number {
   if (seenSeq === null || seenSeq === undefined) return -1;
   const i = shown.findIndex(it => {
     const seq = seqOf(it);

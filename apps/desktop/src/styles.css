@@ -13,6 +13,8 @@
   --color-control: #8f8a68;
   --color-lemon: #ffe135;
   --color-lemon-soft: #fff4b0;
+  /* The edge of a lemon-soft fill (your own messages). */
+  --color-lemon-line: #f0d95c;
   --color-lemon-2: #ffd60a;
   --color-lime: #a3e635;
   --color-lime-soft: #e7f8c6;
@@ -24,6 +26,8 @@
   --color-rind-line: #2a3720;
   --color-rind-text: #dfe6d3;
   --color-rind-muted: #9aa58d;
+  /* Failure text on rind (a terminal block's failed exit). */
+  --color-rind-danger: #f2877e;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
   --color-amber: #b45309;
@@ -85,6 +89,7 @@
   --color-line-strong: #3a4a2e;
   --color-control: #6f7a62;
   --color-lemon-soft: #3b3511;
+  --color-lemon-line: #5c5218;
   --color-lime-soft: #22351a;
   --color-leaf: #a3e635;
   --color-leaf-deep: #c8f17f;

@@ -38,7 +38,9 @@ import {
   type ThreadStatus,
 } from "@lemonlime/protocol";
 import { fetchAttachmentImage, runnerHttpBase } from "@lemonlime/client";
-import { buildTimeline } from "../lib/timeline.ts";
+import { buildTimeline, waitingOnYou, withoutQueued, type TimelineItem } from "../lib/timeline.ts";
+import { latestSubagents } from "../lib/steps.ts";
+import { editSendPlan, forkNote, forkTitle, rewindLanded, startEdit, type EditDraft } from "../lib/messageActions.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
 import { useComposerSources } from "../lib/composerData.ts";
@@ -60,6 +62,7 @@ import { SignInPanel } from "./SignInPanel.tsx";
 import { ThreadPanel } from "./ThreadPanel.tsx";
 import { QuickOpen } from "./QuickOpen.tsx";
 import { BackgroundWorkCard, type HeldMessage } from "./BackgroundWork.tsx";
+import { ApprovalCard, EditingCard, QueuedCard } from "./WaitingStack.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
 import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { saveDraft } from "../lib/storage.ts";
@@ -123,6 +126,8 @@ export interface ThreadViewProps {
   onLocalAgent?: (id: string, agent: { kind: AgentKind; model?: string | undefined }) => void;
   /** Switch these other local threads to an account too (they stopped on the same limit). */
   onSwitchOthers?: (threadIds: string[], accountId: string) => Promise<number>;
+  /** Start a new thread on the same project from a note of this conversation. */
+  onFork?: (entry: ThreadEntry, note: string, title: string) => Promise<void>;
 }
 
 /** Below this width a pane's side panel lies over the conversation, and only in the active pane. */
@@ -175,6 +180,7 @@ function ThreadSessionView({
   agents,
   onLocalAgent,
   onSwitchOthers,
+  onFork,
 }: ThreadViewProps & { target: SessionTarget }) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -195,6 +201,10 @@ function ThreadSessionView({
   const machine = machineId ? (machines.find(m => m.id === machineId)?.name ?? "a removed machine") : null;
   const onThisComputer = entry.mode === "local" && !machineId;
   const items = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
+  // Approvals and queued messages wait above the composer; the timeline keeps a record of approvals.
+  const stack = useMemo(() => waitingOnYou(items), [items]);
+  const timelineItems = useMemo(() => withoutQueued(items), [items]);
+  const subagents = useMemo(() => latestSubagents(session.events), [session.events]);
   const loadImage = useSentImageLoader(session.connection);
   // The agent is waiting on an approval or a question: tell the person if they aren't looking.
   const waiting = items.filter(i => (i.kind === "approval" || i.kind === "question") && i.state === "waiting").map(i => i.key);
@@ -243,6 +253,9 @@ function ThreadSessionView({
   // A paused cloud thread still takes messages: sending one saves it and wakes the sandbox.
   const pausedCloud = entry.mode === "cloud" && entry.thread.status === "paused" && session.state === "offline";
   const composerDisabled = !pausedCloud && (session.state === "starting" || session.state === "offline" || session.state === "error");
+  // The thread has history this app hasn't got yet: it's on its way from the runner.
+  const knownSeq = entry.mode === "local" ? entry.meta.lastSeq : entry.thread.latestSeq;
+  const loadingHistory = useDelayed(knownSeq > 0 && session.events.length === 0 && session.state !== "offline" && session.state !== "error", 300);
 
   // Once a local runner has been started, refresh the "running" set in the sidebar.
   useEffect(() => {
@@ -435,8 +448,65 @@ function ThreadSessionView({
     }
     setActionError(null);
     saveDraft(summary.id, "");
-    session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" });
+    const plan = editSendPlan(editing, session.state === "live");
+    setEditing(null);
+    if ("rewindTo" in plan) {
+      // Go back to the edited message first; the new text goes once the runner has.
+      setAfterRewind({ seq: plan.rewindTo, since: session.events.at(-1)?.seq ?? 0, text, files: files.ready });
+      session.rewind(plan.rewindTo, false);
+    } else session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" });
     files.clear();
+  };
+  // ── Editing a sent message ─────────────────────────────
+  const [editing, setEditing] = useState<EditDraft | null>(null);
+  const beforeEdit = useRef("");
+  const [afterRewind, setAfterRewind] = useState<{ seq: number; since: number; text: string; files: string[] } | null>(null);
+  const editMessage = (item: Extract<TimelineItem, { kind: "user" }>) => {
+    const draft = startEdit(item, session.state === "live");
+    if (!draft) return;
+    if (!editing) beforeEdit.current = composerWrap.current?.querySelector("textarea")?.value ?? "";
+    setEditing(draft);
+    composerRef.current?.fill(draft.text);
+  };
+  const stopEditing = () => {
+    setEditing(null);
+    composerRef.current?.fill(beforeEdit.current);
+  };
+  const { send: sessionSend } = session;
+  useEffect(() => {
+    if (!afterRewind) return;
+    if (rewindLanded(session.events, afterRewind.seq, afterRewind.since)) {
+      setAfterRewind(null);
+      sessionSend(afterRewind.text, afterRewind.files);
+      return;
+    }
+    // The runner didn't go back (it may have said why): give the text back rather than lose it.
+    const t = setTimeout(() => {
+      setAfterRewind(null);
+      composerRef.current?.fill(afterRewind.text);
+      setActionError("Couldn't go back to that message. Your edited text is back in the message box.");
+    }, 10_000);
+    return () => clearTimeout(t);
+  }, [session.events, afterRewind, sessionSend]);
+  // ── Forking into a new thread ──────────────────────────
+  const [forking, setForking] = useState(false);
+  const fork = (key: string, quote?: string) => {
+    if (!onFork || forking) return;
+    const note = forkNote(
+      items,
+      { key, quote },
+      {
+        title: summary.title,
+        branch: summary.branch,
+        baseBranch: entry.mode === "local" ? entry.meta.baseBranch : entry.thread.repo.baseBranch,
+      },
+    );
+    if (!note) return;
+    setForking(true);
+    setActionError(null);
+    onFork(entry, note, forkTitle(summary.title))
+      .catch(err => setActionError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setForking(false));
   };
   const rewindTo = async (seq: number, text: string, restoreFiles: boolean) => {
     const ok = await confirmAction(
@@ -749,19 +819,26 @@ function ThreadSessionView({
         <div ref={timelineRef} className="relative flex min-h-0 flex-1 flex-col">
           <Timeline
             foldFinished={foldFinished}
-            items={items}
+            items={timelineItems}
             working={working}
             unreadAfterSeq={unreadAt}
             loadImage={loadImage}
-            empty={<EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} machine={machine} />}
-            onApprove={session.approve}
-            onEditQueued={session.editQueued}
+            empty={
+              loadingHistory ? (
+                <HistorySkeleton />
+              ) : (
+                <EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} machine={machine} />
+              )
+            }
             onRewind={rewindTo}
+            onEdit={editMessage}
+            onFork={onFork ? fork : undefined}
+            subagents={subagents}
             onImplementPlan={session.state === "live" ? implementPlan : undefined}
             limit={limitActions}
           />
-          {find !== null && <FindBar root={timelineRef} version={items} focusNonce={find} onClose={() => setFind(null)} />}
-          <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} />
+          {find !== null && <FindBar root={timelineRef} version={timelineItems} focusNonce={find} onClose={() => setFind(null)} />}
+          <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} onFork={onFork ? fork : undefined} />
         </div>
 
         <div
@@ -783,6 +860,14 @@ function ThreadSessionView({
           }}
         >
           <div ref={composerWrap} className="mx-auto max-w-[760px]">
+            {stack.approvals[0] && (
+              <ApprovalCard
+                key={stack.approvals[0].requestId}
+                item={stack.approvals[0]}
+                more={stack.approvals.length - 1}
+                onApprove={session.state === "live" ? session.approve : undefined}
+              />
+            )}
             {loop.question && (
               <QuestionCard
                 key={loop.question.requestId}
@@ -790,6 +875,8 @@ function ThreadSessionView({
                 onAnswer={session.state === "live" ? answers => session.answerQuestion(loop.question!.requestId, answers) : undefined}
               />
             )}
+            {editing && <EditingCard draft={editing} onReplace={replace => setEditing(d => (d ? { ...d, replace } : d))} onCancel={stopEditing} />}
+            <QueuedCard queued={stack.queued} onEdit={session.editQueued} />
             {loop.todos && <TodoCard items={loop.todos} />}
             <BackgroundWorkCard
               work={work}
@@ -945,6 +1032,45 @@ function ThreadSessionView({
           setPanelOpen(true);
         }}
       />
+    </div>
+  );
+}
+
+/** True once `on` has stayed true for `ms`, so quick loads never flash a placeholder. */
+function useDelayed(on: boolean, ms: number): boolean {
+  const [late, setLate] = useState(false);
+  useEffect(() => {
+    if (!on) return setLate(false);
+    const t = setTimeout(() => setLate(true), ms);
+    return () => clearTimeout(t);
+  }, [on, ms]);
+  return on && late;
+}
+
+/** The shape of a conversation while its history loads: a message, a few steps, a reply. */
+function HistorySkeleton() {
+  const bar = "rounded-md bg-cream-deep animate-pulse-soft";
+  return (
+    <div role="status" aria-label="Loading the conversation" className="flex flex-col">
+      <div className="flex justify-end">
+        <div className={cx(bar, "h-10 w-[46%] rounded-2xl rounded-br-md")} />
+      </div>
+      <div className="mt-6 flex flex-col gap-2.5 pl-1.5">
+        {[38, 52, 30].map(w => (
+          <div key={w} className="flex items-center gap-2">
+            <div className={cx(bar, "size-3.5")} />
+            <div className={bar} style={{ width: `${w}%`, height: 12 }} />
+          </div>
+        ))}
+      </div>
+      <div className="mt-5 flex gap-3">
+        <div className={cx(bar, "size-[22px] shrink-0 rounded-full")} />
+        <div className="flex flex-1 flex-col gap-2 pt-1">
+          <div className={bar} style={{ width: "88%", height: 12 }} />
+          <div className={bar} style={{ width: "72%", height: 12 }} />
+          <div className={bar} style={{ width: "40%", height: 12 }} />
+        </div>
+      </div>
     </div>
   );
 }

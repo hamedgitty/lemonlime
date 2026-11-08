@@ -2,53 +2,108 @@ import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import {
   AlertTriangle,
   ArrowDown,
-  ArrowDownToLine,
-  ArrowUpToLine,
+  Bot,
   Brain,
   Check,
   ChevronRight,
   CircleAlert,
+  Copy,
+  FileDiff,
+  FilePen,
+  FilePlus,
+  FileSearch,
+  FileText,
+  FileX,
+  FolderOpen,
+  GitFork,
+  Globe,
   History,
+  Hourglass,
   Info,
+  ListChecks,
+  ListTodo,
+  MessageCircleQuestionMark,
   MoreHorizontal,
   Paperclip,
+  Pencil,
+  Search,
+  ShieldCheck,
+  ShieldQuestionMark,
+  ShieldX,
   SquareTerminal,
-  Trash2,
   Undo2,
   Wrench,
 } from "lucide-react";
-import { elapsedMs, formatDuration, type ThreadStatus } from "@lemonlime/protocol";
+import { elapsedMs, formatDuration, type SubagentInfo, type ThreadStatus } from "@lemonlime/protocol";
 import { foldFinishedTurns, type TimelineItem } from "../lib/timeline.ts";
-import { collapseLongText, commandOf, commandOutput, liveTurnStart, terminalTail, tocEntries, TOC_MIN_MESSAGES, unreadIndex } from "../lib/timelineView.ts";
+import { collapseLongText, commandOutput, liveTurnStart, terminalTail, tocEntries, TOC_MIN_MESSAGES, unreadIndex } from "../lib/timelineView.ts";
+import {
+  bundleLabel,
+  bundlePreview,
+  bundleSteps,
+  describeStep,
+  isSubagentCall,
+  rowGap,
+  runnerSubagentId,
+  subagentPrompt,
+  subagentState,
+  subagentTask,
+  type RowGap,
+  type ShownRow,
+  type StepBundle,
+  type StepKind,
+  type SubagentState,
+  type ToolItem,
+} from "../lib/steps.ts";
+import { parseUnifiedDiff } from "../lib/diff.ts";
 import { flashItem } from "../lib/findInThread.ts";
 import { StreamingMarkdown } from "../lib/markdown.tsx";
-import type { EditQueuedFn } from "../lib/useThreadSession.ts";
-import { Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
-import { STATUS_LABELS, clockTime, stringifyValue, summarizeToolInput } from "../lib/format.ts";
-import { DiffView } from "./DiffView.tsx";
-import { AgentMessage } from "./AgentMessage.tsx";
+import { Menu, MenuItem } from "./primitives.tsx";
+import { STATUS_LABELS, clockTime, stringifyValue } from "../lib/format.ts";
+import { DiffBody } from "./DiffView.tsx";
+import { ActionButton, AgentMessage, MessageActions } from "./AgentMessage.tsx";
 import { OptionsRow, PlanCard, QuestionRecord } from "./AgentLoop.tsx";
 import { LimitRow, SwitchRow, type LimitActions } from "./LimitRow.tsx";
-import { Button, Spinner, cx } from "./ui.tsx";
+import { Spinner, cx } from "./ui.tsx";
 import { ImageLoaderContext, SentImages, useImageLoader, type LoadImage } from "./SentImages.tsx";
 import { MessageRail } from "./MessageRail.tsx";
 
-export type ApproveFn = (requestId: string, decision: "allow" | "deny") => void;
 /** Go back to the user message at `seq` (its text goes back in the composer). */
 export type RewindFn = (seq: number, text: string, restoreFiles: boolean) => void;
+
+type UserItem = Extract<TimelineItem, { kind: "user" }>;
+
+/** What rows can do, passed down once rather than to every row by name. */
+interface RowActions {
+  limit?: LimitActions | undefined;
+  /** The newest switch row (the one that can offer to switch other threads too). */
+  lastSwitch: string | null;
+  onRewind?: RewindFn | undefined;
+  onImplementPlan?: (() => void) | undefined;
+  onEdit?: ((item: UserItem) => void) | undefined;
+  onFork?: ((key: string) => void) | undefined;
+  subagents: ReadonlyMap<string, SubagentInfo>;
+  /** Items from this seq on belong to the turn that is running now (null when none is). */
+  liveSeq: number | null;
+}
+
+const NO_SUBAGENTS: ReadonlyMap<string, SubagentInfo> = new Map();
+
+const GAP: Record<RowGap, string> = { none: "", step: "mt-1", block: "mt-4", turn: "mt-6" };
 
 export function Timeline({
   items,
   working,
   empty,
-  onApprove,
-  onEditQueued,
   onRewind,
   onImplementPlan,
+  onEdit,
+  onFork,
   limit,
   foldFinished = false,
   unreadAfterSeq,
   loadImage,
+  subagents = NO_SUBAGENTS,
 }: {
   items: TimelineItem[];
   /** The last seq the user had seen when they opened the thread: a "New" divider goes after it. */
@@ -59,23 +114,31 @@ export function Timeline({
   foldFinished?: boolean;
   working: boolean;
   empty: ReactNode;
-  onApprove?: ApproveFn;
-  onEditQueued?: EditQueuedFn;
-  onRewind?: RewindFn;
+  onRewind?: RewindFn | undefined;
   /** Approve the latest plan (leave plan mode and tell the agent to go ahead). */
   onImplementPlan?: (() => void) | undefined;
+  /** Edit a message you sent (its text goes back in the composer). */
+  onEdit?: ((item: UserItem) => void) | undefined;
+  /** Start a new thread carrying the conversation up to this message. */
+  onFork?: ((key: string) => void) | undefined;
   /** What the usage-limit row can do (absent while it can't act). */
   limit?: LimitActions | undefined;
+  /** The runner's subagents, by id, for their rows' live status. */
+  subagents?: ReadonlyMap<string, SubagentInfo> | undefined;
 }) {
   const lastSwitch = useMemo(() => items.findLast(i => i.kind === "switch")?.key ?? null, [items]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
-  const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
-  const shown = useMemo(() => (foldFinished ? foldFinishedTurns(items) : items), [items, foldFinished]);
+  const shown = useMemo<ShownRow[]>(() => bundleSteps(foldFinished ? foldFinishedTurns(items) : items), [items, foldFinished]);
   const divider = useMemo(() => unreadIndex(shown, unreadAfterSeq), [shown, unreadAfterSeq]);
   const toc = useMemo(() => tocEntries(items), [items]);
   const turnStart = working ? liveTurnStart(items) : null;
+  const liveSeq = useMemo(() => (working ? (items.findLast(i => i.kind === "user" && !i.pending)?.seq ?? 0) : null), [items, working]);
+  const actions = useMemo<RowActions>(
+    () => ({ limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq }),
+    [limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq],
+  );
 
   // The scrollbar shows while the person scrolls (not while new output follows itself).
   const quietTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -159,75 +222,13 @@ export function Timeline({
           aria-relevant="additions"
           aria-label="Thread timeline"
         >
-          <div className="mx-auto flex max-w-[860px] flex-col gap-4 px-6 pt-6 pb-10">
-            {items.length === 0
-              ? empty
-              : shown.map((item, i) => (
-                  <Fragment key={item.key}>
-                    {i === divider && <UnreadDivider />}
-                    {/* Off-screen messages skip layout and paint, so long chats stay fast. */}
-                    <div
-                      data-timeline-key={item.key}
-                      data-flash-target
-                      className={i < shown.length - 30 ? "[contain-intrinsic-size:auto_96px] [content-visibility:auto]" : undefined}
-                    >
-                      {item.kind === "fold" ? (
-                        <div className="flex flex-col gap-4">
-                          <button
-                            type="button"
-                            aria-expanded={unfolded.has(item.key)}
-                            onClick={() =>
-                              setUnfolded(u => {
-                                const next = new Set(u);
-                                if (next.has(item.key)) next.delete(item.key);
-                                else next.add(item.key);
-                                return next;
-                              })
-                            }
-                            className="flex items-center gap-2 self-start rounded-full border border-line px-3 py-1 text-[13px] text-ink-soft hover:border-line-strong hover:text-ink"
-                          >
-                            <ChevronRight
-                              aria-hidden="true"
-                              className={cx("size-3.5 transition-transform duration-150", unfolded.has(item.key) && "rotate-90")}
-                            />
-                            {item.workedMs !== undefined ? (
-                              <>
-                                <span className="tabular-nums">Worked for {formatDuration(item.workedMs)}</span>
-                                <span className="text-ink-faint">{item.items.length} steps</span>
-                              </>
-                            ) : (
-                              `Worked through ${item.items.length} steps`
-                            )}
-                          </button>
-                          {unfolded.has(item.key) &&
-                            item.items.map(it => (
-                              <Item
-                                key={it.key}
-                                item={it}
-                                limit={limit}
-                                latest={it.key === lastSwitch}
-                                onApprove={onApprove}
-                                onEditQueued={onEditQueued}
-                                onRewind={onRewind}
-                                onImplementPlan={onImplementPlan}
-                              />
-                            ))}
-                        </div>
-                      ) : (
-                        <Item
-                          item={item}
-                          limit={limit}
-                          latest={item.key === lastSwitch}
-                          onApprove={onApprove}
-                          onEditQueued={onEditQueued}
-                          onRewind={onRewind}
-                          onImplementPlan={onImplementPlan}
-                        />
-                      )}
-                    </div>
-                  </Fragment>
-                ))}
-            {working && <WorkingLine since={turnStart} />}
+          <div className="mx-auto flex max-w-[860px] flex-col px-6 pt-6 pb-10">
+            {items.length === 0 ? empty : <Rows rows={shown} actions={actions} divider={divider} lazy />}
+            {working && (
+              <div className="mt-4">
+                <WorkingLine since={turnStart} />
+              </div>
+            )}
           </div>
         </div>
         {toc.you.length >= TOC_MIN_MESSAGES && <MessageRail toc={toc} scrollRef={scrollRef} onJump={jumpTo} />}
@@ -243,6 +244,37 @@ export function Timeline({
         )}
       </div>
     </ImageLoaderContext.Provider>
+  );
+}
+
+/** Rows that are one line high, so lazily drawn ones reserve that much room. */
+const ONE_LINE = new Set(["tool", "bundle", "diff", "reasoning", "approval", "options", "fold", "status"]);
+
+/** A list of rows with the timeline's rhythm: steps close together, messages with room around them. */
+function Rows({ rows, actions, divider = -1, lazy = false }: { rows: readonly ShownRow[]; actions: RowActions; divider?: number; lazy?: boolean }) {
+  return (
+    <>
+      {rows.map((row, i) => (
+        <Fragment key={row.key}>
+          {i === divider && <UnreadDivider />}
+          {/* Off-screen rows skip layout and paint, so long chats stay fast. */}
+          <div
+            data-timeline-key={row.key}
+            data-flash-target
+            className={cx(
+              i === divider ? "mt-4" : GAP[rowGap(rows[i - 1]?.kind, row.kind)],
+              lazy &&
+                i < rows.length - 30 &&
+                (ONE_LINE.has(row.kind)
+                  ? "[contain-intrinsic-size:auto_28px] [content-visibility:auto]"
+                  : "[contain-intrinsic-size:auto_96px] [content-visibility:auto]"),
+            )}
+          >
+            <Row row={row} actions={actions} />
+          </div>
+        </Fragment>
+      ))}
+    </>
   );
 }
 
@@ -286,7 +318,7 @@ function UnreadDivider() {
       data-find-skip
       role="separator"
       aria-label="New since you last looked"
-      className="flex items-center gap-3 text-xs font-medium text-leaf"
+      className="mt-4 flex items-center gap-3 text-xs font-medium text-leaf"
     >
       <span className="h-px flex-1 bg-leaf/35" />
       New
@@ -295,71 +327,425 @@ function UnreadDivider() {
   );
 }
 
-const Item = memo(function Item({
-  item,
-  onApprove,
-  onEditQueued,
-  onRewind,
-  onImplementPlan,
-  limit,
-  latest,
-}: {
-  item: TimelineItem;
-  limit?: LimitActions | undefined;
-  /** The newest switch row (the one that can offer to switch other threads too). */
-  latest?: boolean;
-  onApprove?: ApproveFn | undefined;
-  onEditQueued?: EditQueuedFn | undefined;
-  onRewind?: RewindFn | undefined;
-  onImplementPlan?: (() => void) | undefined;
-}) {
-  switch (item.kind) {
+const isLive = (seq: number | null, actions: RowActions) => actions.liveSeq !== null && seq !== null && seq >= actions.liveSeq;
+
+const Row = memo(function Row({ row, actions }: { row: ShownRow; actions: RowActions }) {
+  switch (row.kind) {
+    case "fold":
+      return <FoldRow items={row.items} workedMs={row.workedMs} actions={actions} />;
+    case "bundle":
+      return <BundleRow bundle={row} live={isLive(row.items.at(-1)!.seq, actions)} actions={actions} />;
     case "user":
-      return item.queued && onEditQueued ? (
-        <QueuedMessage text={item.text} queued={item.queued} onEdit={onEditQueued} />
-      ) : (
+      return (
         <UserMessage
-          text={item.text}
-          at={item.at}
-          pending={item.pending}
-          queued={Boolean(item.queued)}
-          files={item.files}
-          images={item.images}
-          {...(onRewind && item.seq !== null && !item.pending
-            ? { onRewind: (restore: boolean) => onRewind(item.seq!, item.text, restore), restorable: Boolean(item.restorable) }
+          item={row}
+          {...(actions.onEdit && row.seq !== null && !row.pending ? { onEdit: () => actions.onEdit!(row) } : {})}
+          {...(actions.onFork && row.seq !== null && !row.pending ? { onFork: () => actions.onFork!(row.key) } : {})}
+          {...(actions.onRewind && row.seq !== null && !row.pending
+            ? { onRewind: (restore: boolean) => actions.onRewind!(row.seq!, row.text, restore), restorable: Boolean(row.restorable) }
             : {})}
         />
       );
     case "agent":
-      return <AgentMessage text={item.text} streaming={item.streaming} />;
+      return (
+        <AgentMessage text={row.text} streaming={row.streaming} messageKey={row.key} onFork={actions.onFork ? () => actions.onFork!(row.key) : undefined} />
+      );
     case "reasoning":
-      return <ReasoningRow text={item.text} streaming={item.streaming} startedAt={item.startedAt} endedAt={item.endedAt} />;
+      return <ReasoningRow text={row.text} streaming={row.streaming} startedAt={row.startedAt} endedAt={row.endedAt} />;
     case "tool":
-      return <ToolCall name={item.name} input={item.input} result={item.result} />;
+      return isSubagentCall(row.name) ? (
+        <SubagentRow item={row} live={isLive(row.seq, actions)} subagents={actions.subagents} />
+      ) : (
+        <StepRow item={row} live={isLive(row.seq, actions)} />
+      );
     case "diff":
-      return <DiffView path={item.path} change={item.change} diff={item.diff} truncated={item.truncated} />;
+      return <DiffRow item={row} live={isLive(row.seq, actions)} />;
     case "status":
-      return <StatusRow to={item.to} reason={item.reason} at={item.at} workedMs={item.workedMs} />;
+      return <StatusRow to={row.to} reason={row.reason} at={row.at} workedMs={row.workedMs} />;
     case "error":
-      return <ErrorRow message={item.message} code={item.code} fatal={item.fatal} />;
+      return <ErrorRow message={row.message} code={row.code} fatal={row.fatal} />;
     case "notice":
-      return <NoticeRow message={item.untilAt ? `${item.message} ${resetsWhen(item.untilAt)}` : item.message} />;
+      return <NoticeRow message={row.untilAt ? `${row.message} ${resetsWhen(row.untilAt)}` : row.message} />;
     case "approval":
-      return <ApprovalCard item={item} onApprove={onApprove} />;
+      return <ApprovalRecord item={row} />;
     case "plan":
-      return <PlanCard plan={item.plan} open={item.open} onImplement={onImplementPlan} />;
+      return <PlanCard plan={row.plan} open={row.open} onImplement={actions.onImplementPlan} />;
     case "question":
-      return <QuestionRecord questions={item.questions} answers={item.answers} state={item.state} by={item.by} />;
+      return <QuestionRecord questions={row.questions} answers={row.answers} state={row.state} by={row.by} />;
     case "options":
-      return <OptionsRow options={item.options} />;
+      return <OptionsRow options={row.options} />;
     case "limit":
-      return <LimitRow hit={item.hit} open={item.open} waiting={item.waiting} actions={limit} />;
+      return <LimitRow hit={row.hit} open={row.open} waiting={row.waiting} actions={actions.limit} />;
     case "switch":
-      return <SwitchRow event={item.event} others={latest ? limit?.others : undefined} />;
+      return <SwitchRow event={row.event} others={row.key === actions.lastSwitch ? actions.limit?.others : undefined} />;
   }
 });
 
-const COMMAND_TOOLS = /^(bash|shell|execute|run|terminal)/i;
+// ─── The one disclosure row ──────────────────────────────────────────────────
+
+/**
+ * Every quiet line in the timeline (a step, a bundle of steps, a file change, the agent's
+ * reasoning, a finished turn) looks the same: a muted 14px icon, a line of text, a chevron
+ * when it opens, and its status on the right. Opening shows the details just under it.
+ */
+function Disclosure({
+  icon,
+  label,
+  detail,
+  status,
+  title,
+  children,
+  open,
+  onToggle,
+}: {
+  icon: ReactNode;
+  label: ReactNode;
+  detail?: ReactNode;
+  status?: ReactNode;
+  title?: string | undefined;
+  /** What opening shows. Without it the row is a plain line. */
+  children?: ReactNode;
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const bodyId = useId();
+  const inner = (
+    <>
+      <span aria-hidden="true" className="inline-flex size-3.5 shrink-0 items-center justify-center text-ink-faint [&>svg]:size-3.5">
+        {icon}
+      </span>
+      <span className="min-w-0 shrink truncate">{label}</span>
+      {children !== undefined && (
+        <ChevronRight aria-hidden="true" className={cx("size-3.5 shrink-0 text-ink-faint transition-transform duration-150", open && "rotate-90")} />
+      )}
+      <span className="min-w-0 flex-1 truncate text-ink-faint">{detail}</span>
+      {status && <span className="ml-1 inline-flex shrink-0 items-center gap-1 text-[12px]">{status}</span>}
+    </>
+  );
+  const row = "flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-[13px] text-ink-soft";
+  if (children === undefined)
+    return (
+      <div className={row} title={title}>
+        {inner}
+      </div>
+    );
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={onToggle}
+        title={title}
+        className={cx(row, "hover:bg-cream-deep hover:text-ink focus-visible:-outline-offset-2")}
+      >
+        {inner}
+      </button>
+      {open && (
+        <div id={bodyId} className="mt-1 mb-2 ml-[12px] border-l border-line pl-3 transition-opacity duration-200 ease-(--ease-out) starting:opacity-0">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useToggle(initial = false): [boolean, () => void] {
+  const [open, setOpen] = useState(initial);
+  return [open, useCallback(() => setOpen(o => !o), [])];
+}
+
+/** A step's verb and what it acted on: "Read" quiet, "src/app.tsx" in ink. */
+function StepText({ verb, target, code, detail }: { verb: string; target: string; code: boolean; detail?: string | undefined }) {
+  return (
+    <>
+      {verb}
+      {target && (
+        <>
+          {" "}
+          <span className={code ? "font-mono text-[12px] text-ink" : "text-ink"}>{target}</span>
+        </>
+      )}
+      {detail && <span className="text-ink-faint"> {detail}</span>}
+    </>
+  );
+}
+
+const STEP_ICON: Record<StepKind, ReactNode> = {
+  read: <FileText />,
+  edit: <FilePen />,
+  write: <FilePlus />,
+  command: <SquareTerminal />,
+  search: <Search />,
+  files: <FileSearch />,
+  list: <FolderOpen />,
+  fetch: <Globe />,
+  web: <Globe />,
+  todo: <ListTodo />,
+  background: <SquareTerminal />,
+  subagent: <Bot />,
+  question: <MessageCircleQuestionMark />,
+  tool: <Wrench />,
+};
+
+type StepState = "running" | "failed" | "stopped" | "done";
+
+function stepState(item: ToolItem, live: boolean): StepState {
+  if (item.result?.isError) return "failed";
+  if (item.result) return "done";
+  return live ? "running" : "stopped";
+}
+
+/** Status on the right of a row: a spinner while it runs, a mark and a word when it failed. Success is quiet. */
+function StatusMark({ state, failed }: { state: StepState | SubagentState; failed?: string }) {
+  switch (state) {
+    case "running":
+      return (
+        <>
+          <Spinner className="size-3 text-leaf" />
+          <span className="sr-only">Running</span>
+        </>
+      );
+    case "waiting":
+      return (
+        <>
+          <Hourglass aria-hidden="true" className="size-3.5 text-amber" />
+          <span className="text-ink-faint">Waiting</span>
+        </>
+      );
+    case "failed":
+      return (
+        <>
+          <CircleAlert aria-hidden="true" className="size-3.5 text-danger" />
+          <span className="font-medium text-danger">{failed ?? "Failed"}</span>
+        </>
+      );
+    case "stopped":
+      return <span className="text-ink-faint">Didn&apos;t finish</span>;
+    default:
+      return null;
+  }
+}
+
+// ─── Steps ───────────────────────────────────────────────────────────────────
+
+/** One tool call: "Ran pnpm test", opening to the terminal block or the input and output. */
+function StepRow({ item, live }: { item: ToolItem; live: boolean }) {
+  const [open, toggle] = useToggle();
+  const step = describeStep(item.name, item.input);
+  const state = stepState(item, live);
+  const command = step.kind === "command" ? (step.full ?? step.target) : null;
+  return (
+    <Disclosure
+      icon={STEP_ICON[step.kind]}
+      label={<StepText verb={state === "running" ? step.doing : step.verb} target={step.target} code={step.code} />}
+      detail={step.detail}
+      title={step.full}
+      status={<StatusMark state={state} />}
+      open={open}
+      onToggle={toggle}
+    >
+      {command ? (
+        <TerminalBlock command={command} result={item.result} />
+      ) : (
+        <ToolDetails input={item.input} result={item.result} running={state === "running"} />
+      )}
+    </Disclosure>
+  );
+}
+
+/** Steps of one kind in a row: "Read 6 files", opening to each of them. */
+function BundleRow({ bundle, live, actions }: { bundle: StepBundle; live: boolean; actions: RowActions }) {
+  const [open, toggle] = useToggle();
+  const states = bundle.items.map(i => stepState(i, isLive(i.seq, actions)));
+  const running = states.includes("running");
+  const failed = states.filter(s => s === "failed").length;
+  const stopped = states.includes("stopped");
+  return (
+    <Disclosure
+      icon={STEP_ICON[bundle.step]}
+      label={bundleLabel(bundle, running)}
+      detail={bundlePreview(bundle)}
+      status={
+        running ? (
+          <StatusMark state="running" />
+        ) : failed ? (
+          <StatusMark state="failed" failed={`${failed} failed`} />
+        ) : stopped && !live ? (
+          <StatusMark state="stopped" />
+        ) : null
+      }
+      open={open}
+      onToggle={toggle}
+    >
+      <div className="flex flex-col gap-1">
+        {bundle.items.map(it => (
+          <StepRow key={it.key} item={it} live={isLive(it.seq, actions)} />
+        ))}
+      </div>
+    </Disclosure>
+  );
+}
+
+const SUBAGENT_WORDS: Record<SubagentState, string> = {
+  running: "Working",
+  waiting: "Waiting on its own subagents",
+  done: "Done",
+  failed: "Failed",
+  stopped: "Stopped",
+};
+
+/** Text of a tool's output: a string, or the text blocks of an MCP-style reply. */
+function outputText(output: unknown): string {
+  if (typeof output === "string") return output;
+  const blocks = Array.isArray(output)
+    ? output
+    : Array.isArray((output as { content?: unknown } | null)?.content)
+      ? (output as { content: unknown[] }).content
+      : null;
+  if (blocks) {
+    const texts = blocks.flatMap(b => (b && typeof (b as { text?: unknown }).text === "string" ? [(b as { text: string }).text] : []));
+    if (texts.length) return texts.join("\n\n");
+  }
+  return stringifyValue(output);
+}
+
+/** The agent handed part of the work to a subagent: what it's doing and how far it got. */
+function SubagentRow({ item, live, subagents }: { item: ToolItem; live: boolean; subagents: ReadonlyMap<string, SubagentInfo> }) {
+  const [open, toggle] = useToggle();
+  const runnerId = item.result && !item.result.isError ? runnerSubagentId(item.result.output) : null;
+  const info = runnerId ? subagents.get(runnerId) : undefined;
+  const state = subagentState(item, info, live);
+  const prompt = subagentPrompt(item.input);
+  const report = item.result && !runnerId ? outputText(item.result.output) : "";
+  const nested = runnerId ? [...subagents.values()].filter(s => s.parentId === runnerId) : [];
+  return (
+    <Disclosure
+      icon={<Bot />}
+      label={<StepText verb="Subagent:" target={subagentTask(item.input)} code={false} />}
+      status={
+        state === "running" ? (
+          <>
+            <Spinner className="size-3 text-leaf" />
+            <span className="text-ink-faint">Working</span>
+          </>
+        ) : state === "done" ? (
+          <>
+            <Check aria-hidden="true" className="size-3.5 text-leaf" />
+            <span className="text-ink-faint">Done</span>
+          </>
+        ) : (
+          <StatusMark state={state} />
+        )
+      }
+      open={open}
+      onToggle={toggle}
+    >
+      <div className="flex flex-col gap-2.5 py-1 text-[13px]">
+        <p className="text-ink-soft">
+          {SUBAGENT_WORDS[state]}
+          {info ? `, started at ${clockTime(info.startedAt)}` : ` since ${clockTime(item.at)}`}.
+          {runnerId && state === "done" ? " Its reply came back to the agent as a message." : ""}
+        </p>
+        {prompt && <CodeBlock label="Its task" text={prompt} />}
+        {nested.length > 0 && (
+          <div>
+            <p className="mb-1 text-[12px] font-medium text-ink-soft">Its own subagents</p>
+            <ul className="flex flex-col gap-1">
+              {nested.map(s => {
+                const st = subagentState({ result: null }, s, live);
+                return (
+                  <li key={s.id}>
+                    <Disclosure icon={<Bot />} label={<span className="text-ink">{s.task.split("\n")[0]}</span>} status={<StatusMark state={st} />} />
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+        {item.result?.isError ? (
+          <CodeBlock label="Error" text={outputText(item.result.output) || "(no output)"} error />
+        ) : report ? (
+          <div>
+            <p className="mb-1 text-[12px] font-medium text-ink-soft">What it reported</p>
+            <div className="rounded-lg border border-line bg-cream px-3 py-2 text-ink">
+              <StreamingMarkdown text={report} className="text-[13px]" />
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </Disclosure>
+  );
+}
+
+const CHANGE_VERB = { added: "Created", modified: "Changed", deleted: "Deleted", renamed: "Renamed" } as const;
+const CHANGE_ICON = { added: <FilePlus />, modified: <FileDiff />, deleted: <FileX />, renamed: <FilePen /> } as const;
+/** While its turn runs, a short diff shows opened; once the turn is over it folds to its line. */
+const AUTO_OPEN_LINES = 60;
+
+/** A file the agent changed: "Changed src/sum.js +4 −1", opening to the diff. */
+function DiffRow({ item, live }: { item: Extract<TimelineItem, { kind: "diff" }>; live: boolean }) {
+  const parsed = useMemo(() => parseUnifiedDiff(item.diff), [item.diff]);
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  const open = chosen ?? (live && parsed.lines.length <= AUTO_OPEN_LINES);
+  const lines = useMemo(() => parsed.lines.filter(l => l.kind !== "meta"), [parsed]);
+  return (
+    <Disclosure
+      icon={CHANGE_ICON[item.change]}
+      label={<StepText verb={CHANGE_VERB[item.change]} target={item.path} code />}
+      title={item.path}
+      status={
+        <span className="tabular-nums">
+          <span className="text-diff-add-strong">+{parsed.additions}</span> <span className="text-diff-del-strong">−{parsed.deletions}</span>
+        </span>
+      }
+      open={open}
+      onToggle={() => setChosen(!open)}
+    >
+      <div className="overflow-hidden rounded-lg border border-line bg-paper">
+        <DiffBody lines={lines} truncated={item.truncated} />
+      </div>
+    </Disclosure>
+  );
+}
+
+/** A finished turn's steps folded into one line ("Fold finished turns" in Settings). */
+function FoldRow({ items, workedMs, actions }: { items: TimelineItem[]; workedMs?: number | undefined; actions: RowActions }) {
+  const [open, toggle] = useToggle();
+  const rows = useMemo(() => (open ? bundleSteps(items) : []), [open, items]);
+  return (
+    <Disclosure
+      icon={<ListChecks />}
+      label={<span className="tabular-nums">{workedMs !== undefined ? `Worked for ${formatDuration(workedMs)}` : "Worked through it"}</span>}
+      detail={`${items.length} steps`}
+      open={open}
+      onToggle={toggle}
+    >
+      <div className="flex flex-col py-1">
+        <Rows rows={rows} actions={actions} />
+      </div>
+    </Disclosure>
+  );
+}
+
+/** The agent's reasoning: one quiet line ("Thought for 12s") that opens to the text. */
+function ReasoningRow({ text, streaming, startedAt, endedAt }: { text: string; streaming: boolean; startedAt: string; endedAt: string }) {
+  const [open, toggle] = useToggle();
+  const ms = elapsedMs(startedAt, endedAt);
+  const label = (
+    <span className="tabular-nums">{streaming ? "Thinking" : ms !== null && ms >= 1000 ? `Thought for ${formatDuration(ms)}` : "Thought for a moment"}</span>
+  );
+  const status = streaming ? <StatusMark state="running" /> : null;
+  // Some agents keep what they thought to themselves: just say that they did.
+  if (!text.trim()) return <Disclosure icon={<Brain />} label={label} status={status} />;
+  return (
+    <Disclosure icon={<Brain />} label={label} status={status} open={open} onToggle={toggle}>
+      <div className="py-1 text-ink-soft">
+        <StreamingMarkdown text={text} className="text-[13px]" />
+      </div>
+    </Disclosure>
+  );
+}
 
 const DECLINED_BECAUSE: Record<string, string> = {
   timeout: "nobody answered in time",
@@ -367,53 +753,39 @@ const DECLINED_BECAUSE: Record<string, string> = {
   expired: "the runner restarted before anyone answered",
 };
 
-function ApprovalCard({ item, onApprove }: { item: Extract<TimelineItem, { kind: "approval" }>; onApprove?: ApproveFn | undefined }) {
-  const [sent, setSent] = useState<"allow" | "deny" | null>(null);
-  const isCommand = COMMAND_TOOLS.test(item.tool);
-
-  if (item.state !== "waiting") {
-    const allowed = item.state === "allowed";
-    const why = !allowed && item.by && item.by !== "user" ? DECLINED_BECAUSE[item.by] : undefined;
+/** An approval, in the timeline: one line. Answering it happens above the composer. */
+function ApprovalRecord({ item }: { item: Extract<TimelineItem, { kind: "approval" }> }) {
+  const summary = <span className="font-mono text-[12px] text-ink">{item.summary.split("\n")[0]}</span>;
+  if (item.state === "waiting")
     return (
-      <div className="flex items-start gap-2.5 px-1 text-[13.5px] text-ink-soft" role="note">
-        {allowed ? (
-          <Check aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-leaf" />
-        ) : (
-          <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
-        )}
-        <p className="min-w-0 [overflow-wrap:anywhere]">
-          {allowed ? "Allowed" : "Not allowed"}
-          {why ? ` (${why})` : ""}: <code className="font-mono text-[12.5px] text-ink">{item.summary}</code>
-        </p>
-      </div>
+      <Disclosure
+        icon={<ShieldQuestionMark />}
+        label={
+          <>
+            Asked to use {item.tool}: {summary}
+          </>
+        }
+        title={item.summary}
+        status={<StatusMark state="waiting" />}
+      />
     );
-  }
-
-  const answer = (decision: "allow" | "deny") => {
-    if (sent || !onApprove) return;
-    setSent(decision);
-    onApprove(item.requestId, decision);
-  };
+  const allowed = item.state === "allowed";
+  const why = !allowed && item.by && item.by !== "user" ? DECLINED_BECAUSE[item.by] : undefined;
   return (
-    <div className="animate-rise rounded-2xl border border-[#f0d95c] bg-lemon-soft/70 px-4 py-3.5" role="group" aria-label="The agent is asking for permission">
-      <p className="font-medium text-ink">{isCommand ? "The agent wants to run this command" : `The agent wants to use ${item.tool}`}</p>
-      <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-line bg-paper px-3 py-2 font-mono text-[12.5px] leading-relaxed whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
-        {item.summary}
-      </pre>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {/* Neither button takes focus by itself, so a stray Enter never approves anything. */}
-        <Button variant="primary" size="sm" disabled={sent !== null || !onApprove} onClick={() => answer("allow")}>
-          {sent === "allow" ? <Spinner /> : <Check aria-hidden="true" className="size-3.5" />}
-          Allow
-        </Button>
-        <Button variant="secondary" size="sm" disabled={sent !== null || !onApprove} onClick={() => answer("deny")}>
-          Don&apos;t allow
-        </Button>
-        <span className="text-[13.5px] text-ink-soft">The agent waits for your answer.</span>
-      </div>
-    </div>
+    <Disclosure
+      icon={allowed ? <ShieldCheck /> : <ShieldX />}
+      label={
+        <>
+          {allowed ? "Allowed" : "Not allowed"}: {summary}
+        </>
+      }
+      detail={why ? `(${why})` : undefined}
+      title={item.summary}
+    />
   );
 }
+
+// ─── Messages ────────────────────────────────────────────────────────────────
 
 function NoticeRow({ message }: { message: string }) {
   return (
@@ -425,37 +797,38 @@ function NoticeRow({ message }: { message: string }) {
 }
 
 function UserMessage({
-  text,
-  at,
-  pending,
-  queued,
+  item,
   onRewind,
   restorable,
-  files,
-  images,
+  onEdit,
+  onFork,
 }: {
-  text: string;
-  at: string;
-  pending: boolean;
-  queued: boolean;
+  item: UserItem;
   onRewind?: (restoreFiles: boolean) => void;
   restorable?: boolean;
-  files?: string[] | undefined;
-  images?: { id: string; name: string }[] | undefined;
+  onEdit?: () => void;
+  onFork?: () => void;
 }) {
+  const { text, at, pending, files, images } = item;
   const canShowImages = useImageLoader() !== null && Boolean(images?.length);
   // Images shown as thumbnails aren't listed again by name.
   const listed = canShowImages ? files?.filter(f => !images!.some(i => i.name === f)) : files;
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
   return (
-    <div className="group flex animate-rise justify-end">
+    <div className="group/msg flex animate-rise justify-end">
       <div className="max-w-[78%]">
-        <div className={cx("rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft px-4 py-2.5 text-ink", pending && "opacity-70")}>
+        <div className={cx("rounded-2xl rounded-br-md border border-lemon-line bg-lemon-soft px-4 py-2.5 text-ink", pending && "opacity-70")}>
           <LongText text={text} />
           {canShowImages && <SentImages images={images!} />}
           {listed && listed.length > 0 && (
             <ul aria-label="Attached files" className="mt-2 flex flex-wrap gap-1">
               {listed.map(f => (
-                <li key={f} className="inline-flex h-6 max-w-[220px] items-center gap-1 rounded-md bg-paper/70 px-2 text-[12.5px] text-ink-soft">
+                <li key={f} className="inline-flex h-6 max-w-[220px] items-center gap-1 rounded-md bg-paper/70 px-2 text-[12px] text-ink-soft">
                   <Paperclip aria-hidden="true" className="size-3 shrink-0" />
                   <span className="truncate">{f}</span>
                 </li>
@@ -464,28 +837,49 @@ function UserMessage({
           )}
         </div>
         <div className="mt-1 flex items-center justify-end gap-1 pr-1 text-xs text-ink-faint">
-          {onRewind && (
-            <Menu
-              align="end"
-              trigger={
-                <button
-                  type="button"
-                  aria-label="Go back to this message"
-                  className="inline-flex size-6 items-center justify-center rounded-md opacity-0 hover:bg-ink/5 hover:text-ink focus-visible:opacity-100 group-hover:opacity-100 data-[popup-open]:opacity-100"
+          {!pending && (
+            <MessageActions>
+              <ActionButton
+                label={copied ? "Copied" : "Copy message"}
+                icon={copied ? <Check aria-hidden="true" className="size-3.5 text-leaf" /> : <Copy aria-hidden="true" className="size-3.5" />}
+                onClick={() => void navigator.clipboard?.writeText(text).then(() => setCopied(true))}
+              >
+                {copied ? "Copied" : "Copy"}
+              </ActionButton>
+              {onEdit && (
+                <ActionButton label="Edit and send again" icon={<Pencil aria-hidden="true" className="size-3.5" />} onClick={onEdit}>
+                  Edit
+                </ActionButton>
+              )}
+              {onFork && (
+                <ActionButton label="Fork into a new thread" icon={<GitFork aria-hidden="true" className="size-3.5" />} onClick={onFork}>
+                  Fork
+                </ActionButton>
+              )}
+              {onRewind && (
+                <Menu
+                  align="end"
+                  trigger={
+                    <button
+                      type="button"
+                      aria-label="Go back to this message"
+                      className="inline-flex size-7 items-center justify-center rounded-md text-ink-soft hover:bg-cream-deep hover:text-ink data-[popup-open]:bg-cream-deep"
+                    >
+                      <MoreHorizontal aria-hidden="true" className="size-4" />
+                    </button>
+                  }
                 >
-                  <MoreHorizontal aria-hidden="true" className="size-4" />
-                </button>
-              }
-            >
-              <MenuItem icon={<Undo2 />} onSelect={() => onRewind(false)}>
-                Go back to here
-              </MenuItem>
-              <MenuItem icon={<History />} disabled={!restorable} onSelect={() => onRewind(true)}>
-                Go back and restore files
-              </MenuItem>
-            </Menu>
+                  <MenuItem icon={<Undo2 />} onSelect={() => onRewind(false)}>
+                    Go back to here
+                  </MenuItem>
+                  <MenuItem icon={<History />} disabled={!restorable} onSelect={() => onRewind(true)}>
+                    Go back and restore files
+                  </MenuItem>
+                </Menu>
+              )}
+            </MessageActions>
           )}
-          <span>{queued ? "Queued, runs when the agent finishes" : pending ? "Sending…" : clockTime(at)}</span>
+          <span className="ml-1">{pending ? "Sending…" : clockTime(at)}</span>
         </div>
       </div>
     </div>
@@ -504,9 +898,9 @@ function LongText({ text }: { text: string }) {
       aria-expanded={all}
       aria-controls={bodyId}
       onClick={() => setAll(a => !a)}
-      className="my-1.5 flex w-full items-center gap-2.5 text-[12.5px] font-medium text-ink-soft hover:text-ink"
+      className="my-1.5 flex w-full items-center gap-2.5 text-[12px] font-medium text-ink-soft hover:text-ink"
     >
-      <span aria-hidden="true" className="h-px flex-1 bg-[#e6cf4f]" />
+      <span aria-hidden="true" className="h-px flex-1 bg-lemon-line" />
       {all ? (
         "Show less"
       ) : (
@@ -517,7 +911,7 @@ function LongText({ text }: { text: string }) {
           </span>
         </span>
       )}
-      <span aria-hidden="true" className="h-px flex-1 bg-[#e6cf4f]" />
+      <span aria-hidden="true" className="h-px flex-1 bg-lemon-line" />
     </button>
   );
   return (
@@ -538,119 +932,6 @@ function LongText({ text }: { text: string }) {
   );
 }
 
-/** A message waiting for the agent: send it now, edit it, move it or take it back. */
-function QueuedMessage({
-  text,
-  queued,
-  onEdit,
-}: {
-  text: string;
-  queued: NonNullable<Extract<TimelineItem, { kind: "user" }>["queued"]>;
-  onEdit: EditQueuedFn;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(text);
-  const id = queued.clientMsgId;
-  const save = () => {
-    const next = draft.trim();
-    if (next && next !== text) onEdit(id, { action: "update", text: next });
-    setEditing(false);
-  };
-  return (
-    <div className="flex justify-end">
-      <div className={cx("flex max-w-[78%] flex-col items-end", editing && "w-full items-stretch")}>
-        {editing ? (
-          <div className="rounded-2xl rounded-br-md border border-[#f0d95c] bg-lemon-soft p-2">
-            <textarea
-              aria-label="Edit queued message"
-              autoFocus
-              onFocus={e => e.currentTarget.setSelectionRange(e.currentTarget.value.length, e.currentTarget.value.length)}
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  save();
-                } else if (e.key === "Escape") {
-                  setDraft(text);
-                  setEditing(false);
-                }
-              }}
-              rows={Math.min(8, Math.max(2, draft.split("\n").length))}
-              className="w-full resize-none rounded-lg bg-transparent px-2 py-1.5 text-ink outline-none"
-            />
-            <div className="flex justify-end gap-2 px-1 pb-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setDraft(text);
-                  setEditing(false);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button size="sm" variant="primary" disabled={!draft.trim()} onClick={save}>
-                Save
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-2xl rounded-br-md border border-dashed border-[#e9c900] bg-lemon-soft/60 px-4 py-2.5 text-ink">
-            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
-          </div>
-        )}
-        {!editing && (
-          <div className="mt-1 flex items-center justify-end gap-1 pr-1 text-xs text-ink-faint">
-            <span className="mr-1">{queued.count > 1 ? `Queued, ${ordinal(queued.index + 1)} in line` : "Queued, runs when the agent finishes"}</span>
-            <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => onEdit(id, { action: "send_now" })}>
-              Send now
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-6 px-2 text-xs"
-              onClick={() => {
-                setDraft(text);
-                setEditing(true);
-              }}
-            >
-              Edit
-            </Button>
-            <Menu
-              align="end"
-              trigger={
-                <button
-                  type="button"
-                  aria-label="More for this queued message"
-                  className="inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-ink/5 hover:text-ink"
-                >
-                  <MoreHorizontal aria-hidden="true" className="size-4" />
-                </button>
-              }
-            >
-              <MenuItem icon={<ArrowUpToLine />} disabled={queued.index === 0} onSelect={() => onEdit(id, { action: "move", toIndex: 0 })}>
-                Move to front
-              </MenuItem>
-              <MenuItem
-                icon={<ArrowDownToLine />}
-                disabled={queued.index === queued.count - 1}
-                onSelect={() => onEdit(id, { action: "move", toIndex: queued.count - 1 })}
-              >
-                Move to back
-              </MenuItem>
-              <MenuSeparator />
-              <MenuItem icon={<Trash2 />} onSelect={() => onEdit(id, { action: "remove" })}>
-                Remove from queue
-              </MenuItem>
-            </Menu>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /** "It resets at 3:00 PM." or, further off, "It resets on Mon 9 Nov at 3:00 PM." */
 function resetsWhen(iso: string): string {
   const d = new Date(iso);
@@ -659,68 +940,19 @@ function resetsWhen(iso: string): string {
   return sameDay ? `It resets at ${time}.` : `It resets on ${d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" })} at ${time}.`;
 }
 
-const ordinal = (n: number) =>
-  `${n}${n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th"}`;
-
 type ToolResult = { output: unknown; isError: boolean; exitCode?: number };
 
-function ToolCall({ name, input, result }: { name: string; input: unknown; result: ToolResult | null }) {
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
-  const command = commandOf(name, input);
-  const summary = command ? command.split("\n")[0]! : summarizeToolInput(input);
+/** A tool's input and what came back. */
+function ToolDetails({ input, result, running }: { input: unknown; result: ToolResult | null; running: boolean }) {
   const inputText = stringifyValue(input);
   const outputText = result ? stringifyValue(result.output) : "";
-
   return (
-    <div className={cx("rounded-xl border bg-paper", result?.isError ? "border-danger/30" : "border-line")}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-        aria-controls={bodyId}
-        className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left hover:bg-cream/60 focus-visible:-outline-offset-2"
-      >
-        <ChevronRight aria-hidden="true" className={cx("size-4 shrink-0 text-ink-faint transition-transform duration-150", open && "rotate-90")} />
-        {command ? (
-          <SquareTerminal aria-hidden="true" className="size-3.5 shrink-0 text-ink-soft" />
-        ) : (
-          <Wrench aria-hidden="true" className="size-3.5 shrink-0 text-ink-soft" />
-        )}
-        <span className="shrink-0 text-[13px] font-medium text-ink">{name}</span>
-        {summary && <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-soft">{summary}</span>}
-        {!summary && <span className="flex-1" />}
-        {result === null ? (
-          <span className="inline-flex items-center gap-1.5 text-xs text-ink-faint">
-            <Spinner className="size-3 text-leaf" />
-            Running
-          </span>
-        ) : result.isError ? (
-          <span className="inline-flex items-center gap-1 text-xs font-medium text-danger">
-            <CircleAlert aria-hidden="true" className="size-3.5" />
-            Failed
-          </span>
-        ) : (
-          <span className="inline-flex items-center gap-1 text-xs text-leaf">
-            <Check aria-hidden="true" className="size-3.5" />
-            Done
-          </span>
-        )}
-      </button>
-      {open && command && (
-        <div id={bodyId} className="border-t border-line p-2">
-          <TerminalBlock command={command} result={result} />
-        </div>
-      )}
-      {open && !command && (
-        <div id={bodyId} className="flex flex-col gap-3 border-t border-line px-3 py-3">
-          {inputText && <CodeBlock label="Input" text={inputText} />}
-          {result ? (
-            <CodeBlock label={result.isError ? "Error" : "Output"} text={outputText || "(no output)"} error={result.isError} />
-          ) : (
-            <p className="text-[13px] text-ink-faint">Waiting for the result.</p>
-          )}
-        </div>
+    <div className="flex flex-col gap-2.5 py-1">
+      {inputText && <CodeBlock label="Input" text={inputText} />}
+      {result ? (
+        <CodeBlock label={result.isError ? "Error" : "Output"} text={outputText || "(no output)"} error={result.isError} />
+      ) : (
+        <p className="text-[13px] text-ink-faint">{running ? "Waiting for the result." : "It stopped before it finished."}</p>
       )}
     </div>
   );
@@ -734,7 +966,7 @@ function TerminalBlock({ command, result }: { command: string; result: ToolResul
   const failed = result !== null && (result.isError || (out?.exitCode ?? 0) !== 0);
   const status = !result ? "Running" : out?.exitCode !== null && out?.exitCode !== undefined ? `Exit code ${out.exitCode}` : failed ? "Failed" : "Done";
   return (
-    <div className="overflow-hidden rounded-lg bg-rind font-mono text-[12px] leading-relaxed">
+    <div className="my-1 overflow-hidden rounded-lg bg-rind font-mono text-[12px] leading-relaxed">
       <div className="scroll-thin max-h-[420px] overflow-auto px-3 py-2.5">
         <pre className="font-medium whitespace-pre-wrap text-rind-text [overflow-wrap:anywhere]">
           <span aria-hidden="true" className="text-lime select-none">
@@ -759,47 +991,12 @@ function TerminalBlock({ command, result }: { command: string; result: ToolResul
         {!result ? (
           <Spinner className="size-3 text-lime" />
         ) : failed ? (
-          <CircleAlert aria-hidden="true" className="size-3.5 text-[#f2877e]" />
+          <CircleAlert aria-hidden="true" className="size-3.5 text-rind-danger" />
         ) : (
           <Check aria-hidden="true" className="size-3.5 text-lime" />
         )}
-        <span className={cx("tabular-nums", failed ? "text-[#f2877e]" : "text-rind-text")}>{status}</span>
+        <span className={cx("tabular-nums", failed ? "text-rind-danger" : "text-rind-text")}>{status}</span>
       </div>
-    </div>
-  );
-}
-
-/** The agent's reasoning: one quiet line ("Thought for 12s") that opens to the text. */
-function ReasoningRow({ text, streaming, startedAt, endedAt }: { text: string; streaming: boolean; startedAt: string; endedAt: string }) {
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
-  const ms = elapsedMs(startedAt, endedAt);
-  const label = streaming ? "Thinking" : ms !== null && ms >= 1000 ? `Thought for ${formatDuration(ms)}` : "Thought for a moment";
-  // Some agents keep what they thought to themselves: just say that they did.
-  if (!text.trim() && !streaming)
-    return (
-      <p className="inline-flex items-center gap-1.5 py-0.5 pr-1.5 pl-1 text-[13px] text-ink-faint">
-        <Brain aria-hidden="true" className="size-3.5" />
-        <span className="tabular-nums">{label}</span>
-      </p>
-    );
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-        aria-controls={bodyId}
-        className="inline-flex items-center gap-1.5 rounded-md py-0.5 pr-1.5 pl-1 text-[13px] text-ink-faint hover:text-ink"
-      >
-        <ChevronRight aria-hidden="true" className={cx("size-3.5 transition-transform duration-150", open && "rotate-90")} />
-        <span className="tabular-nums">{label}</span>
-      </button>
-      {open && (
-        <div id={bodyId} className="mt-1 ml-[11px] border-l-2 border-line pl-4 text-ink-soft">
-          <StreamingMarkdown text={text} className="text-[13.5px]" />
-        </div>
-      )}
     </div>
   );
 }
@@ -807,7 +1004,7 @@ function ReasoningRow({ text, streaming, startedAt, endedAt }: { text: string; s
 function CodeBlock({ label, text, error }: { label: string; text: string; error?: boolean }) {
   return (
     <div>
-      <p className="mb-1 text-xs font-medium text-ink-soft">{label}</p>
+      <p className="mb-1 text-[12px] font-medium text-ink-soft">{label}</p>
       <pre
         className={cx(
           "scroll-thin max-h-72 overflow-auto rounded-lg border px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]",
@@ -850,7 +1047,7 @@ function ErrorRow({ message, code, fatal }: { message: string; code?: string | u
       <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-danger" />
       <div className="min-w-0">
         <p className="font-medium text-danger">{fatal ? "The thread stopped because of an error" : "Something went wrong"}</p>
-        <p className="mt-0.5 whitespace-pre-wrap text-[13.5px] [overflow-wrap:anywhere]">{message}</p>
+        <p className="mt-0.5 text-[13.5px] whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
         {code && <p className="mt-1 font-mono text-xs text-ink-soft">{code}</p>}
       </div>
     </div>

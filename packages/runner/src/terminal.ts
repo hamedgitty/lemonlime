@@ -35,7 +35,7 @@ export function shellEnv(env: NodeJS.ProcessEnv = process.env): Record<string, s
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) continue;
-    if (k === "LEMONLIME_THREAD_SECRET" || k === "LEMONLIME_APPROVAL_TOKEN" || k === "LEMONLIME_AGENT_FILES") continue;
+    if (k === "LEMONLIME_THREAD_SECRET" || k === "LEMONLIME_AGENT_KEY" || k === "LEMONLIME_APPROVAL_TOKEN" || k === "LEMONLIME_AGENT_FILES") continue;
     out[k] = v;
   }
   out.TERM = "xterm-256color";

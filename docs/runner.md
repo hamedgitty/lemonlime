@@ -167,7 +167,7 @@ working folder, given one task. Spawning is idempotent per `request_id`; an agen
 finishes, its reply is queued to whoever started it as a message, so the work goes on
 with no app open; the thread shows `subagent_started` / `subagent_replied` notices.
 Only the agent that started a subagent can message it. The tools call the runner's
-`/subagents` routes with a runner token signed with the thread secret.
+`/subagents` routes with a runner token signed with the agent key (see Tokens).
 
 ## Computer access (cloud threads)
 
@@ -316,7 +316,16 @@ control plane, which keeps it encrypted for the user's next sandboxes.
 
 The control plane derives a per-thread secret with `deriveThreadSecret(master, threadId)`
 and gives only that to the runner. The desktop app does the same with a secret it
-generates locally. Tokens are short-lived HMAC-signed claims (`packages/protocol/src/token.ts`).
+generates locally. Tokens are short-lived HMAC-signed claims (`packages/protocol/src/token.ts`);
+the runner refuses any that claim to live longer than 15 minutes.
+
+The agent never gets the thread secret. The runner removes `LEMONLIME_THREAD_SECRET` from
+the environment the agent and everything it starts inherit, and sets `LEMONLIME_AGENT_KEY`
+instead: a key derived from the secret with `deriveAgentKey` that can't be turned back into
+it. The agent's own tools (`lemonlime-runner preview`, the subagents and computer tools, the
+git credential helper) sign with that key, and only those routes accept it. Opening the
+thread as the user (`client` tokens) and talking to the control plane as the runner still
+need the secret, so an agent can't approve its own requests or post as the runner.
 
 ## Idle pausing
 

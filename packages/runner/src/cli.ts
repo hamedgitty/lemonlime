@@ -10,6 +10,7 @@ import {
   DEFAULT_BRANCH_PREFIX,
   isSafeBranchPrefix,
   ReasoningLevel,
+  deriveAgentKey,
   signToken,
   ThreadId,
   UserSkillList,
@@ -307,6 +308,14 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (!agent.success) fail("--agent must be one of claude-code, codex, opencode, acp");
   const secret = process.env.LEMONLIME_THREAD_SECRET ?? "";
   if (secret.length < 16) fail("LEMONLIME_THREAD_SECRET must be set (at least 16 characters)");
+  // The agent and everything it starts inherit this process's environment. It gets a key
+  // derived from the secret instead of the secret itself: enough for its own tools
+  // (previews, subagents, computer access, git credentials), not enough to act as the
+  // user or as this runner.
+  const agentKey = await deriveAgentKey(secret);
+  const redactions = { ...secretsFromEnv(), LEMONLIME_AGENT_KEY: agentKey };
+  delete process.env.LEMONLIME_THREAD_SECRET;
+  process.env.LEMONLIME_AGENT_KEY = agentKey;
   const port = Number(values.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) fail("--port must be a valid port number");
 
@@ -399,7 +408,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     ...(sourceRepo ? { sourceRepo } : {}),
     checkAgentVersion: true,
     bundledSkills: !values["no-bundled-skills"],
-    redact: secretsFromEnv(),
+    redact: redactions,
     ...(cloudGit ? { pushBranch: true, credentialHelper: credentialHelperCommand() } : {}),
     ...(values["control-plane"] && secret
       ? { onAgentCredential: (c: AgentCredential) => uploadCredential(values["control-plane"]!, id, agent.data!, secret, c, relay) }
@@ -630,10 +639,10 @@ async function previewCommand(args: string[]): Promise<void> {
   const port = Number(positionals[0]);
   const base = process.env.LEMONLIME_RUNNER_URL;
   const threadId = process.env.LEMONLIME_THREAD_ID;
-  const secret = process.env.LEMONLIME_THREAD_SECRET;
+  const key = process.env.LEMONLIME_AGENT_KEY;
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("usage: lemonlime-runner preview <port> [--name <what it is>] [--remove]");
-  if (!base || !threadId || !secret) throw new Error("Run this from inside a LemonLime thread (the runner sets LEMONLIME_RUNNER_URL).");
-  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 60 }, secret);
+  if (!base || !threadId || !key) throw new Error("Run this from inside a LemonLime thread (the runner sets LEMONLIME_RUNNER_URL).");
+  const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 60 }, key);
   const res = await fetch(`${base}/previews`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },

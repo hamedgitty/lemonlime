@@ -17,7 +17,8 @@ export const GET = route(async request => {
   const ctx = await getAppContext();
   const params = new URL(request.url).searchParams;
   const threadId = params.get("threadId") ?? "";
-  const auth = await authenticateRunner(request.headers.get("authorization"), threadId, ctx.config.tokenSecret());
+  // The agent's git credential helper signs with the agent key; the runner's older builds with the secret.
+  const auth = await authenticateRunner(request.headers.get("authorization"), threadId, ctx.config.tokenSecret(), undefined, { allowAgent: true });
   if (!auth.ok) throw new HttpError(auth.status, auth.error);
   const row = await getLiveRunnerThread(ctx, threadId);
   const cfg = githubAppConfig(ctx.vars);

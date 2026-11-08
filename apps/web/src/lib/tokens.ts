@@ -1,4 +1,4 @@
-import { ThreadId, deriveThreadSecret, signToken, verifyToken } from "@lemonlime/protocol";
+import { ThreadId, deriveAgentKey, deriveThreadSecret, signToken, verifyToken } from "@lemonlime/protocol";
 import { bearerToken } from "./access-tokens.ts";
 
 /**
@@ -41,12 +41,16 @@ export async function authenticateRunner(
   threadId: string,
   masterSecret: string,
   nowSec: number = Math.floor(Date.now() / 1000),
+  opts: { allowAgent?: boolean } = {},
 ): Promise<RunnerAuthResult> {
   const token = bearerToken(authorization);
   if (!token) return { ok: false, status: 401, error: "missing bearer token" };
   if (!ThreadId.safeParse(threadId).success) return { ok: false, status: 401, error: "invalid thread id" };
   const secret = await threadSecret(masterSecret, threadId);
-  const result = await verifyToken(token, secret, nowSec);
+  let result = await verifyToken(token, secret, nowSec);
+  // The agent's own tools sign with a key derived from the thread secret (they never get
+  // the secret itself); only routes that serve those tools accept it.
+  if (!result.ok && result.reason === "bad_signature" && opts.allowAgent) result = await verifyToken(token, await deriveAgentKey(secret), nowSec);
   if (!result.ok) return { ok: false, status: 401, error: `token ${result.reason.replace("_", " ")}` };
   if (result.claims.scope !== "runner") return { ok: false, status: 403, error: "token is not a runner token" };
   if (result.claims.threadId !== threadId) return { ok: false, status: 403, error: "token is for another thread" };

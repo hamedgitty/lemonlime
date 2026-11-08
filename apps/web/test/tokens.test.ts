@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveThreadSecret, signToken, verifyToken } from "@lemonlime/protocol";
+import { deriveAgentKey, deriveThreadSecret, signToken, verifyToken } from "@lemonlime/protocol";
 import { bearerToken, generateAccessToken, hashAccessToken, looksLikeAccessToken, safeEqual } from "../src/lib/access-tokens.ts";
 import { CLIENT_TOKEN_TTL_SECONDS, authenticateRunner, issueClientToken } from "../src/lib/tokens.ts";
 
@@ -16,6 +16,16 @@ describe("authenticateRunner", () => {
   it("accepts a runner token signed with the thread's secret", async () => {
     const token = await runnerToken(THREAD);
     expect(await authenticateRunner(`Bearer ${token}`, THREAD, MASTER, NOW)).toEqual({ ok: true, threadId: THREAD });
+  });
+
+  it("accepts the agent's key only where a route allows it (the git credential helper)", async () => {
+    const agentKey = await deriveAgentKey(await deriveThreadSecret(MASTER, THREAD));
+    const token = await runnerToken(THREAD, { secret: agentKey });
+    expect(await authenticateRunner(`Bearer ${token}`, THREAD, MASTER, NOW)).toMatchObject({ ok: false, status: 401 });
+    expect(await authenticateRunner(`Bearer ${token}`, THREAD, MASTER, NOW, { allowAgent: true })).toEqual({ ok: true, threadId: THREAD });
+    // Another thread's agent key is still refused.
+    const other = await runnerToken(THREAD, { secret: await deriveAgentKey(await deriveThreadSecret(MASTER, "thread-bbbbbb")) });
+    expect(await authenticateRunner(`Bearer ${other}`, THREAD, MASTER, NOW, { allowAgent: true })).toMatchObject({ ok: false });
   });
 
   it("rejects tokens made to last, since whoever made one could keep it", async () => {

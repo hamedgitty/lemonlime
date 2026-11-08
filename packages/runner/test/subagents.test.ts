@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { branchForThread, type Thread } from "@lemonlime/protocol";
+import { branchForThread, type Thread, deriveAgentKey } from "@lemonlime/protocol";
 import { runSubagentTool, startServer, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
@@ -54,7 +54,7 @@ async function boot() {
     () => runner.close(),
     () => server.close(),
   );
-  const env = { LEMONLIME_RUNNER_URL: `http://127.0.0.1:${server.port}`, LEMONLIME_THREAD_ID: thread.id, LEMONLIME_THREAD_SECRET: SECRET };
+  const env = { LEMONLIME_RUNNER_URL: `http://127.0.0.1:${server.port}`, LEMONLIME_THREAD_ID: thread.id, LEMONLIME_AGENT_KEY: await deriveAgentKey(SECRET) };
   return { runner, env, mainPrompts, childPrompts, release: () => release() };
 }
 const textOf = (r: { content: { text: string }[] }) => r.content[0]!.text;
@@ -101,7 +101,7 @@ describe("subagents", () => {
     expect(textOf(tooDeep)).toMatch(/2 levels deep/);
     expect(await runSubagentTool("message_subagent", { id: ids[1]!, text: "hi" }, childEnv)).toMatchObject({ isError: true });
     expect(
-      await runSubagentTool("spawn_subagent", { request_id: "x", task: "y" }, { ...env, LEMONLIME_THREAD_SECRET: "wrong-secret-0123456789" }),
+      await runSubagentTool("spawn_subagent", { request_id: "x", task: "y" }, { ...env, LEMONLIME_AGENT_KEY: "wrong-secret-0123456789" }),
     ).toMatchObject({ isError: true });
     release();
   });

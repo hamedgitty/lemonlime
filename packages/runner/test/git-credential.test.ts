@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { branchForThread, verifyToken, type Thread } from "@lemonlime/protocol";
+import { branchForThread, verifyToken, type Thread, deriveAgentKey } from "@lemonlime/protocol";
 import { credentialHelperCommand, gitCredential, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -56,7 +56,7 @@ describe("git credential helper", () => {
     };
     const seen: string[] = [];
     const server = createServer(async (req, res) => {
-      const ok = await verifyToken((req.headers.authorization ?? "").replace("Bearer ", ""), secret);
+      const ok = await verifyToken((req.headers.authorization ?? "").replace("Bearer ", ""), await deriveAgentKey(secret));
       seen.push(`${req.url} ${ok.ok && ok.claims.scope}`);
       res.writeHead(answer.status, { "content-type": "application/json" }).end(JSON.stringify(answer.body));
     });
@@ -64,7 +64,7 @@ describe("git credential helper", () => {
     cleanups.push(() => new Promise<void>(r => server.close(() => r())));
     const env = {
       LEMONLIME_THREAD_ID: "cred-thread-1",
-      LEMONLIME_THREAD_SECRET: secret,
+      LEMONLIME_AGENT_KEY: await deriveAgentKey(secret),
       LEMONLIME_CONTROL_PLANE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     };
 

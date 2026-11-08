@@ -9,6 +9,9 @@ import {
   parseClientMessage,
   parseTerminalClientMessage,
   verifyToken,
+  deriveAgentKey,
+  MAX_TOKEN_LIFETIME_SECONDS,
+  type VerifyResult,
   type ServerMessage,
   type TerminalServerMessage,
 } from "@lemonlime/protocol";
@@ -38,6 +41,24 @@ export interface RunningServer {
 }
 
 const HELLO_TIMEOUT_MS = 10_000;
+
+const agentKeys = new Map<string, Promise<string>>();
+/** The key the agent's own tools sign with (see deriveAgentKey), worked out once per secret. */
+function agentKeyFor(threadSecret: string): Promise<string> {
+  let key = agentKeys.get(threadSecret);
+  if (!key) {
+    key = deriveAgentKey(threadSecret);
+    agentKeys.set(threadSecret, key);
+  }
+  return key;
+}
+
+/** verifyToken, also refusing tokens that claim to live longer than any LemonLime app makes them. */
+async function verifyCapped(token: string, key: string): Promise<VerifyResult> {
+  const result = await verifyToken(token, key);
+  if (result.ok && result.claims.exp > Math.floor(Date.now() / 1000) + MAX_TOKEN_LIFETIME_SECONDS + 60) return { ok: false, reason: "malformed" };
+  return result;
+}
 const MAX_FRAME_BYTES = 1024 * 1024;
 const TERMINAL_FRAME_BYTES = 256 * 1024;
 /** Output sent at once to a terminal client; bigger bursts are split. */
@@ -145,7 +166,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         ws.close(4401, "unauthorized");
         return;
       }
-      const result = await verifyToken(msg.token, opts.threadSecret);
+      const result = await verifyCapped(msg.token, opts.threadSecret);
       const thread = runner.thread;
       if (!result.ok || result.claims.scope !== "client" || result.claims.threadId !== thread.id) {
         send({ type: "error", code: "unauthorized", message: result.ok ? "Token is not valid for this thread" : `Token ${result.reason.replace("_", " ")}` });
@@ -299,7 +320,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
         send({ type: "error", code: "unauthorized", message: "Send hello first" });
         return ws.close(4401, "unauthorized");
       }
-      const result = await verifyToken(msg.token, opts.threadSecret);
+      const result = await verifyCapped(msg.token, opts.threadSecret);
       if (!result.ok || result.claims.scope !== "client" || result.claims.threadId !== runner.thread.id) {
         send({ type: "error", code: "unauthorized", message: "Token is not valid for this thread" });
         return ws.close(4401, "unauthorized");
@@ -390,8 +411,8 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     // /relay: the control plane collecting and answering calls (a relay token);
     // /relay/local: this sandbox's own git credential helper (a runner token).
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
     const scope = path === "/relay" ? "relay" : "runner";
+    const auth = token ? await verifyCapped(token, scope === "relay" ? opts.threadSecret : await agentKeyFor(opts.threadSecret)) : null;
     if (!auth?.ok || auth.claims.scope !== scope || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     if (path === "/relay" && req.method === "GET") return reply(res, 200, { requests: opts.relay.take() });
     if (req.method !== "POST") return reply(res, 405, { error: "method_not_allowed" });
@@ -416,9 +437,9 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     return reply(res, answer.status, answer.body ?? {});
   }
   if (path === "/computer" && req.method === "POST") {
-    // From the cloud agent's own tools: a runner token signed with the thread secret.
+    // From the cloud agent's own tools: a runner token signed with the agent key.
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+    const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
     if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     const body = await readBody(req, 64 * 1024);
     const parsed = ComputerRequest.safeParse(
@@ -434,9 +455,9 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     return reply(res, 200, await runner.computer.request(parsed.data));
   }
   if (path.startsWith("/subagents")) {
-    // From the agents' own subagents MCP server: a runner token signed with the thread secret.
+    // From the agents' own subagents MCP server: a runner token signed with the agent key.
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+    const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
     if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     const parent = new URL(req.url ?? "/", "http://runner").searchParams.get("parent") || null;
     if (path === "/subagents" && req.method === "GET") return reply(res, 200, { subagents: runner.subagents.list(parent) });
@@ -461,13 +482,15 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     return reply(res, 404, { error: "not_found" });
   }
   if (path === "/previews") {
-    // From the agent's own `lemonlime-runner preview`: a runner token, signed with the thread secret it was given.
+    // From the agent's own `lemonlime-runner preview`: a runner token signed with the agent key.
+    // The user's apps may list previews with their client token.
     const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-    const auth = token ? await verifyToken(token, opts.threadSecret) : null;
-    if (req.method === "GET")
-      return auth?.ok && auth.claims.threadId === runner.thread.id
-        ? reply(res, 200, { previews: runner.previews })
-        : reply(res, 401, { error: "unauthorized" });
+    const auth = token ? await verifyCapped(token, await agentKeyFor(opts.threadSecret)) : null;
+    if (req.method === "GET") {
+      const asClient = token && !auth?.ok ? await verifyCapped(token, opts.threadSecret) : null;
+      const ok = (auth?.ok && auth.claims.threadId === runner.thread.id) || (asClient?.ok && asClient.claims.scope === "client" && asClient.claims.threadId === runner.thread.id);
+      return ok ? reply(res, 200, { previews: runner.previews }) : reply(res, 401, { error: "unauthorized" });
+    }
     if (!auth?.ok || auth.claims.scope !== "runner" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
     const body = await readBody(req, 4096);
     let parsed: { port?: unknown; name?: unknown; remove?: unknown } = {};
@@ -495,7 +518,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     );
   }
   const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-  const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+  const auth = token ? await verifyCapped(token, opts.threadSecret) : null;
   if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return reply(res, 401, { error: "unauthorized" });
 
   if (path === "/teleport/export" && req.method === "POST") {
@@ -622,7 +645,7 @@ function handleTunnel(ws: WebSocket, req: IncomingMessage, runner: ThreadRunner,
       /* not a hello */
     }
     void (async () => {
-      const auth = token ? await verifyToken(token, opts.threadSecret) : null;
+      const auth = token ? await verifyCapped(token, opts.threadSecret) : null;
       if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return ws.close(4401, "unauthorized");
       if (!runner.previews.some(p => p.port === port)) return ws.close(4404, "not a preview port");
       open();

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { RunnerClient } from "@lemonlime/client";
-import { branchForThread, signToken, type ComputerRequest, type Thread } from "@lemonlime/protocol";
+import { branchForThread, signToken, type ComputerRequest, type Thread, deriveAgentKey } from "@lemonlime/protocol";
 import { runSubagentTool, startServer, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
@@ -37,7 +37,7 @@ describe("computer access", () => {
     const env = {
       LEMONLIME_RUNNER_URL: `http://127.0.0.1:${server.port}`,
       LEMONLIME_THREAD_ID: thread.id,
-      LEMONLIME_THREAD_SECRET: SECRET,
+      LEMONLIME_AGENT_KEY: await deriveAgentKey(SECRET),
       LEMONLIME_COMPUTER_TOOLS: "1",
     };
 

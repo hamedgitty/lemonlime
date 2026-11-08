@@ -17,7 +17,7 @@ export function credentialHelperCommand(command: string[] = selfCommand("git-cre
  * and prints it. Prints nothing when there is none, so git carries on without (public
  * repos). `store` and `erase` are ignored: tokens expire on their own within the hour.
  *
- * Needs LEMONLIME_THREAD_ID, LEMONLIME_THREAD_SECRET and LEMONLIME_CONTROL_PLANE_URL, which
+ * Needs LEMONLIME_THREAD_ID, LEMONLIME_AGENT_KEY and LEMONLIME_CONTROL_PLANE_URL, which
  * the runner sets for itself and everything it starts.
  *
  * Relay mode (the sandbox can't reach the control plane): the control plane hands the
@@ -36,7 +36,8 @@ export async function gitCredential(op: string, input: string, env: NodeJS.Proce
   );
   if (req.protocol !== "https" || !req.host) return "";
   const threadId = env.LEMONLIME_THREAD_ID;
-  const secret = env.LEMONLIME_THREAD_SECRET;
+  // The agent's key (see deriveAgentKey); the control plane accepts it for this one request.
+  const secret = env.LEMONLIME_AGENT_KEY;
   const base = env.LEMONLIME_CONTROL_PLANE_URL;
   if (!threadId || !secret || !base) return "";
   const startToken = env.LEMONLIME_GIT_TOKEN;

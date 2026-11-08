@@ -1,6 +1,6 @@
 // The subagents MCP server agent CLIs start (stdio, JSON-RPC): `lemonlime-runner subagents-mcp`.
 // Three tools, each a call to this thread's runner. Env (set by the runner for its agents):
-// LEMONLIME_RUNNER_URL, LEMONLIME_THREAD_ID, LEMONLIME_THREAD_SECRET, and for subagents
+// LEMONLIME_RUNNER_URL, LEMONLIME_THREAD_ID, LEMONLIME_AGENT_KEY, and for subagents
 // themselves LEMONLIME_SUBAGENT_ID (so their own subagents are theirs).
 import { createInterface } from "node:readline";
 import { signToken } from "@lemonlime/protocol";
@@ -55,7 +55,7 @@ const toolsFor = (env: NodeJS.ProcessEnv) => (env.LEMONLIME_COMPUTER_TOOLS === "
 async function call(env: NodeJS.ProcessEnv, path: string, body?: Json): Promise<{ ok: boolean; data: Json }> {
   const base = env.LEMONLIME_RUNNER_URL;
   const threadId = env.LEMONLIME_THREAD_ID;
-  const secret = env.LEMONLIME_THREAD_SECRET;
+  const secret = env.LEMONLIME_AGENT_KEY;
   if (!base || !threadId || !secret) return { ok: false, data: { error: "Subagents only work inside a LemonLime thread." } };
   const token = await signToken({ threadId, scope: "runner", exp: Math.floor(Date.now() / 1000) + 60 }, secret);
   const parent = env.LEMONLIME_SUBAGENT_ID ? `?parent=${encodeURIComponent(env.LEMONLIME_SUBAGENT_ID)}` : "";

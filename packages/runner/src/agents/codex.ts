@@ -44,7 +44,7 @@ class CodexSession implements AgentSession {
         // Codex starts MCP servers with a clean environment; these say which thread and runner
         // this is, passed by name so the secret never appears in a command line.
         "-c",
-        `mcp_servers.lemonlime_subagents.env_vars=${JSON.stringify(["LEMONLIME_RUNNER_URL", "LEMONLIME_THREAD_ID", "LEMONLIME_THREAD_SECRET", "LEMONLIME_SUBAGENT_ID", "LEMONLIME_COMPUTER_TOOLS"])}`,
+        `mcp_servers.lemonlime_subagents.env_vars=${JSON.stringify(["LEMONLIME_RUNNER_URL", "LEMONLIME_THREAD_ID", "LEMONLIME_AGENT_KEY", "LEMONLIME_SUBAGENT_ID", "LEMONLIME_COMPUTER_TOOLS"])}`,
       );
     }
     // The user's plugin servers. Unlike LemonLime's own, their tools aren't pre-approved.

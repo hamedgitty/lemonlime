@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { WebSocketServer } from "ws";
-import { branchForThread, signToken, type Thread } from "@lemonlime/protocol";
+import { branchForThread, signToken, type Thread, deriveAgentKey } from "@lemonlime/protocol";
 import { allowedRequest, startServer, startTunnel, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
@@ -52,7 +52,7 @@ async function boot() {
     () => runner.close(),
     () => server.close(),
   );
-  const sign = (scope: "client" | "runner") => signToken({ threadId: thread.id, scope, exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
+  const sign = async (scope: "client" | "runner") => signToken({ threadId: thread.id, scope, exp: Math.floor(Date.now() / 1000) + 60 }, scope === "runner" ? await deriveAgentKey(SECRET) : SECRET);
   return { runner, port: server.port, sign };
 }
 

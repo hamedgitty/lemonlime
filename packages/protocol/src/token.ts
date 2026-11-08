@@ -53,6 +53,21 @@ export async function deriveThreadSecret(masterSecret: string, threadId: string)
   return b64url(new Uint8Array(mac));
 }
 
+/**
+ * The key the agent's own tools sign their requests with (previews, subagents, computer
+ * access, git credentials). It is derived from the thread secret and can't be turned back
+ * into it, so the agent never holds the secret: tokens signed with this key are accepted
+ * only for those tools, never as the user (client) or as the runner talking to the
+ * control plane.
+ */
+export async function deriveAgentKey(threadSecret: string): Promise<string> {
+  const mac = await crypto.subtle.sign("HMAC", await hmacKey(threadSecret), enc.encode("lemonlime-agent-tools"));
+  return b64url(new Uint8Array(mac));
+}
+
+/** Longest lifetime a runner or client should accept on a token, from now. */
+export const MAX_TOKEN_LIFETIME_SECONDS = 15 * 60;
+
 export async function signToken(claims: TokenClaims, secret: string): Promise<string> {
   const payload = b64url(enc.encode(JSON.stringify(TokenClaims.parse(claims))));
   const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(payload));

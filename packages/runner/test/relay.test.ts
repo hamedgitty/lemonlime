@@ -1,15 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { branchForThread, signToken, type Thread } from "@lemonlime/protocol";
+import { branchForThread, signToken, type Thread, deriveAgentKey } from "@lemonlime/protocol";
 import { gitCredential, Relay, startServer, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 
 const SECRET = "thread-secret-for-relay-tests-0123";
+const AGENT_KEY = await deriveAgentKey(SECRET);
 const THREAD = "relay-thread-1";
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-const token = (scope: "runner" | "relay" | "client", threadId = THREAD) => signToken({ threadId, scope, exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
+// Runner-scope requests here come from the agent's own git helper, signed with the agent key.
+const token = async (scope: "runner" | "relay" | "client", threadId = THREAD) => signToken({ threadId, scope, exp: Math.floor(Date.now() / 1000) + 60 }, scope === "runner" ? await deriveAgentKey(SECRET) : SECRET);
 
 async function serve(relay: Relay | undefined) {
   const idle: AgentAdapter = { kind: "codex", createSession: () => ({ runTurn: async () => {}, saveState: () => ({}), dispose: async () => {} }) };
@@ -117,7 +119,7 @@ describe("runner /relay", () => {
 
 describe("git credential helper in relay mode", () => {
   const input = "protocol=https\nhost=github.com\npath=you/app.git\n\n";
-  const base = { LEMONLIME_THREAD_ID: THREAD, LEMONLIME_THREAD_SECRET: SECRET, LEMONLIME_CONTROL_PLANE_URL: "http://unreachable.invalid" };
+  const base = { LEMONLIME_THREAD_ID: THREAD, LEMONLIME_AGENT_KEY: AGENT_KEY, LEMONLIME_CONTROL_PLANE_URL: "http://unreachable.invalid" };
 
   it("uses the token the sandbox started with, for its host, while it has time left", async () => {
     const later = new Date(Date.now() + 50 * 60_000).toISOString();

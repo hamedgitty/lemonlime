@@ -74,9 +74,29 @@ export const Thread = z.object({
 });
 export type Thread = z.infer<typeof Thread>;
 
-/** Every thread works on its own branch. */
-export function branchForThread(id: ThreadId): string {
-  return `agent/${id}`;
+/** What thread branches start with unless the user picks something else (local threads). */
+export const DEFAULT_BRANCH_PREFIX = "agent/";
+
+/**
+ * A prefix for thread branch names, e.g. "agent/", "ai/" or "lemonlime-". It must make a
+ * valid git branch name with any thread id after it: letters, digits, ".", "_", "-" and
+ * "/" between parts, no part starting with "." or ending in ".lock", no "..", "//" or "@{".
+ */
+export const BranchPrefix = z
+  .string()
+  .max(100)
+  .regex(/^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\/)*[A-Za-z0-9_][A-Za-z0-9._-]*\/?$/, "branch prefix can use letters, digits, . _ - and / between parts")
+  .refine(p => !p.includes("..") && !p.split("/").some(part => part.endsWith(".lock") || part.endsWith(".")), "branch prefix is not a valid git branch name");
+export type BranchPrefix = z.infer<typeof BranchPrefix>;
+
+export function isSafeBranchPrefix(prefix: string): boolean {
+  return BranchPrefix.safeParse(prefix).success;
+}
+
+/** Every thread works on its own branch: `agent/<id>` unless a (validated) prefix is given. */
+export function branchForThread(id: ThreadId, prefix: string = DEFAULT_BRANCH_PREFIX): string {
+  if (!isSafeBranchPrefix(prefix)) throw new Error(`"${prefix}" is not a safe branch prefix`);
+  return `${prefix}${id}`;
 }
 
 /** Generates a sortable, branch-safe thread id: base36 time + random suffix. */

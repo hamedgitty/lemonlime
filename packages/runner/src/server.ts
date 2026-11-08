@@ -77,6 +77,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
           idleSince: runner.idle,
           version: opts.version,
           agentVersion: runner.agentVersion,
+          waitingApprovals: runner.waitingApprovals,
         }),
       );
       return;

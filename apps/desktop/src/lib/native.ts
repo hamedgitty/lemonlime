@@ -21,15 +21,39 @@ export interface StartLocalRunnerArgs {
   baseBranch?: string | undefined;
   /** Path to lemonlime-runner, or empty to look it up on PATH. */
   runnerPath?: string | undefined;
+  /** The user's own instructions, added to every turn (saved to a file for --instructions-file). */
+  instructions?: string | undefined;
+  /** Remove Co-authored-by trailers from the agent's commits (--strip-coauthors). */
+  stripCoauthors?: boolean | undefined;
+  /** Branch name prefix for new threads, e.g. "agent/" (--branch-prefix). Existing threads keep theirs. */
+  branchPrefix?: string | undefined;
+  /** Retry turns that hit a busy provider or a usage limit, waiting at most this long (--retry-max-wait); 0 or unset: off. */
+  retryMaxWaitMinutes?: number | undefined;
+  /** Bundled skills to leave out (--disable-skills). */
+  disabledSkills?: string[] | undefined;
+  /** false turns the command guard off (--no-command-guard). On when unset. */
+  commandGuard?: boolean | undefined;
 }
 
 function requireShell(): void {
   if (!isTauri()) throw new Error("Local threads need the LemonLime desktop app. Start it with `pnpm tauri dev`.");
 }
 
+type RunnerDefaults = Pick<
+  StartLocalRunnerArgs,
+  "instructions" | "stripCoauthors" | "branchPrefix" | "retryMaxWaitMinutes" | "disabledSkills" | "commandGuard"
+>;
+let runnerDefaults: RunnerDefaults = {};
+
+/** What every local runner starts with, from Settings (the app keeps it current). */
+export function setRunnerDefaults(d: RunnerDefaults): void {
+  runnerDefaults = d;
+}
+
 /** Starts (or returns the already running) runner for a local thread. */
-export async function startLocalRunner(args: StartLocalRunnerArgs): Promise<LocalRunnerInfo> {
+export async function startLocalRunner(input: StartLocalRunnerArgs): Promise<LocalRunnerInfo> {
   requireShell();
+  const args: StartLocalRunnerArgs = { ...runnerDefaults, ...input };
   return invoke<LocalRunnerInfo>("start_local_runner", {
     threadId: args.threadId,
     agent: args.agent,
@@ -39,6 +63,12 @@ export async function startLocalRunner(args: StartLocalRunnerArgs): Promise<Loca
     workdir: args.workdir,
     baseBranch: args.baseBranch || null,
     runnerPath: args.runnerPath || null,
+    instructions: args.instructions?.trim() ? args.instructions : null,
+    stripCoauthors: args.stripCoauthors ?? null,
+    branchPrefix: args.branchPrefix || null,
+    retryMaxWaitMinutes: args.retryMaxWaitMinutes ?? null,
+    disabledSkills: args.disabledSkills?.length ? args.disabledSkills : null,
+    commandGuard: args.commandGuard ?? null,
   });
 }
 

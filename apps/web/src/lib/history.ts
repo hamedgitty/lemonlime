@@ -147,6 +147,28 @@ export async function readHistory(ctx: AppContext, threadId: string, after: numb
   return { events, more: false };
 }
 
+/**
+ * The agent's last whole message in a thread's stored history, or null. Reads the newest
+ * chunks only (a few at most), so it stays cheap on long threads.
+ */
+export async function lastAgentMessage(ctx: AppContext, threadId: string, maxChunks = 3): Promise<string | null> {
+  if (!ctx.history) return null;
+  const chunks = (await ctx.history.list(prefixFor(threadId)))
+    .map(key => ({ key, range: parseKey(key) }))
+    .filter((c): c is { key: string; range: { from: number; to: number } } => c.range !== null)
+    .sort((a, b) => b.range.to - a.range.to)
+    .slice(0, maxChunks);
+  for (const chunk of chunks) {
+    const lines = ((await ctx.history.get(chunk.key)) ?? "").split("\n").reverse();
+    for (const line of lines) {
+      if (!line.includes('"agent_message"')) continue;
+      const parsed = ThreadEvent.safeParse(JSON.parse(line));
+      if (parsed.success && parsed.data.type === "agent_message" && !parsed.data.partial && parsed.data.text.trim()) return parsed.data.text;
+    }
+  }
+  return null;
+}
+
 // ─── Messages sent while the sandbox was paused ─────────────────────────────
 
 /** Save a message for a thread whose runner isn't reachable. Sending the same id twice is a no-op. */

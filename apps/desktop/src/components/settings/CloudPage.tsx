@@ -43,7 +43,7 @@ export function CloudPage({ ctx }: { ctx: SettingsCtx }) {
     );
   }
 
-  const save = async (patch: Partial<Omit<WorkspaceCloudSettings, "skills">>) => {
+  const save = async (patch: Partial<Omit<WorkspaceCloudSettings, "skills" | "canEdit">>) => {
     setError(null);
     setWs(w => (w ? { ...w, ...patch } : w));
     try {
@@ -74,6 +74,11 @@ export function CloudPage({ ctx }: { ctx: SettingsCtx }) {
         ]}
       />
       <ErrorText>{error}</ErrorText>
+      {ws?.canEdit === false && (
+        <p className="mb-4 rounded-lg bg-lemon-soft px-3 py-2 text-[13.5px]">
+          Only the workspace's owner can change these. You can see what new sandboxes start with.
+        </p>
+      )}
       {!ws ? (
         <p className="text-[14px] text-ink-soft">Loading…</p>
       ) : (

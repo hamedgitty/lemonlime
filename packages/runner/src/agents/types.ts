@@ -27,6 +27,11 @@ export interface SessionOptions {
   subagents?: boolean;
   /** MCP servers from the user's agent plugins, by name (Claude Code and Codex use them). */
   mcpServers?: Record<string, McpServerConfig>;
+  /**
+   * The user's own instructions, added to the agent's context: Claude Code's system prompt,
+   * Codex's developer instructions, and the first message of each new ACP conversation.
+   */
+  instructions?: string;
 }
 
 export interface TurnContext {
@@ -58,12 +63,16 @@ export class AgentError extends Error {
   constructor(
     message: string,
     readonly code = "agent_failed",
-    /** For `usage_limit`: when the user's plan allows more (ISO), if the agent said. */
+    /** For `usage_limit` and `overloaded`: when to try again (ISO), if the agent said. */
     readonly resetAt?: string,
   ) {
     super(message);
   }
 }
+
+/** The provider is busy or briefly down: worth trying again in a little while. */
+const OVERLOADED =
+  /overloaded|\b529\b|\b50[23]\b|service unavailable|bad gateway|server_is_overloaded|high demand|temporarily unavailable|capacity constraints|internal server error/i;
 
 const LIMIT = /usage limit|limit reached|hit your (usage )?limit|usage_limit_reached|out of (extra )?usage|rate limit exceeded|quota (exceeded|reached)/i;
 
@@ -93,10 +102,18 @@ export function limitResetAt(reason: string, now = new Date()): string | null {
   return null;
 }
 
+/** "retry after 30 seconds", "Retry-After: 30", "try again in 20s": when to try again (ISO), or null. */
+export function retryAfterAt(reason: string, now = new Date()): string | null {
+  const m = /\b(?:retry[- ]after|try again in|retry in)[:\s]+(\d+)(?!\d)\s*(s\b|secs?\b|seconds?\b)?(?!\s*(?:m|h))/i.exec(reason);
+  if (!m) return null;
+  return new Date(now.getTime() + Number(m[1]) * 1000).toISOString();
+}
+
 /**
  * Pick an error code from the reason an agent gave for failing, so apps can show the
  * right fix: `auth_required` (sign the CLI in again), `agent_outdated` (update the CLI),
- * otherwise `agent_failed`.
+ * `usage_limit` (the plan's limit was hit), `overloaded` (the provider is busy; try again
+ * later), otherwise `agent_failed`.
  */
 export function classifyAgentFailure(reason: string): string {
   if (
@@ -108,6 +125,7 @@ export function classifyAgentFailure(reason: string): string {
   }
   if (/requires a newer version|please upgrade|update (the )?(cli|app) and try again/i.test(reason)) return "agent_outdated";
   if (LIMIT.test(reason)) return "usage_limit";
+  if (OVERLOADED.test(reason)) return "overloaded";
   return "agent_failed";
 }
 
@@ -115,7 +133,9 @@ export function classifyAgentFailure(reason: string): string {
 export function turnFailure(reason: string | null, processError?: unknown, known?: { resetAt?: string | null }): Error | null {
   if (reason) {
     const code = known?.resetAt ? "usage_limit" : classifyAgentFailure(reason);
-    return new AgentError(reason, code, code === "usage_limit" ? (known?.resetAt ?? limitResetAt(reason) ?? undefined) : undefined);
+    const resetAt =
+      code === "usage_limit" ? (known?.resetAt ?? limitResetAt(reason)) : code === "overloaded" ? (retryAfterAt(reason) ?? limitResetAt(reason)) : null;
+    return new AgentError(reason, code, resetAt ?? undefined);
   }
   return processError instanceof Error ? processError : processError === undefined ? null : new AgentError(String(processError));
 }

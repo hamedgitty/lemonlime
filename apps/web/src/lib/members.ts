@@ -74,7 +74,8 @@ export async function memberRole(db: Db, userId: string, workspaceId: string): P
   return row?.role ?? null;
 }
 
-async function requireOwner(db: Db, userId: string, workspaceId: string): Promise<void> {
+/** Throws 403 unless the user is one of the workspace's owners. */
+export async function requireOwner(db: Db, userId: string, workspaceId: string): Promise<void> {
   const role = await memberRole(db, userId, workspaceId);
   if (!role) throw new HttpError(403, "You are not a member of that workspace.");
   if (role !== "owner") throw new HttpError(403, "Only the workspace's owners can do that.");

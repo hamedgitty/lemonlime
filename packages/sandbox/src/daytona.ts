@@ -1,6 +1,6 @@
 import { SANDBOX_RESOURCES } from "@lemonlime/protocol";
 import { defaultFetch, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
-import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider, SandboxState } from "./types.ts";
+import { launchCommand, type CreateSandboxOptions, type RunnerLaunch, type SandboxInfo, type SandboxProvider, type SandboxState } from "./types.ts";
 
 export interface DaytonaProviderOptions {
   apiKey: string;
@@ -138,7 +138,7 @@ export class DaytonaProvider implements SandboxProvider {
     // The session survives between calls; creating it again just fails, which is fine.
     await this.request("POST", `${base}/process/session`, { sessionId: RUNNER_SESSION }).catch(() => undefined);
     await this.request("POST", `${base}/process/session/${enc(RUNNER_SESSION)}/exec`, {
-      command: runner.command,
+      command: launchCommand(runner),
       runAsync: true,
     });
   }

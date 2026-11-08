@@ -1,5 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
+import { installCoauthorHooks } from "./coauthors.ts";
 import { withoutRewound, type NewEvent, type Preview, type QueuedMessage, type Thread, type ThreadEvent, type ThreadStatus } from "@lemonlime/protocol";
 import { randomUUID } from "node:crypto";
 import { detectVersion, TESTED_AGENTS, versionNotice, type AgentAdapter, type AgentSession, type SessionOptions } from "./agents/index.ts";
@@ -61,6 +63,54 @@ export interface ThreadRunnerOptions {
   onAgentCredential?: (credential: AgentCredential) => Promise<void>;
   /** For tests: the command a sign-in runs instead of the agent's own. */
   loginCommand?: string[];
+  /** Bundled skills to leave out, by name. */
+  disabledSkills?: string[];
+  /** Take Co-authored-by trailers out of the commits the agent makes (see coauthors.ts). */
+  stripCoauthors?: boolean;
+  /**
+   * When a turn fails because the provider is overloaded or a usage limit was hit, wait and
+   * run it again, waiting at most this long in all for one message. 0 or unset: off (a
+   * usage limit then still continues the thread once it resets; see onUsageLimit).
+   */
+  retryMaxWaitMs?: number;
+  /** Shortest wait before a retry (default 30 s; tests use less). */
+  retryMinWaitMs?: number;
+  /** Output of the sandbox's setup script, shown in the thread once (see SETUP_LOG in cli.ts). */
+  setupLog?: string;
+}
+
+/** A turn waiting to be run again after the provider was busy or a limit was hit. */
+interface PendingRetry {
+  clientMsgId: string;
+  /** The message as the agent first got it. */
+  prompt: string;
+  reason: "overloaded" | "usage_limit";
+  /** Tries so far, including the first. */
+  attempts: number;
+  /** When the first try failed (ISO): the max wait counts from here. */
+  firstFailedAt: string;
+  /** When to try again (ISO). */
+  at: string;
+}
+
+/** Most tries of one message, however short the waits. */
+const MAX_RETRY_ATTEMPTS = 12;
+/** Waits between tries when the provider didn't say: 30 s, 1, 2, 4, 8 minutes, then 15. */
+const RETRY_BASE_MS = 30_000;
+const RETRY_STEP_CAP_MS = 15 * 60_000;
+
+/** What the agent is told when a message is sent again. */
+export function retryPrompt(prompt: string, reason: PendingRetry["reason"]): string {
+  const why = reason === "overloaded" ? "the AI provider was overloaded" : "the plan's usage limit was reached";
+  return `(Sent again by LemonLime: your last try at this message stopped because ${why}. If you already did part of it, carry on from there.)\n\n${prompt}`;
+}
+
+function inWords(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return `${Math.max(1, Math.round(ms / 1000))} seconds`;
+  if (minutes < 120) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} hours`;
 }
 
 const DEFAULT_APPROVAL_TIMEOUT_MS = 30 * 60_000;
@@ -118,6 +168,8 @@ interface SavedState {
    * move, or an import of history from outside LemonLime), kept until that turn starts.
    */
   recap?: string;
+  /** A message waiting to be tried again (see --retry-max-wait). */
+  retry?: PendingRetry;
 }
 
 /** What the runner says on the user's behalf when a usage limit lifts. */
@@ -149,14 +201,23 @@ export class ThreadRunner {
   private agentState: Record<string, string> = {};
   /** Approval requests waiting for the user, by request id. */
   private readonly approvals = new Map<string, (decision: ApprovalDecision, by: "user" | "timeout" | "interrupted") => void>();
+
+  /** How many approvals the agent is waiting on (for /healthz, so apps can notify). */
+  get waitingApprovals(): number {
+    return this.approvals.size;
+  }
   /** Every clientMsgId this thread has accepted, so a resend never runs twice. */
   private readonly seen = new Set<string>();
 
-  /** Session options for the main agent and its subagents; plugins add MCP servers in init(). */
+  /** What every agent session in this thread starts with (the main one, subagents, side chats); plugins add MCP servers in init(). */
   private readonly sessionOpts: Omit<SessionOptions, "cwd" | "saved">;
 
   constructor(private readonly opts: ThreadRunnerOptions) {
-    this.sessionOpts = { ...opts.session };
+    const hooksEnv =
+      opts.stripCoauthors && opts.git !== false
+        ? installCoauthorHooks(opts.dataDir ? join(opts.dataDir, "git-hooks") : mkdtempSync(join(tmpdir(), "lemonlime-hooks-")))
+        : null;
+    this.sessionOpts = hooksEnv ? { ...opts.session, env: { ...opts.session.env, ...hooksEnv } } : { ...opts.session };
     this.redactions = { ...opts.redact };
     this.store = new EventStore(opts.thread.id, opts.dataDir ? join(opts.dataDir, "events.jsonl") : null, createRedactor(this.redactions));
     this.status = opts.thread.status;
@@ -171,7 +232,7 @@ export class ThreadRunner {
       },
       notice: (code, message) => this.store.append({ type: "notice", code, message }),
     });
-    const { autonomy: _a, ...session } = opts.session;
+    const { autonomy: _a, ...session } = this.sessionOpts;
     this.side = new SideChats({
       threadId: opts.thread.id,
       adapter: opts.adapter,
@@ -251,6 +312,7 @@ export class ThreadRunner {
         git: this.git,
         bundled: this.opts.bundledSkills ?? true,
         extraDirs: this.opts.extraSkillDirs ?? [],
+        disabled: this.opts.disabledSkills ?? [],
       });
     } catch (err) {
       this.store.append({
@@ -281,6 +343,12 @@ export class ThreadRunner {
       this.usageLimit = saved.usageLimit;
       this.scheduleLimitContinue();
     }
+    // A retry still waiting when the runner stopped (one already running is covered below).
+    if (saved?.retry && saved.status !== "running") {
+      this.retry = saved.retry;
+      this.scheduleRetryTimer();
+    }
+    this.reportSetupLog();
 
     if (saved?.status === "running") {
       // The runner died mid-turn. We can't know how far the agent got, so we never run
@@ -352,6 +420,32 @@ export class ThreadRunner {
     }
   }
 
+  /**
+   * The sandbox's setup script ran before this runner started: show what it printed, once.
+   * The log's first line is its exit code (see SETUP_WRAPPER in @lemonlime/sandbox).
+   */
+  private reportSetupLog(): void {
+    const file = this.opts.setupLog;
+    if (!file || !existsSync(file)) return;
+    if (this.store.since(0).some(e => e.type === "notice" && e.code.startsWith("setup_script"))) return;
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      return;
+    }
+    const [first = "", ...rest] = text.split("\n");
+    const code = /^exit (\d+)$/.exec(first.trim())?.[1];
+    const output = rest.join("\n").trim();
+    const tail = output.length > 4000 ? `…${output.slice(-4000)}` : output;
+    const ok = code === "0";
+    this.store.append({
+      type: "notice",
+      code: ok ? "setup_script_done" : "setup_script_failed",
+      message: `${ok ? "The workspace's setup script ran." : `The workspace's setup script failed${code ? ` (exit code ${code})` : ""}.`}${tail ? `\n\n${tail}` : ""}`,
+    });
+  }
+
   /** The agent CLI's version, once known (null if it couldn't be found out). */
   agentVersion: string | null = null;
 
@@ -379,6 +473,8 @@ export class ThreadRunner {
     this.seen.add(clientMsgId);
     // The user carried on themselves: no automatic continue on top.
     if (!clientMsgId.startsWith("auto-continue-")) this.clearUsageLimit();
+    // ...and no retry of the last message either: theirs comes first.
+    this.cancelRetry("You sent a new message, so LemonLime stopped waiting to try the last one again.");
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
     if (this.status === "running" || this.current || this.queue.length > 0 || this.held) {
@@ -454,6 +550,98 @@ export class ThreadRunner {
     }
     // Signed in again (perhaps to an account with room left): carry on now, once.
     if (this.usageLimit && this.initialised) this.continueAfterLimit();
+    if (this.retry?.reason === "usage_limit" && this.initialised) this.runRetry(true);
+  }
+
+  private retry: PendingRetry | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The message the current turn is for, so a retry knows which one it repeats. */
+  private turnMsgId: string | null = null;
+
+  /** A message waiting to be tried again, if any (when, and why). */
+  get pendingRetry(): { at: string; reason: PendingRetry["reason"]; attempts: number } | null {
+    return this.retry ? { at: this.retry.at, reason: this.retry.reason, attempts: this.retry.attempts } : null;
+  }
+
+  /**
+   * After a turn failed because the provider was busy or a limit was hit: say when it will
+   * be tried again and wait, or say why it won't be.
+   */
+  private scheduleRetry(clientMsgId: string, prompt: string, reason: PendingRetry["reason"], resetAt: string | null): void {
+    const maxWait = this.opts.retryMaxWaitMs ?? 0;
+    const now = Date.now();
+    const same = this.retry?.clientMsgId === clientMsgId ? this.retry : null;
+    const attempts = (same?.attempts ?? 0) + 1;
+    const firstFailedAt = same?.firstFailedAt ?? new Date(now).toISOString();
+    const deadline = Date.parse(firstFailedAt) + maxWait;
+    const minWait = this.opts.retryMinWaitMs ?? RETRY_BASE_MS;
+    const known = resetAt ? Date.parse(resetAt) + (reason === "usage_limit" ? 60_000 : 0) - now : null;
+    const guess = reason === "overloaded" ? Math.min(RETRY_STEP_CAP_MS, RETRY_BASE_MS * 2 ** (attempts - 1)) : LIMIT_RETRY_MS;
+    let wait = Math.max(minWait, known ?? guess);
+    const what = reason === "overloaded" ? "The AI provider is overloaded" : "Your plan's usage limit for this agent is reached";
+    const giveUp = (why: string) => {
+      this.retry = null;
+      this.saveState();
+      this.store.append({
+        type: "notice",
+        code: "retry_given_up",
+        message: `${what}, and ${why}, so LemonLime won't try this message again. Send a message to carry on.`,
+      });
+    };
+    if (attempts > MAX_RETRY_ATTEMPTS) return giveUp(`it was already tried ${MAX_RETRY_ATTEMPTS} times`);
+    if (now + wait > deadline) {
+      // A known reset beyond the limit isn't worth a try before it; a guess is cut short.
+      if (known !== null && now + known > deadline) return giveUp(`it lifts ${inWords(known)} from now, later than the ${inWords(maxWait)} LemonLime may wait`);
+      wait = deadline - now;
+      if (wait < minWait) return giveUp(`LemonLime has already waited the ${inWords(maxWait)} it may`);
+    }
+    const at = new Date(now + wait).toISOString();
+    this.retry = { clientMsgId, prompt, reason, attempts, firstFailedAt, at };
+    this.saveState();
+    this.store.append({
+      type: "notice",
+      code: "retry_scheduled",
+      message: `${what}. LemonLime will try this message again in ${inWords(wait)}${attempts > 1 ? ` (try ${attempts + 1})` : ""}. Send a message or stop the agent to cancel.`,
+      untilAt: at,
+    });
+    this.scheduleRetryTimer();
+  }
+
+  private scheduleRetryTimer(): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    if (!this.retry) return;
+    // Timers can't wait longer than about 24 days; a long wait just checks again then.
+    const wait = Math.min(2 ** 31 - 1, Math.max(0, Date.parse(this.retry.at) - Date.now()));
+    this.retryTimer = setTimeout(() => this.runRetry(), wait);
+    this.retryTimer.unref?.();
+  }
+
+  /** Run the waiting message again now. */
+  private runRetry(now = false): void {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    const retry = this.retry;
+    if (!retry || this.closing) return;
+    if (!now && Date.parse(retry.at) > Date.now() + 1000) return this.scheduleRetryTimer(); // a long wait, woken early
+    // Something else is happening: the user wrote, or the computer is out of room. Try again in a minute.
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held) {
+      this.retry = { ...retry, at: new Date(Date.now() + 60_000).toISOString() };
+      this.saveState();
+      return this.scheduleRetryTimer();
+    }
+    this.store.append({ type: "notice", code: "retry_started", message: "Trying the last message again." });
+    this.begin(retryPrompt(retry.prompt, retry.reason), retry.clientMsgId, retry.prompt);
+  }
+
+  /** Stop waiting to retry, telling the user why (nothing happens if no retry is waiting). */
+  private cancelRetry(why: string): void {
+    if (!this.retry) return;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    this.retry = null;
+    this.saveState();
+    this.store.append({ type: "notice", code: "retry_cancelled", message: why });
   }
 
   private usageLimit: { resetAt: string | null } | null = null;
@@ -598,6 +786,8 @@ export class ThreadRunner {
   /** Stop the agent's current turn. Queued messages still run afterwards. */
   interrupt(): void {
     this.abort?.abort();
+    // Stopping the agent also stops a wait to try a message again (not on the way out, though).
+    if (!this.closing && !this.held) this.cancelRetry("Stopped: LemonLime won't try the last message again.");
   }
 
   async close(): Promise<void> {
@@ -605,6 +795,7 @@ export class ThreadRunner {
     await this.side.closeAll();
     await this.subagents.close();
     if (this.limitTimer) clearTimeout(this.limitTimer);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
     this.interrupt();
     await this.current?.catch(() => undefined);
     await this.session?.dispose();
@@ -622,11 +813,17 @@ export class ThreadRunner {
       ...(this.headCommit ? { commit: this.headCommit } : {}),
       ...(files.length ? { attachments: files.map(f => ({ id: f.id, name: f.name, size: f.size, path: f.path! })) } : {}),
     });
+    const prompt = files.length ? `${text}\n\n${attachmentNote(files)}` : text;
+    this.begin(prompt, clientMsgId, prompt);
+  }
+
+  /** Run one turn: `prompt` goes to the agent; `original` is what a retry would send again. */
+  private begin(prompt: string, clientMsgId: string, original: string): void {
     this.setStatus("running");
     const abort = new AbortController();
     this.abort = abort;
-    const prompt = files.length ? `${text}\n\n${attachmentNote(files)}` : text;
-    const turn = this.runTurn(prompt, abort).finally(() => {
+    this.turnMsgId = clientMsgId;
+    const turn = this.runTurn(prompt, abort, original).finally(() => {
       if (this.current === turn) this.current = null;
       this.startNext();
     });
@@ -649,7 +846,8 @@ export class ThreadRunner {
     return this.opts.adapter.createSession({ ...this.sessionOpts, cwd: this.opts.workdir, saved: this.agentState });
   }
 
-  private async runTurn(prompt: string, abort: AbortController): Promise<void> {
+  private async runTurn(prompt: string, abort: AbortController, original = prompt): Promise<void> {
+    const clientMsgId = this.turnMsgId ?? "";
     const quietMs = this.opts.quietNoticeMs ?? DEFAULT_QUIET_MS;
     const timeoutMs = this.opts.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
     const started = Date.now();
@@ -683,6 +881,8 @@ export class ThreadRunner {
     watchdog.unref?.();
 
     let usageLimitAt: { resetAt: string | null } | null = null;
+    let retryable: { reason: PendingRetry["reason"]; resetAt: string | null } | null = null;
+    const retrying = (this.opts.retryMaxWaitMs ?? 0) > 0;
     try {
       if (!this.session) this.session = this.newSession();
       const requestApproval = async (req: ApprovalRequest): Promise<ApprovalDecision> => {
@@ -701,11 +901,13 @@ export class ThreadRunner {
     } catch (err) {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : String(err);
+      const resetAt = (err as { resetAt?: string }).resetAt ?? null;
       if (code === "agent_crashed") await this.handleCrash(message, emit);
-      else if (code === "usage_limit") {
+      else if (code === "usage_limit" || (code === "overloaded" && retrying)) {
         this.crashes = 0;
         emit({ type: "error", message, code, fatal: false });
-        usageLimitAt = { resetAt: (err as { resetAt?: string }).resetAt ?? null };
+        if (retrying) retryable = { reason: code, resetAt };
+        else usageLimitAt = { resetAt };
       } else {
         this.crashes = 0;
         const hint = fixHint(code, this.opts.adapter.kind);
@@ -732,6 +934,12 @@ export class ThreadRunner {
     this.idleSince = new Date().toISOString();
     this.setStatus("idle", timedOut ? "timed out" : abort.signal.aborted ? "interrupted" : undefined);
     if (usageLimitAt) this.onUsageLimit(usageLimitAt.resetAt);
+    if (retryable && !abort.signal.aborted && !this.closing) this.scheduleRetry(clientMsgId, original, retryable.reason, retryable.resetAt);
+    else if (this.retry?.clientMsgId === clientMsgId && !this.closing) {
+      // This was a retry and it went through (or failed for another reason): nothing more to wait for.
+      this.retry = null;
+      this.saveState();
+    }
   }
 
   /** Record an approval request and wait for the user, a timeout, or the turn ending. */
@@ -946,6 +1154,7 @@ export class ThreadRunner {
       ...(this.usageLimit ? { usageLimit: this.usageLimit } : {}),
       ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
       ...(this.recap ? { recap: this.recap } : {}),
+      ...(this.retry ? { retry: this.retry } : {}),
     };
     writeFileSync(f, JSON.stringify(state, null, 2));
   }

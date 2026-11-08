@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentKind, NewEvent } from "@lemonlime/protocol";
 import { summarizeToolInput, type ApprovalDecision } from "../approvals.ts";
+import { dangerousCommand } from "../command-guard.ts";
 import { lineSplitter } from "./lines.ts";
 import { killGently, tryJson } from "./process.ts";
 import {
@@ -53,6 +54,8 @@ class AcpSession implements AgentSession {
   private translator = new AcpTranslator();
   private stderr = "";
   private disposed = false;
+  /** The conversation was just started (not loaded), so it hasn't seen the user's instructions yet. */
+  private needsInstructions = false;
 
   constructor(private readonly opts: SessionOptions & { command: string[] }) {
     this.sessionId = opts.saved?.sessionId;
@@ -109,6 +112,7 @@ class AcpSession implements AgentSession {
       const res = (await this.request("session/new", { cwd: this.opts.cwd, mcpServers: [] })) as { sessionId?: string };
       if (!res?.sessionId) throw new AgentError("ACP agent did not return a session id");
       this.sessionId = res.sessionId;
+      this.needsInstructions = Boolean(this.opts.instructions?.trim());
     })();
     this.ready.catch(() => (this.ready = null));
     return this.ready;
@@ -121,8 +125,11 @@ class AcpSession implements AgentSession {
     const flush = setInterval(() => this.translator.flushText().forEach(e => ctx.emit(e)), CHUNK_FLUSH_MS);
     const onAbort = () => this.notify("session/cancel", { sessionId: this.sessionId });
     ctx.signal.addEventListener("abort", onAbort, { once: true });
+    // ACP has no system prompt, so a new conversation's first message carries the user's instructions.
+    const text = this.needsInstructions ? withInstructions(this.opts.instructions!, ctx.prompt) : ctx.prompt;
+    this.needsInstructions = false;
     try {
-      const res = (await this.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text: ctx.prompt }] })) as {
+      const res = (await this.request("session/prompt", { sessionId: this.sessionId, prompt: [{ type: "text", text }] })) as {
         stopReason?: string;
       };
       if (res?.stopReason === "refusal") throw new AgentError("The agent refused this request", "refusal");
@@ -176,6 +183,13 @@ class AcpSession implements AgentSession {
     // Request from the agent to us.
     if ("id" in msg && typeof msg.method === "string") {
       const params = msg.params as Json | undefined;
+      // The command guard holds at every autonomy level, for agents that ask before running commands.
+      const blocked = msg.method === "session/request_permission" && this.opts.commandGuard !== false ? blockedCommand(params) : null;
+      if (blocked) {
+        this.turn?.emit({ type: "notice", code: "command_blocked", message: `LemonLime blocked a command the agent wanted to run. ${blocked}` });
+        this.send({ jsonrpc: "2.0", id: msg.id, ...answerAgentRequest(msg.method as string, params, "edits", "deny", true) });
+        return;
+      }
       if (msg.method === "session/request_permission" && needsApproval(params, this.opts.autonomy)) {
         // Ask the user; the agent waits for our answer.
         const toolCall = (params?.toolCall as Json | undefined) ?? {};
@@ -200,6 +214,20 @@ class AcpSession implements AgentSession {
   }
 }
 
+/** The first message of a new conversation, with the user's own instructions ahead of it. */
+export function withInstructions(instructions: string, prompt: string): string {
+  return `Instructions from the user for this whole conversation (follow them in every reply):\n\n${instructions.trim()}\n\n---\n\n${prompt}`;
+}
+
+/** Why the command in a permission request is blocked by the command guard, or null. */
+export function blockedCommand(params: Json | undefined): string | null {
+  const call = (params?.toolCall as Json | undefined) ?? {};
+  const input = call.rawInput as Json | undefined;
+  const raw = input && typeof input === "object" ? (input.command ?? input.cmd) : undefined;
+  const command = Array.isArray(raw) ? raw.map(String).join(" ") : typeof raw === "string" ? raw : "";
+  return command ? dangerousCommand(command) : null;
+}
+
 /** Tool kinds that never need asking: they only read, or edit files (which "edits" allows). */
 const SAFE_KINDS = ["edit", "read", "search", "think", "fetch"];
 /** What a read-only session may do without anyone being asked. */
@@ -222,11 +250,13 @@ export function answerAgentRequest(
   params: Json | undefined,
   autonomy: Autonomy,
   decision?: ApprovalDecision,
+  /** Refuse whatever the policy would say (the command guard blocked it). */
+  refuse = false,
 ): { result: unknown } | { error: { code: number; message: string } } {
   if (method === "session/request_permission") {
     const options = (params?.options as { optionId: string; kind: string }[] | undefined) ?? [];
     const kind = String((params?.toolCall as Json | undefined)?.kind ?? "");
-    const allowed = autonomy === "read" ? READ_KINDS.includes(kind) : needsApproval(params, autonomy) ? decision === "allow" : true;
+    const allowed = refuse ? false : autonomy === "read" ? READ_KINDS.includes(kind) : needsApproval(params, autonomy) ? decision === "allow" : true;
     const pick = allowed
       ? (options.find(o => o.kind === "allow_once") ?? options.find(o => o.kind === "allow_always"))
       : (options.find(o => o.kind === "reject_once") ?? options.find(o => o.kind === "reject_always"));

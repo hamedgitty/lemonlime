@@ -336,6 +336,34 @@ and the runner picks it up when it starts, with nobody watching. If the usage po
 no at that moment, the run is recorded as skipped and the automation stays on. Schedule,
 time zone, agent, model, thinking level and repository are checked when it is saved.
 
+Run listings (`recentRuns` and `GET /api/automations/:id/runs`) include `reviewedAt`, the
+thread's `threadStatus`, and a `summary`: the start of the agent's last message, read
+from stored history. Anyone in the workspace can mark a run reviewed with
+`PATCH /api/automations/:id/runs/:runId` `{ "reviewed": true }`, or all of them with
+`POST /api/automations/runs/review-all`.
+
+## Workspace cloud settings
+
+Under **Settings → Cloud environment** (or `GET/PUT /api/workspace/settings`), owners set
+how every new cloud sandbox in the workspace starts; every member can read them.
+Sandboxes already made keep what they started with.
+
+| Setting | What it does |
+| --- | --- |
+| `instructions` | Added to every agent turn (at most 32 KB). Sent as `LEMONLIME_INSTRUCTIONS`. |
+| `setupScript` | A shell script run once in each new sandbox before the runner starts and before the repository is cloned, for at most 15 minutes (at most 16 KB). Its exit code and output appear in the thread as a `setup_script_done` or `setup_script_failed` notice. |
+| `stripCoauthors` | Removes `Co-authored-by:` trailers from the agent's commits (`LEMONLIME_STRIP_COAUTHORS=1`). |
+| `retryMaxWaitMinutes` | Retries turns that hit a busy provider or a usage limit, waiting at most this long (`LEMONLIME_RETRY_MAX_WAIT`; 0 is off). An idle sandbox still pauses after 5 minutes; a retry waiting then runs when the sandbox next starts. |
+| `autoDeleteDays` | Cloud threads with no activity for this many days are closed and their sandboxes deleted by the minute sweep; history stays readable. `null` (the default) never does. |
+
+`PUT /api/workspace/skills` `{ "skills": [{ "name", "files": { "SKILL.md": "...", ... } }] }`
+replaces the workspace's own skills (at most 1 MB in all; every skill needs a `SKILL.md`).
+The desktop app syncs the user's skills this way. Each new sandbox gets them in
+`~/.lemonlime/skills`, compressed into `LEMONLIME_USER_SKILLS_<n>` variables;
+`GET /api/workspace/skills` returns them with their files, while the settings answer lists
+only their names and sizes. The settings live in the `workspace_settings` table
+(migration `0010_workspace_settings.sql`).
+
 ## Thread history and paused sandboxes
 
 Runners upload each thread's history to the control plane as they go (with every
@@ -509,5 +537,7 @@ All bodies are JSON and validated with the schemas in `packages/protocol`.
 | `POST /api/cron/sweep` | cron secret | Pause idle and disallowed sandboxes (Node deployments). |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | session (create), session or token (list, revoke) | Personal access tokens. The raw value is returned once, on create. |
 | `GET/POST /api/automations`, `PATCH/DELETE /api/automations/:id`, `GET /api/automations/:id/runs` | session or token | Scheduled prompts that start cloud threads (see "Automations"). |
+| `PATCH /api/automations/:id/runs/:runId`, `POST /api/automations/runs/review-all` | session or token | Mark automation runs reviewed. |
+| `GET/PUT /api/workspace/settings`, `GET/PUT /api/workspace/skills` | session or token (members read, owners change) | Workspace cloud settings (see "Workspace cloud settings"). |
 | `GET /api/health` | — | Health for uptime monitors: 200 or 503 with the failing check. |
 | `/api/auth/*` | — | Better Auth: sign-in codes, GitHub sign-in, sessions. |

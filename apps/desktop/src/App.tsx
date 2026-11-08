@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelLeft } from "lucide-react";
-import { branchForThread, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
+import { branchForThread, isSafeBranchPrefix, newThreadId, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
 import { AutomationsView } from "./components/AutomationsView.tsx";
 import { Home } from "./components/Home.tsx";
@@ -27,6 +27,7 @@ import {
   pickFolder,
   removeLocalThread,
   saveAccessToken,
+  setRunnerDefaults,
   stopLocalRunner,
 } from "./lib/native.ts";
 import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
@@ -211,9 +212,22 @@ export function App() {
 
   useEffect(() => saveLocalThreads(localThreads), [localThreads]);
 
+  // Settings → Agents and Instructions reach every local runner as it starts.
+  useEffect(() => {
+    setRunnerDefaults({
+      instructions: settings.instructions,
+      stripCoauthors: settings.stripCoauthors,
+      branchPrefix: settings.branchPrefix,
+      retryMaxWaitMinutes: settings.retryMaxWaitMinutes,
+      disabledSkills: settings.disabledSkills,
+      commandGuard: settings.commandGuard,
+    });
+  }, [settings.instructions, settings.stripCoauthors, settings.branchPrefix, settings.retryMaxWaitMinutes, settings.disabledSkills, settings.commandGuard]);
+
   // ── Local runners ────────────────────────────────────────
   // What each local runner is doing, including threads that aren't open (for notifications and keep awake).
   const [localStatus, setLocalStatus] = useState<Record<string, ThreadStatus>>({});
+  const [localWaiting, setLocalWaiting] = useState<Record<string, number>>({});
   const refreshRunners = useCallback(() => {
     void listLocalRunners()
       .then(ids => setRunning(prev => (sameSet(prev, ids) ? prev : new Set(ids))))
@@ -221,8 +235,13 @@ export function App() {
     void localRunnerStatuses()
       .then(list => {
         const next: Record<string, ThreadStatus> = {};
-        for (const r of list) if (r.health.status) next[r.threadId] = r.health.status;
+        const waiting: Record<string, number> = {};
+        for (const r of list) {
+          if (r.health.status) next[r.threadId] = r.health.status;
+          if (r.health.waitingApprovals) waiting[r.threadId] = r.health.waitingApprovals;
+        }
         setLocalStatus(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
+        setLocalWaiting(prev => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
       })
       .catch(() => undefined);
   }, []);
@@ -302,6 +321,21 @@ export function App() {
       else if (cur.status === "failed" && n.failed) void notify(cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.");
     }
   }, [localThreads, localStatus, cloudThreads, prefs.notifications, prefs.archived]);
+
+  // An agent on this computer is waiting for an approval in a thread that isn't open.
+  const lastWaiting = useRef<Record<string, number>>({});
+  useEffect(() => {
+    const n = prefs.notifications;
+    for (const m of localThreads) {
+      const now = localWaiting[m.id] ?? 0;
+      const before = lastWaiting.current[m.id] ?? 0;
+      lastWaiting.current[m.id] = now;
+      const p = placeRef.current;
+      const open = p.view === "thread" && p.selection.id === m.id;
+      if (now > before && !open && n.enabled && n.needsInput)
+        void notify(m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
+    }
+  }, [localWaiting, localThreads, prefs.notifications]);
 
   // ── Local thread metadata updates from the session ───────
   const patchLocal = useCallback((id: string, patch: (m: LocalThreadMeta) => LocalThreadMeta | null) => {
@@ -405,7 +439,7 @@ export function App() {
         agent,
         repoPath: input.repoPath,
         baseBranch: input.baseBranch,
-        branch: localBranch(id, settings.branchPrefix),
+        branch: branchForThread(id, isSafeBranchPrefix(settings.branchPrefix) ? settings.branchPrefix : undefined),
         status: "idle",
         lastSeq: 0,
         ...(input.prompt ? { pendingPrompt: input.prompt } : {}),
@@ -827,14 +861,6 @@ export function App() {
       </div>
     </TipProvider>
   );
-}
-
-/** A new local thread's branch, with the prefix from Settings → Agents (agent/ by default). */
-function localBranch(id: string, prefix: string): string {
-  const base = branchForThread(id);
-  const p = prefix.trim();
-  if (!p || p === "agent/") return base;
-  return `${p.endsWith("/") ? p : `${p}/`}${base.replace(/^agent\//, "")}`;
 }
 
 function sameSet(a: Set<string>, b: string[]): boolean {

@@ -62,7 +62,7 @@ export async function openInEditor(editor: string, path: string): Promise<void> 
 
 export interface LocalRunnerStatus {
   threadId: string;
-  health: { status?: ThreadStatus; latestSeq?: number; idleSince?: string | null };
+  health: { status?: ThreadStatus; latestSeq?: number; idleSince?: string | null; waitingApprovals?: number };
 }
 
 /** What each runner on this computer is doing, including threads that aren't open. */

@@ -173,13 +173,13 @@ export class CloudApi {
 
   /** Settings every cloud sandbox in the workspace starts with. */
   async workspaceSettings(): Promise<WorkspaceCloudSettings> {
-    const body = (await this.request("GET", "/api/workspace/settings")) as { settings?: Partial<WorkspaceCloudSettings> } | null;
-    return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings };
+    const body = (await this.request("GET", "/api/workspace/settings")) as { canEdit?: boolean; settings?: Partial<WorkspaceCloudSettings> } | null;
+    return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings, canEdit: body?.canEdit !== false };
   }
 
-  async saveWorkspaceSettings(patch: Partial<Omit<WorkspaceCloudSettings, "skills">>): Promise<WorkspaceCloudSettings> {
-    const body = (await this.request("PUT", "/api/workspace/settings", patch)) as { settings?: Partial<WorkspaceCloudSettings> } | null;
-    return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings };
+  async saveWorkspaceSettings(patch: Partial<Omit<WorkspaceCloudSettings, "skills" | "canEdit">>): Promise<WorkspaceCloudSettings> {
+    const body = (await this.request("PUT", "/api/workspace/settings", patch)) as { canEdit?: boolean; settings?: Partial<WorkspaceCloudSettings> } | null;
+    return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings, canEdit: body?.canEdit !== false };
   }
 
   /** Replace the skills cloud sandboxes get. */
@@ -324,6 +324,8 @@ export interface WorkspaceCloudSettings {
   autoDeleteDays: number | null;
   /** Names of the skills synced to the cloud. */
   skills: { name: string }[];
+  /** Only the workspace's owner can change these. */
+  canEdit?: boolean;
 }
 
 export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceCloudSettings = {

@@ -6,7 +6,22 @@ export { capEvent, capValue, MAX_MESSAGE_CHARS, MAX_TOOL_CHARS } from "./limits.
 export { startServer, type ServerOptions, type RunningServer } from "./server.ts";
 export { startHeartbeat, type Heartbeat, type HeartbeatOptions } from "./heartbeat.ts";
 export { ActivityMonitor, type ActivityMonitorOptions, type BackgroundActivity } from "./activity.ts";
-export { cleanup, historyCommand, lemonlimeHome, main, splitCommand, worktreePathFor, writeAgentFiles } from "./cli.ts";
+export {
+  capBytes,
+  cleanup,
+  historyCommand,
+  INSTRUCTIONS_MAX_BYTES,
+  lemonlimeHome,
+  main,
+  readInstructions,
+  splitCommand,
+  threadBranch,
+  worktreePathFor,
+  writeAgentFiles,
+  writeUserSkills,
+} from "./cli.ts";
+export { gitConfigParameters, hookScript, installCoauthorHooks, stripCoauthorTrailers } from "./coauthors.ts";
+export { retryPrompt } from "./thread-runner.ts";
 export { RUNNER_VERSION } from "./version.ts";
 export { createRedactor, secretsFromEnv } from "./redact.ts";
 export { LOGIN_PLANS, LoginSession, type AgentCredential, type LoginUpdate } from "./login.ts";

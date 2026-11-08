@@ -1,11 +1,11 @@
-import { and, desc, eq, inArray, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
-import { automationRuns, automations } from "@lemonlime/db";
-import { AGENT_CAPABILITIES, AgentConfig, isValidTimeZone, nextRun, parseSchedule, RepoRef, SandboxSize } from "@lemonlime/protocol";
+import { automationRuns, automations, threads } from "@lemonlime/db";
+import { AGENT_CAPABILITIES, AgentConfig, isValidTimeZone, nextRun, parseSchedule, RepoRef, SandboxSize, type Thread } from "@lemonlime/protocol";
 import { userWorkspaceIds } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
-import { addPendingMessage } from "./history.ts";
+import { addPendingMessage, lastAgentMessage } from "./history.ts";
 import { validateCloudLaunch } from "./runner-command.ts";
 import { createThread } from "./threads.ts";
 
@@ -92,6 +92,63 @@ export async function deleteAutomation(ctx: AppContext, userId: string, id: stri
   await ctx.db.delete(automations).where(eq(automations.id, id));
 }
 
+/** Longest summary shown for a run: the start of the agent's last message. */
+const SUMMARY_CHARS = 280;
+
+export function summarize(text: string, max = SUMMARY_CHARS): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
+
+type RunRow = typeof automationRuns.$inferSelect;
+/** A run as listings show it: how its thread is doing, and what the agent said last. */
+export type RunWithResult = RunRow & { threadStatus: Thread["status"] | null; summary: string | null };
+
+async function withResults(ctx: AppContext, runs: RunRow[]): Promise<RunWithResult[]> {
+  const ids = [...new Set(runs.map(r => r.threadId).filter((id): id is string => Boolean(id)))];
+  const statuses = new Map<string, Thread["status"]>();
+  if (ids.length) {
+    for (const t of await ctx.db.select({ id: threads.id, status: threads.status }).from(threads).where(inArray(threads.id, ids))) statuses.set(t.id, t.status);
+  }
+  const summaries = new Map<string, string | null>();
+  await Promise.all(
+    ids.map(async id => {
+      const text = await lastAgentMessage(ctx, id).catch(() => null);
+      summaries.set(id, text ? summarize(text) : null);
+    }),
+  );
+  return runs.map(r => ({
+    ...r,
+    threadStatus: r.threadId ? (statuses.get(r.threadId) ?? null) : null,
+    // Skipped and failed runs say why in `detail`.
+    summary: r.threadId ? (summaries.get(r.threadId) ?? null) : null,
+  }));
+}
+
+/** Mark one run as looked at, or not. Any member of the automation's workspace may. */
+export async function setRunReviewed(ctx: AppContext, userId: string, automationId: string, runId: string, reviewed: boolean): Promise<RunWithResult> {
+  await ownAutomation(ctx, userId, automationId);
+  const [row] = await ctx.db
+    .update(automationRuns)
+    .set({ reviewedAt: reviewed ? new Date().toISOString() : null })
+    .where(and(eq(automationRuns.id, runId), eq(automationRuns.automationId, automationId)))
+    .returning();
+  if (!row) throw new HttpError(404, "Run not found.");
+  return (await withResults(ctx, [row]))[0]!;
+}
+
+/** Mark every run of the workspace's automations not yet looked at as reviewed. The caller checked membership. */
+export async function reviewAllRuns(ctx: AppContext, workspaceId: string): Promise<{ reviewed: number }> {
+  const ids = (await ctx.db.select({ id: automations.id }).from(automations).where(eq(automations.workspaceId, workspaceId))).map(a => a.id);
+  if (!ids.length) return { reviewed: 0 };
+  const updated = await ctx.db
+    .update(automationRuns)
+    .set({ reviewedAt: new Date().toISOString() })
+    .where(and(inArray(automationRuns.automationId, ids), isNull(automationRuns.reviewedAt)))
+    .returning({ id: automationRuns.id });
+  return { reviewed: updated.length };
+}
+
 export async function listAutomations(ctx: AppContext, workspaceId: string) {
   const rows = await ctx.db.select().from(automations).where(eq(automations.workspaceId, workspaceId)).orderBy(automations.createdAt);
   if (!rows.length) return [];
@@ -106,12 +163,17 @@ export async function listAutomations(ctx: AppContext, workspaceId: string) {
     )
     .orderBy(desc(automationRuns.ranAt))
     .limit(rows.length * 5);
-  return rows.map(r => ({ ...r, recentRuns: runs.filter(x => x.automationId === r.id).slice(0, 5) }));
+  const recent = await withResults(
+    ctx,
+    rows.flatMap(r => runs.filter(x => x.automationId === r.id).slice(0, 5)),
+  );
+  return rows.map(r => ({ ...r, recentRuns: recent.filter(x => x.automationId === r.id) }));
 }
 
-export async function listAutomationRuns(ctx: AppContext, userId: string, id: string, limit = 50) {
+export async function listAutomationRuns(ctx: AppContext, userId: string, id: string, limit = 50): Promise<RunWithResult[]> {
   await ownAutomation(ctx, userId, id);
-  return ctx.db.select().from(automationRuns).where(eq(automationRuns.automationId, id)).orderBy(desc(automationRuns.ranAt)).limit(limit);
+  const runs = await ctx.db.select().from(automationRuns).where(eq(automationRuns.automationId, id)).orderBy(desc(automationRuns.ranAt)).limit(limit);
+  return withResults(ctx, runs);
 }
 
 export interface AutomationSweep {

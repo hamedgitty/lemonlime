@@ -65,6 +65,7 @@ import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { saveDraft } from "../lib/storage.ts";
 import { loadPanelState, openFile, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
 import { keysFor } from "../lib/shortcuts.ts";
+import { betterTitle } from "../lib/threadTitle.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
@@ -121,6 +122,8 @@ export interface ThreadViewProps {
   agents?: AgentInstall[] | null;
   /** A local thread moved to another agent. */
   onLocalAgent?: (id: string, agent: { kind: AgentKind; model?: string | undefined }) => void;
+  /** A better title, when the thread's is still the vague one made from its first message. */
+  onAutoTitle?: (title: string) => void;
   /** Switch these other local threads to an account too (they stopped on the same limit). */
   onSwitchOthers?: (threadIds: string[], accountId: string) => Promise<number>;
 }
@@ -174,6 +177,7 @@ function ThreadSessionView({
   shortcuts = {},
   agents,
   onLocalAgent,
+  onAutoTitle,
   onSwitchOthers,
 }: ThreadViewProps & { target: SessionTarget }) {
   const activeRef = useRef(active);
@@ -427,6 +431,14 @@ function ThreadSessionView({
   );
   // Earlier prompts, for Up and Down in the composer.
   const prompts = useMemo(() => uniquePrompts(session.events.flatMap(e => (e.type === "user_message" ? [e.text] : []))), [session.events]);
+  // "hi" as a first message makes a poor title: a later message that says more names it.
+  const userTexts = useMemo(() => session.events.flatMap(e => (e.type === "user_message" ? [e.text] : [])), [session.events]);
+  useEffect(() => {
+    if (!onAutoTitle) return;
+    const better = betterTitle(summary.title, userTexts);
+    if (better) onAutoTitle(better);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userTexts.length, summary.title]);
   const sendWithFiles = (text: string) => {
     if (files.uploading) {
       setActionError("Wait for the attached files to finish uploading.");

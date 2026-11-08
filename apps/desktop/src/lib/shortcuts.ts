@@ -108,3 +108,40 @@ export function validCombo(combo: string): boolean {
   const parts = combo.split("+");
   return parts.length >= 2 && (parts.includes("mod") || parts.includes("alt") || parts.includes("ctrl"));
 }
+
+/** Turn a shortcut off: it stays off (an empty combo) until it's reset or given new keys. */
+export function clearShortcut(overrides: Record<string, string>, id: ShortcutId): Record<string, string> {
+  return { ...overrides, [id]: "" };
+}
+
+/** Give a shortcut new keys; its own default keys need no override. */
+export function setShortcut(overrides: Record<string, string>, id: ShortcutId, combo: string): Record<string, string> {
+  const next = { ...overrides };
+  if (combo === SHORTCUTS.find(s => s.id === id)!.keys) delete next[id];
+  else next[id] = combo;
+  return next;
+}
+
+/** Back to the default keys. */
+export function resetShortcut(overrides: Record<string, string>, id: ShortcutId): Record<string, string> {
+  const next = { ...overrides };
+  delete next[id];
+  return next;
+}
+
+/**
+ * Where a shortcut's button is on screen, for the hints shown while ⌘ (Ctrl) is held: a
+ * CSS selector, and optionally the button's own text when the selector alone is too broad.
+ * Any element can also say `data-shortcut="<id>"`.
+ */
+export const SHORTCUT_TARGETS: { id: ShortcutId; selector: string; text?: string }[] = [
+  { id: "new-thread", selector: 'nav[aria-label="LemonLime"] button', text: "New thread" },
+  { id: "search", selector: 'nav[aria-label="LemonLime"] button', text: "Search threads" },
+  { id: "skills", selector: 'nav[aria-label="LemonLime"] button', text: "Skills" },
+  { id: "automations", selector: 'nav[aria-label="LemonLime"] button', text: "Automations" },
+  { id: "settings", selector: 'button[aria-label="Settings"]' },
+  { id: "toggle-sidebar", selector: 'button[aria-label="Hide sidebar"], button[aria-label="Show sidebar"]' },
+  { id: "back", selector: 'button[aria-label="Back"]' },
+  { id: "forward", selector: 'button[aria-label="Forward"]' },
+  { id: "right-panel", selector: 'button[aria-label="Side panel"]' },
+];

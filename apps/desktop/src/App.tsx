@@ -8,6 +8,8 @@ import { SetupWizard } from "./components/SetupWizard.tsx";
 import { SkillsView } from "./components/SkillsView.tsx";
 import { PluginsView } from "./components/PluginsView.tsx";
 import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
+import { OPEN_IN_PANEL_EVENT } from "./components/AgentMessage.tsx";
+import { ShortcutHints } from "./components/ShortcutHints.tsx";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
@@ -44,6 +46,7 @@ import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
+import { queueFirstMessage } from "./lib/firstMessage.ts";
 import {
   draftThreadIds,
   forgetEvents,
@@ -308,6 +311,26 @@ export function App() {
   const [panelTabs, setPanelTabs] = useState<PanelTab[]>([]);
   const [panelActive, setPanelActive] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  // Opened for a link in a thread (Settings → General), so it shows beside the thread too.
+  const [linkPanel, setLinkPanel] = useState(false);
+  useEffect(() => {
+    const open = (e: Event) => {
+      const url = (e as CustomEvent<string>).detail;
+      if (typeof url !== "string" || !/^https?:\/\//i.test(url)) return;
+      let title = url;
+      try {
+        title = new URL(url).host;
+      } catch {
+        /* keep the address as the title */
+      }
+      setPanelTabs(tabs => [...tabs.filter(t => t.id !== "link"), { id: "link", kind: "browser", title, url }]);
+      setPanelActive("link");
+      setPanelOpen(true);
+      setLinkPanel(true);
+    };
+    window.addEventListener(OPEN_IN_PANEL_EVENT, open);
+    return () => window.removeEventListener(OPEN_IN_PANEL_EVENT, open);
+  }, []);
   const togglePanel = useCallback(() => {
     setPanelOpen(open => {
       if (!open)
@@ -703,12 +726,16 @@ export function App() {
         createdAt: now,
         updatedAt: now,
       };
+      queueFirstMessage(id, { files: input.attachments ?? [], ...(input.permission ? { permission: input.permission } : {}) });
       setLocalThreads(list => [meta, ...list]);
       if (navigate) go({ view: "thread", selection: { mode: "local", id } });
       return { mode: "local", id };
     }
 
     if (!cloudApi) throw new Error("Connect a cloud account in Settings first.");
+    // With files or a mode to start in, the first message waits here for the sandbox's runner
+    // instead of going through the control plane, so it can carry them.
+    const holdPrompt = Boolean(input.prompt && (input.attachments?.length || input.permission));
     try {
       const created = await cloudApi.createThread({
         ...(input.title || input.prompt ? { title: input.title || titleFromPrompt(input.prompt ?? "") } : {}),
@@ -716,8 +743,14 @@ export function App() {
         repo: { url: input.repoUrl, baseBranch: input.baseBranch },
         mode: "cloud",
         sandboxSize: input.sandboxSize,
-        ...(input.prompt ? { prompt: input.prompt } : {}),
+        ...(input.prompt && !holdPrompt ? { prompt: input.prompt } : {}),
       });
+      if (holdPrompt)
+        queueFirstMessage(created.thread.id, {
+          files: input.attachments ?? [],
+          text: input.prompt!,
+          ...(input.permission ? { permission: input.permission } : {}),
+        });
       setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
       if (navigate) go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
       return { mode: "cloud", id: created.thread.id };
@@ -1372,6 +1405,7 @@ export function App() {
         shortcuts={prefs.shortcuts}
         agents={agents}
         onLocalAgent={onLocalAgent}
+        {...(prefs.renameVagueTitles && summary ? { onAutoTitle: (title: string) => onRename(summary, title) } : {})}
         onSwitchOthers={onSwitchOthers}
         computerLevel={prefs.computerAccess[entry.mode === "cloud" ? entry.thread.id : ""] ?? "off"}
         onComputerLevel={level => {
@@ -1526,6 +1560,7 @@ export function App() {
 
   return (
     <TipProvider>
+      <ShortcutHints enabled={prefs.shortcutHints} overrides={prefs.shortcuts} />
       <Toaster>
         {palette}
         <div className="flex h-full overflow-hidden">
@@ -1589,8 +1624,11 @@ export function App() {
                 onActive={setPanelActive}
                 side={prefs.panelSide}
                 onSide={panelSide => onPrefs({ panelSide })}
-                onClose={() => setPanelOpen(false)}
-                hidden={!panelOpen || place.view === "thread" || place.view === "settings"}
+                onClose={() => {
+                  setPanelOpen(false);
+                  setLinkPanel(false);
+                }}
+                hidden={!panelOpen || (place.view === "thread" && !linkPanel) || place.view === "settings"}
               />
               {place.view === "automations" ? (
                 <AutomationsView
@@ -1621,6 +1659,7 @@ export function App() {
                   onEven={id => setLayout(l => l && evenSplit(l, id))}
                   dragging={dragThread !== null}
                   onDrop={dropThread}
+                  dimInactive={prefs.dimInactivePanes}
                 />
               ) : (
                 <Home

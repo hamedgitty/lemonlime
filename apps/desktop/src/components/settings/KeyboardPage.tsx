@@ -1,10 +1,22 @@
 import { useEffect, useState } from "react";
-import { RotateCcw, Search } from "lucide-react";
-import { comboOf, FIXED_SHORTCUTS, keyCaps, keysFor, SHORTCUTS, validCombo, type ShortcutId } from "../../lib/shortcuts.ts";
+import { RotateCcw, Search, X } from "lucide-react";
+import {
+  clearShortcut,
+  comboOf,
+  FIXED_SHORTCUTS,
+  IS_MAC,
+  keyCaps,
+  keysFor,
+  resetShortcut,
+  setShortcut,
+  SHORTCUTS,
+  validCombo,
+  type ShortcutId,
+} from "../../lib/shortcuts.ts";
 import { Kbd } from "../primitives.tsx";
 import { Button, IconButton, TextInput, cx } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
-import { ErrorText, Section } from "./parts.tsx";
+import { ErrorText, Section, ToggleRow } from "./parts.tsx";
 
 export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
   const { prefs, onPrefs } = ctx;
@@ -25,11 +37,7 @@ export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
       const clash = SHORTCUTS.find(s => s.id !== recording && keysFor(s.id, overrides) === combo);
       if (clash) return setError(`That's already “${clash.label}”. Change that one first.`);
       setError(null);
-      const def = SHORTCUTS.find(s => s.id === recording)!.keys;
-      const next = { ...overrides };
-      if (combo === def) delete next[recording];
-      else next[recording] = combo;
-      onPrefs({ shortcuts: next });
+      onPrefs({ shortcuts: setShortcut(overrides, recording, combo) });
       setRecording(null);
     };
     window.addEventListener("keydown", onKey, true);
@@ -58,6 +66,15 @@ export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
         </Button>
       </div>
       <ErrorText>{error}</ErrorText>
+      <Section title="Hints">
+        <ToggleRow
+          label={`Show shortcut hints while holding ${IS_MAC ? "⌘" : "Ctrl"}`}
+          anchor="shortcut-hints"
+          description="Hold the key for a moment and the keys for each button show up next to it."
+          checked={prefs.shortcutHints}
+          onChange={shortcutHints => onPrefs({ shortcutHints })}
+        />
+      </Section>
       {groups.map(group => {
         const items = SHORTCUTS.filter(s => s.group === group && s.label.toLowerCase().includes(q));
         if (!items.length) return null;
@@ -68,7 +85,7 @@ export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
                 const keys = keysFor(s.id, overrides);
                 const isRecording = recording === s.id;
                 return (
-                  <li key={s.id} className="flex items-center gap-3">
+                  <li key={s.id} className="flex items-center gap-3" data-setting={s.label}>
                     <span className="flex-1 text-[15px]">{s.label}</span>
                     <button
                       type="button"
@@ -81,14 +98,13 @@ export function KeyboardPage({ ctx }: { ctx: SettingsCtx }) {
                     >
                       {isRecording ? "Press keys…" : keys ? keyCaps(keys).map(k => <Kbd key={k}>{k}</Kbd>) : <span className="text-ink-faint">Off</span>}
                     </button>
+                    <IconButton label={`Turn off ${s.label}`} disabled={!keys} onClick={() => onPrefs({ shortcuts: clearShortcut(overrides, s.id) })}>
+                      <X aria-hidden="true" className="size-4" />
+                    </IconButton>
                     <IconButton
                       label={`Reset ${s.label}`}
                       disabled={!(s.id in overrides)}
-                      onClick={() => {
-                        const next = { ...overrides };
-                        delete next[s.id];
-                        onPrefs({ shortcuts: next });
-                      }}
+                      onClick={() => onPrefs({ shortcuts: resetShortcut(overrides, s.id) })}
                     >
                       <RotateCcw aria-hidden="true" className="size-4" />
                     </IconButton>

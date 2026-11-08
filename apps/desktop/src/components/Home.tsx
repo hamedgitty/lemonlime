@@ -1,12 +1,30 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, Cloud, ExternalLink, FolderOpen, FolderPlus, GitBranch, Laptop, Plus, Server, X, Zap } from "lucide-react";
-import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PolicyDenied, type SandboxSize } from "@lemonlime/protocol";
+import {
+  ArrowLeftRight,
+  BookOpen,
+  Check,
+  Cloud,
+  ExternalLink,
+  FolderOpen,
+  FolderPlus,
+  GitBranch,
+  Laptop,
+  ListChecks,
+  Paperclip,
+  Plus,
+  Server,
+  X,
+  Zap,
+} from "lucide-react";
+import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PermissionMode, type PolicyDenied, type SandboxSize } from "@lemonlime/protocol";
 import { splitCommand } from "../lib/command.ts";
 import { repoName } from "../lib/format.ts";
 import { effortLevels, pickerAgents } from "../lib/models.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import type { AgentInstall } from "../lib/system.ts";
-import { inDesktopShell, inspectRepo, pickFolder } from "../lib/native.ts";
+import { inDesktopShell, inspectRepo, listSkills, pickFolder, type SkillInfo } from "../lib/native.ts";
+import { attachmentProblem } from "../lib/useAttachments.ts";
+import { PermissionPicker } from "./AgentLoop.tsx";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
 import { showGetStarted, type GetStartedFacts, type GetStartedStep } from "../lib/getStarted.ts";
 import { otherProjectMentioned } from "../lib/projectHint.ts";
@@ -15,7 +33,7 @@ import { GetStarted } from "./GetStarted.tsx";
 import type { Settings, UiPrefs } from "../lib/storage.ts";
 import { Composer, PickerButton, type ComposerHandle } from "./Composer.tsx";
 import { defaultModel, ModelControl } from "./ModelControl.tsx";
-import { Menu, MenuChoice, MenuItem, MenuSeparator, Popover } from "./primitives.tsx";
+import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Popover, SubMenu } from "./primitives.tsx";
 import { Button, SegmentedControl, TextInput, cx, openExternal } from "./ui.tsx";
 
 /** Ready-made first messages, shown to people who haven't started many threads yet. */
@@ -114,6 +132,18 @@ export function Home({
   const [denial, setDenial] = useState<PolicyDenied | null>(null);
   const [typed, setTyped] = useState("");
   const [hintDismissed, setHintDismissed] = useState<string | null>(null);
+  // Files for the first message: kept here until the thread's runner is up, then uploaded.
+  const [files, setFiles] = useState<{ id: string; file: File; problem: string | null }[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const addFiles = (list: File[]) => setFiles(cur => [...cur, ...list.map(file => ({ id: crypto.randomUUID(), file, problem: attachmentProblem(file) }))]);
+  // What the agent may do without asking; null is the usual for where it runs.
+  const usualPermission: PermissionMode = place === "cloud" ? "full" : "edits";
+  const [permissionPick, setPermissionPick] = useState<PermissionMode | null>(null);
+  const permission = permissionPick && caps.permissions.includes(permissionPick) ? permissionPick : usualPermission;
+  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
+  const loadSkills = () => {
+    if (skills === null) void listSkills().then(setSkills, () => setSkills([]));
+  };
   const hinted = prefs.projectHint && place === "local" && !machine ? otherProjectMentioned(typed, prefs.recentProjects, repoPath) : null;
   const projectHint = hinted && hinted !== hintDismissed ? hinted : null;
 
@@ -159,6 +189,7 @@ export function Home({
       return setError("Enter the repository the cloud agent should clone.");
     }
     if (!baseBranch.trim()) return setError("Enter the branch the agent should start from.");
+    const sending = files.filter(f => !f.problem).map(f => f.file);
     const common = {
       title: "",
       agent,
@@ -168,6 +199,8 @@ export function Home({
       fast: fast || undefined,
       baseBranch: baseBranch.trim(),
       prompt,
+      ...(sending.length ? { attachments: sending } : {}),
+      ...(permission !== usualPermission ? { permission } : {}),
     };
     setBusy(true);
     try {
@@ -177,6 +210,8 @@ export function Home({
       } else {
         await onCreate(place === "local" ? { mode: "local", ...common, repoPath } : { mode: "cloud", ...common, repoUrl: repoUrl.trim(), sandboxSize });
       }
+      setFiles([]);
+      setPermissionPick(null);
     } catch (err) {
       if (err instanceof DeniedError) setDenial(err.denial);
       else setError(err instanceof Error ? err.message : String(err));
@@ -216,33 +251,136 @@ export function Home({
   const projectChosen = machine ? remotePath.trim() : place === "local" ? repoPath : repoUrl.trim();
 
   return (
-    <main className="scroll-thin min-w-0 flex-1 overflow-y-auto">
-      <div className="mx-auto w-full max-w-[740px] px-6 pt-[14vh] pb-16">
-        <h1 className="mb-6 text-center font-display text-[30px] font-semibold tracking-[-0.03em] text-ink">What should your agent work on?</h1>
-        <Composer
-          ref={composer}
-          autoFocus
-          busy={busy}
-          onSend={text => void send(text)}
-          onTextChange={setTyped}
-          tools={
-            <ModelControl
-              agent={agent}
-              tabs={tabs}
-              model={model}
-              reasoning={reasoning}
-              fast={fast}
-              levels={levels}
-              acpAgents={acpAgents}
-              acpId={acpSaved?.id ?? null}
-              onModel={(k, m) => (k === "acp" ? onPrefs({ lastAgent: "acp", lastAcpAgent: m ?? "" }) : choose(k, { model: m }))}
-              onReasoning={r => choose(agent, { reasoning: r })}
-              onFast={on => choose(agent, { fast: on })}
-              cycleKeys={keysFor("cycle-effort", prefs.shortcuts)}
-              side="bottom"
-            />
-          }
+    <main className="scroll-thin @container/home min-w-0 flex-1 overflow-y-auto">
+      <div className="mx-auto w-full max-w-[740px] px-6 pt-[14vh] pb-16 @max-[480px]/home:px-3">
+        <h1 className="mb-6 text-center font-display text-[30px] font-semibold tracking-[-0.03em] text-balance text-ink @max-[480px]/home:text-[22px]">
+          What should your agent work on?
+        </h1>
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          onChange={e => {
+            addFiles([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
         />
+        {files.length > 0 && (
+          <ul aria-label="Files to send with your message" className="mb-2 flex flex-wrap gap-1.5">
+            {files.map(f => (
+              <li
+                key={f.id}
+                title={f.problem ?? `${f.file.name}. It's uploaded once the thread starts.`}
+                className={cx(
+                  "inline-flex h-8 max-w-[260px] items-center gap-2 rounded-lg border bg-paper pr-1 pl-2.5 text-[13px]",
+                  f.problem ? "border-danger/30 text-danger" : "border-line-strong text-ink",
+                )}
+              >
+                <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
+                <span className="min-w-0 truncate">{f.file.name}</span>
+                {f.problem && <span className="shrink-0 text-[12px]">Too big</span>}
+                <button
+                  type="button"
+                  aria-label={`Remove ${f.file.name}`}
+                  onClick={() => setFiles(cur => cur.filter(x => x.id !== f.id))}
+                  className="inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-cream-deep hover:text-ink"
+                >
+                  <X aria-hidden="true" className="size-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {/* Files dropped or pasted here go with the first message, like the paperclip in a thread. */}
+        {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- drop and paste targets; the "+" menu is the keyboard way */}
+        <div
+          onDragOver={e => {
+            if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+          }}
+          onDrop={e => {
+            if (!e.dataTransfer.files.length) return;
+            e.preventDefault();
+            addFiles([...e.dataTransfer.files]);
+          }}
+          onPaste={e => {
+            const pasted = [...e.clipboardData.files];
+            if (!pasted.length) return;
+            e.preventDefault();
+            addFiles(pasted);
+          }}
+        >
+          <Composer
+            ref={composer}
+            autoFocus
+            busy={busy}
+            onSend={text => void send(text)}
+            onTextChange={setTyped}
+            tools={
+              <>
+                <Menu
+                  trigger={
+                    <button
+                      type="button"
+                      aria-label="Add files, a skill or plan mode"
+                      className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink data-[popup-open]:bg-cream-deep"
+                      onPointerEnter={loadSkills}
+                      onFocus={loadSkills}
+                    >
+                      <Plus aria-hidden="true" className="size-[18px]" />
+                    </button>
+                  }
+                >
+                  <MenuItem icon={<Paperclip />} onSelect={() => fileInput.current?.click()}>
+                    Attach files…
+                  </MenuItem>
+                  <SubMenu icon={<BookOpen />} label="Use a skill">
+                    {skills === null ? (
+                      <MenuLabel>Looking for skills…</MenuLabel>
+                    ) : skills.length === 0 ? (
+                      <MenuLabel>{shell ? "No skills yet. Add them on the Skills page." : "Skills are listed in the desktop app."}</MenuLabel>
+                    ) : (
+                      <div className="scroll-thin max-h-[280px] overflow-y-auto">
+                        {skills.map(k => (
+                          <MenuItem key={`${k.source}:${k.name}`} onSelect={() => composer.current?.fill(`/${k.name} ${typed.replace(/^\/\S+\s*/, "")}`)}>
+                            <span title={k.description || undefined}>{k.name}</span>
+                          </MenuItem>
+                        ))}
+                      </div>
+                    )}
+                  </SubMenu>
+                  {caps.permissions.includes("plan") && (
+                    <>
+                      <MenuSeparator />
+                      <MenuItem
+                        icon={<ListChecks />}
+                        onSelect={() => setPermissionPick(permission === "plan" ? null : "plan")}
+                        hint={permission === "plan" ? <Check aria-label="On" className="!text-leaf" /> : undefined}
+                      >
+                        Plan first
+                      </MenuItem>
+                    </>
+                  )}
+                </Menu>
+                <ModelControl
+                  agent={agent}
+                  tabs={tabs}
+                  model={model}
+                  reasoning={reasoning}
+                  fast={fast}
+                  levels={levels}
+                  acpAgents={acpAgents}
+                  acpId={acpSaved?.id ?? null}
+                  onModel={(k, m) => (k === "acp" ? onPrefs({ lastAgent: "acp", lastAcpAgent: m ?? "" }) : choose(k, { model: m }))}
+                  onReasoning={r => choose(agent, { reasoning: r })}
+                  onFast={on => choose(agent, { fast: on })}
+                  cycleKeys={keysFor("cycle-effort", prefs.shortcuts)}
+                  side="bottom"
+                />
+              </>
+            }
+          />
+        </div>
 
         {/* Context row: the project, and where the agent runs. */}
         <div className="mt-2.5 flex flex-wrap items-center gap-1 px-2">
@@ -406,6 +544,15 @@ export function Home({
               </>
             )}
           </Menu>
+
+          <PermissionPicker
+            kind={agent}
+            value={permission}
+            working={false}
+            disabled={false}
+            side="bottom"
+            onChange={mode => setPermissionPick(mode === usualPermission ? null : mode)}
+          />
         </div>
 
         {projectHint && (
@@ -449,7 +596,7 @@ export function Home({
 
         {checklist && showGetStarted(checklist) && <GetStarted facts={checklist} onStep={onStep} onDismiss={() => onPrefs({ getStartedDismissed: true })} />}
 
-        {threadCount < 10 && (
+        {(threadCount < 10 || prefs.alwaysShowStarters) && (
           <>
             <div className="mt-10 flex items-center gap-3 text-[13px] text-ink-faint" aria-hidden="true">
               <span className="h-px flex-1 bg-line" />

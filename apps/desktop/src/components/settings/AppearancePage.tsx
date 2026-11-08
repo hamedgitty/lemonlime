@@ -84,6 +84,20 @@ export function AppearancePage({ ctx }: { ctx: SettingsCtx }) {
           checked={prefs.collapseFinished}
           onChange={collapseFinished => onPrefs({ collapseFinished })}
         />
+        <ToggleRow
+          label="Dim inactive panes in split view"
+          description="With threads side by side, the ones you aren't typing in sit back a little."
+          checked={prefs.dimInactivePanes}
+          onChange={dimInactivePanes => onPrefs({ dimInactivePanes })}
+        />
+      </Section>
+      <Section title="Home">
+        <ToggleRow
+          label="Always show one-click prompts"
+          description="Ready-made first messages under the message box. Off, they go away once you've started a few threads."
+          checked={prefs.alwaysShowStarters}
+          onChange={alwaysShowStarters => onPrefs({ alwaysShowStarters })}
+        />
       </Section>
     </>
   );

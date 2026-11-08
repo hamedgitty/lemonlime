@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { Cloud, Eye, EyeOff } from "lucide-react";
 import { GithubMark } from "../icons.tsx";
 import { CloudApi, CloudError, normalizeBaseUrl, type CloudWorkspace } from "../../lib/cloud.ts";
@@ -10,7 +11,7 @@ import type { SettingsCtx } from "./context.ts";
 import { Pill, Row, SavedNote, Section, Select, Tabs, useSaved } from "./parts.tsx";
 
 export function AccountPage({ ctx }: { ctx: SettingsCtx }) {
-  const [tab, setTab] = useState<"account" | "activity">("account");
+  const [tab, setTab] = useSettingsTab<"account" | "activity">("account", "account", ["account", "activity"]);
   return (
     <>
       <Tabs

@@ -1,7 +1,15 @@
 import { CopyButton, StreamingMarkdown } from "../lib/markdown.tsx";
+import { loadUiPrefs } from "../lib/storage.ts";
 import { LogoMark, openExternal } from "./ui.tsx";
 
-const openLink = (url: string) => void openExternal(url);
+/** Asks the app to show a link in the side panel's browser (`detail` is the URL). */
+export const OPEN_IN_PANEL_EVENT = "lemonlime:open-in-panel";
+
+/** Links open in the system browser, or in the side panel when Settings says so. */
+const openLink = (url: string) => {
+  if (loadUiPrefs().openLinksInPanel) window.dispatchEvent(new CustomEvent<string>(OPEN_IN_PANEL_EVENT, { detail: url }));
+  else void openExternal(url);
+};
 
 /**
  * One reply from the agent, drawn as Markdown with highlighted code. While it streams only

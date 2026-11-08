@@ -1,4 +1,5 @@
 import { shortPath, type AgentKind, type ThreadStatus } from "@lemonlime/protocol";
+import { cleanTitle } from "./threadTitle.ts";
 
 export const AGENT_LABELS: Record<AgentKind, string> = {
   "claude-code": "Claude Code",
@@ -50,10 +51,9 @@ export function clockTime(iso: string): string {
   return new Date(t).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-/** A short title from the first line of a prompt. */
-export function titleFromPrompt(prompt: string, max = 60): string {
-  const line = prompt.trim().split("\n")[0]?.trim() ?? "";
-  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
+/** A thread's title from its first message: a short phrase without greetings and filler. */
+export function titleFromPrompt(prompt: string): string {
+  return cleanTitle(prompt);
 }
 
 /** Pretty-prints tool input/output: strings as-is, everything else as JSON. */

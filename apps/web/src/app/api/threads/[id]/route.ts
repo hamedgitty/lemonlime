@@ -1,7 +1,8 @@
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
-import { json, route } from "@/lib/http.ts";
-import { deleteThread, getThreadRowForUser, threadResponse } from "@/lib/threads.ts";
+import { z } from "zod";
+import { json, parseBody, route } from "@/lib/http.ts";
+import { deleteThread, getThreadRowForUser, renameThread, threadResponse } from "@/lib/threads.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,16 @@ export const GET = route<Context>(async (request, { params }) => {
   const user = await requireUser(ctx, request);
   const row = await getThreadRowForUser(ctx, user.userId, (await params).id);
   return json(await threadResponse(ctx, row, user.userId));
+});
+
+const RenameBody = z.object({ title: z.string().min(1).max(200) });
+
+/** Rename the thread. */
+export const PATCH = route<Context>(async (request, { params }) => {
+  const ctx = await getAppContext();
+  const user = await requireUser(ctx, request);
+  const body = await parseBody(request, RenameBody);
+  return json(await renameThread(ctx, user.userId, (await params).id, body.title));
 });
 
 /** Close the thread and destroy its sandbox. */

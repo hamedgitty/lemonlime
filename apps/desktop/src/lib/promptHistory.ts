@@ -60,23 +60,5 @@ export function uniquePrompts(texts: readonly string[]): string[] {
 
 // ── Drafts ───────────────────────────────────────────────
 
-const draftKey = (key: string) => `lemonlime:draft:${key}`;
-/** Drafts longer than this aren't kept (local storage is small). */
-const MAX_DRAFT = 100_000;
-
-export function loadDraft(key: string): string {
-  try {
-    return localStorage.getItem(draftKey(key)) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function saveDraft(key: string, text: string): void {
-  try {
-    if (!text.trim() || text.length > MAX_DRAFT) localStorage.removeItem(draftKey(key));
-    else localStorage.setItem(draftKey(key), text);
-  } catch {
-    /* storage full or blocked: the draft lives until the app closes */
-  }
-}
+// One place keeps drafts (storage.ts), so the sidebar's draft mark sees every change.
+export { loadDraft, saveDraft } from "./storage.ts";

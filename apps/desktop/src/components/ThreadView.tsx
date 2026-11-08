@@ -46,6 +46,9 @@ import { SideChatPanel } from "./SideChatPanel.tsx";
 import { PreviewPanel } from "./PreviewPanel.tsx";
 import { SignInPanel } from "./SignInPanel.tsx";
 import { DiffView } from "./DiffView.tsx";
+import { ReviewPanel } from "./ReviewPanel.tsx";
+import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
+import { clampPanelWidth, loadPanelWidth, saveDraft, savePanelWidth, THREAD_PANEL } from "../lib/storage.ts";
 import { Menu, MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
 import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
@@ -75,6 +78,8 @@ export interface ThreadViewProps {
   /** Cloud threads: what the agent may do on this computer. */
   computerLevel: ComputerLevel;
   onComputerLevel: (level: ComputerLevel) => void;
+  /** How many answers the agent is waiting for in this thread (for the sidebar and dock badge). */
+  onWaiting?: (threadId: string, count: number) => void;
 }
 
 export function ThreadView(props: ThreadViewProps) {
@@ -112,6 +117,7 @@ function ThreadSessionView({
   onNeedsInput,
   notifyWhenFocused = false,
   onOpenFolder,
+  onWaiting,
 }: ThreadViewProps & { target: SessionTarget }) {
   const levelRef = useRef(computerLevel);
   levelRef.current = computerLevel;
@@ -135,6 +141,10 @@ function ThreadSessionView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [waitingKey]);
+  useEffect(() => {
+    onWaiting?.(entry.mode === "local" ? entry.meta.id : entry.thread.id, waiting.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting.length]);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [denial, setDenial] = useState<PolicyDenied | null>(null);
@@ -286,6 +296,7 @@ function ThreadSessionView({
       return;
     }
     setActionError(null);
+    saveDraft(summary.id, "");
     session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" });
     files.clear();
   };
@@ -300,6 +311,36 @@ function ThreadSessionView({
     composerRef.current?.fill(text);
   };
   const [panelTab, setPanelTab] = useState<"changes" | "terminal" | "side" | "browser">("changes");
+
+  // Put text into the message being written (e.g. lines picked in a diff), after what's there.
+  // Other parts of the app can do the same with a "lemonlime:composer-insert" event ({ text }).
+  const composerWrap = useRef<HTMLDivElement>(null);
+  const insertIntoComposer = (text: string) => {
+    const handle = composerRef.current as (ComposerHandle & { insert?: (t: string) => void }) | null;
+    if (handle?.insert) return handle.insert(text);
+    const current = composerWrap.current?.querySelector("textarea")?.value ?? "";
+    handle?.fill(current.trim() ? `${current.trimEnd()}\n\n${text}` : text);
+  };
+  // Unsent text stays with the thread: the composer keeps it (draftKey), and the sidebar marks it.
+  const insertRef = useRef(insertIntoComposer);
+  insertRef.current = insertIntoComposer;
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
+      if (typeof text === "string" && text) insertRef.current(text);
+    };
+    window.addEventListener("lemonlime:composer-insert", onInsert);
+    return () => window.removeEventListener("lemonlime:composer-insert", onInsert);
+  }, []);
+
+  // The branch as git sees it, refreshed when the agent changes files or a turn ends.
+  const fileDiffs = useMemo(() => session.events.filter(e => e.type === "file_diff").length, [session.events]);
+  const gitRefresh = `${fileDiffs}:${liveStatus ?? ""}`;
+  const git = useGitState({ connection: session.connection, mode: entry.mode, threadId: summary.id, cloudApi, refreshKey: gitRefresh });
+  const showChanges = () => {
+    setPanelTab("changes");
+    setPanelOpen(true);
+  };
 
   return (
     <div className="flex min-w-0 flex-1">
@@ -316,6 +357,7 @@ function ThreadSessionView({
               <span className="truncate">{repoName(summary.repo)}</span>
             </span>
           </div>
+          {git.available && (git.status || entry.mode === "cloud") && <GitActionsButton git={git} mode={entry.mode} />}
           {!online ? (
             <span
               role="status"
@@ -507,7 +549,8 @@ function ThreadSessionView({
             }
           }}
         >
-          <div className="mx-auto max-w-[760px]">
+          <div ref={composerWrap} className="mx-auto max-w-[760px]">
+            {git.available && <GitStrip git={git} onOpenChanges={showChanges} />}
             {files.items.length > 0 && (
               <ul aria-label="Attached files" className="mb-2 flex flex-wrap gap-1.5">
                 {files.items.map(a => (
@@ -593,7 +636,19 @@ function ThreadSessionView({
         </div>
       </section>
       {panelOpen && (
-        <SidePanel tab={panelTab} onTab={setPanelTab} session={session} mode={entry.mode} runnerPath={runnerPath} onClose={() => setPanelOpen(false)} />
+        <SidePanel
+          tab={panelTab}
+          onTab={setPanelTab}
+          session={session}
+          mode={entry.mode}
+          runnerPath={runnerPath}
+          onClose={() => setPanelOpen(false)}
+          refreshKey={gitRefresh}
+          onAddToChat={text => {
+            insertIntoComposer(text);
+            composerRef.current?.focus();
+          }}
+        />
       )}
     </div>
   );
@@ -607,7 +662,11 @@ function SidePanel({
   mode,
   runnerPath,
   onClose,
+  refreshKey,
+  onAddToChat,
 }: {
+  refreshKey: string;
+  onAddToChat: (text: string) => void;
   tab: "changes" | "terminal" | "side" | "browser";
   onTab: (t: "changes" | "terminal" | "side" | "browser") => void;
   session: ReturnType<typeof useThreadSession>;
@@ -615,6 +674,7 @@ function SidePanel({
   runnerPath: string;
   onClose: () => void;
 }) {
+  const [width, setWidth] = useState(() => clampPanelWidth(loadPanelWidth(), window.innerWidth));
   const changed = useMemo(() => new Set(session.events.filter(e => e.type === "file_diff").map(e => (e as { path: string }).path)).size, [session.events]);
   // Mounted once opened, so switching tabs doesn't drop the terminal's screen.
   const [terminalSeen, setTerminalSeen] = useState(tab === "terminal");
@@ -627,7 +687,8 @@ function SidePanel({
       on ? "bg-cream-deep text-ink" : "text-ink-soft hover:bg-cream-deep/60 hover:text-ink",
     );
   return (
-    <aside aria-label="Thread panel" className="flex w-[440px] shrink-0 flex-col border-l border-line bg-cream">
+    <aside aria-label="Thread panel" style={{ width }} className="relative flex shrink-0 flex-col border-l border-line bg-cream">
+      <PanelResizer width={width} onWidth={setWidth} />
       <div role="tablist" aria-label="Panel" className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-3">
         <button type="button" role="tab" aria-selected={tab === "changes"} onClick={() => onTab("changes")} className={tabClass(tab === "changes")}>
           <FileDiff aria-hidden="true" className="size-3.5" />
@@ -656,7 +717,9 @@ function SidePanel({
           <X aria-hidden="true" className="size-4" />
         </button>
       </div>
-      {tab === "changes" && <ChangesList events={session.events} />}
+      {tab === "changes" && (
+        <ReviewPanel connection={session.connection} refreshKey={refreshKey} onAddToChat={onAddToChat} fallback={<ChangesList events={session.events} />} />
+      )}
       {tab === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
       {tab === "browser" && <PreviewPanel events={session.events} mode={mode} connection={session.connection} {...(runnerPath ? { runnerPath } : {})} />}
       {terminalSeen && (
@@ -665,6 +728,51 @@ function SidePanel({
         </div>
       )}
     </aside>
+  );
+}
+
+/**
+ * The panel's left edge: drag to resize (arrow keys too, double-click for the default).
+ * The width is remembered on this computer.
+ */
+function PanelResizer({ width, onWidth }: { width: number; onWidth: (w: number) => void }) {
+  const drag = useRef<{ x: number; w: number } | null>(null);
+  const set = (w: number, save: boolean) => {
+    const next = clampPanelWidth(w, window.innerWidth);
+    onWidth(next);
+    if (save) savePanelWidth(next);
+  };
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the panel"
+      aria-valuenow={width}
+      aria-valuemin={THREAD_PANEL.min}
+      aria-valuemax={THREAD_PANEL.max}
+      tabIndex={0}
+      onPointerDown={e => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { x: e.clientX, w: width };
+      }}
+      onPointerMove={e => {
+        if (drag.current) set(drag.current.w + (drag.current.x - e.clientX), false);
+      }}
+      onPointerUp={e => {
+        if (drag.current) set(drag.current.w + (drag.current.x - e.clientX), true);
+        drag.current = null;
+      }}
+      onDoubleClick={() => set(THREAD_PANEL.default, true)}
+      onKeyDown={e => {
+        const step = e.shiftKey ? 64 : 16;
+        if (e.key === "ArrowLeft") set(width + step, true);
+        else if (e.key === "ArrowRight") set(width - step, true);
+        else return;
+        e.preventDefault();
+      }}
+      className="absolute inset-y-0 -left-[3px] z-20 w-[6px] cursor-col-resize outline-none hover:bg-line-strong/60 focus-visible:bg-leaf/40 active:bg-line-strong"
+    />
   );
 }
 

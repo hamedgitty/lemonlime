@@ -22,6 +22,7 @@ import { attachmentNote, Attachments, ATTACHMENTS_DIR, type Upload } from "./att
 import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
+import { GitReview } from "./git-review.ts";
 import { type AgentCredential, LoginSession, type LoginUpdate } from "./login.ts";
 import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
@@ -287,6 +288,29 @@ export class ThreadRunner {
   /** Slash commands for the composer's `/` menu: what the agent reported, plus command files and skills. */
   get agentCommands(): AgentCommand[] {
     return listCommands({ kind: this.opts.adapter.kind, workdir: this.opts.workdir, reported: this.session?.commands?.() ?? [] });
+  }
+
+  private reviewer: GitReview | null | undefined;
+  /** The thread's branch for review: real diffs, push and pull requests. Null without git. */
+  get review(): GitReview | null {
+    if (this.reviewer !== undefined) return this.reviewer;
+    try {
+      this.reviewer = this.git
+        ? new GitReview(this.git, {
+            branch: this.opts.thread.branch,
+            baseBranch: this.opts.thread.repo.baseBranch,
+            threadId: this.opts.thread.id,
+            title: () => {
+              if (this.opts.thread.title) return this.opts.thread.title;
+              const first = this.store.since(0).find(e => e.type === "user_message");
+              return first && first.type === "user_message" ? commitSubject(first.text) : "";
+            },
+          })
+        : null;
+    } catch {
+      this.reviewer = null;
+    }
+    return this.reviewer;
   }
 
   get thread(): Thread {

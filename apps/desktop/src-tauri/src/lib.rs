@@ -2,6 +2,7 @@
 //! processes that back local threads.
 
 mod computer;
+mod history;
 mod paths;
 mod previews;
 mod repo;
@@ -65,6 +66,8 @@ pub fn run() {
             system::open_in_editor,
             system::local_runner_statuses,
             system::save_text_file,
+            history::scan_agent_history,
+            history::import_agent_sessions,
             confirm_quit,
         ])
         .build(tauri::generate_context!())

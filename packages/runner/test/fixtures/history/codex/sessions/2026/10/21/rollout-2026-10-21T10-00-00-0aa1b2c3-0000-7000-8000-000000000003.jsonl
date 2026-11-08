@@ -1,0 +1,15 @@
+{"timestamp":"2026-10-21T10:00:00.000Z","type":"session_meta","payload":{"id":"0aa1b2c3-0000-7000-8000-000000000003","timestamp":"2026-10-21T10:00:00.000Z","cwd":"__REPO__","originator":"codex_cli","cli_version":"0.99.0","base_instructions":{"text":"You are a coding agent."}}}
+{"timestamp":"2026-10-21T10:00:01.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>Be careful.</permissions instructions>"}]}}
+{"timestamp":"2026-10-21T10:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for __REPO__\n\nUse pnpm."},{"type":"input_text","text":"<environment_context>\n  <cwd>__REPO__</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-10-21T10:00:02.000Z","type":"turn_context","payload":{"cwd":"__REPO__","model":"gpt-test","approval_policy":"on-request"}}
+{"timestamp":"2026-10-21T10:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"Add a health check endpoint at /health.","images":[]}}
+{"timestamp":"2026-10-21T10:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Add a health check endpoint at /health."}]}}
+{"timestamp":"2026-10-21T10:00:03.000Z","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"abc"}}
+{"timestamp":"2026-10-21T10:00:04.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":[\"ls\",\"src\"]}","call_id":"call_1"}}
+not json at all
+{"timestamp":"2026-10-21T10:00:05.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"server.ts\nroutes.ts\n"}}
+{"timestamp":"2026-10-21T10:00:06.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** Begin Patch\n*** Update File: src/routes.ts\n+app.get('/health', ok)\n*** End Patch","call_id":"call_2"}}
+{"timestamp":"2026-10-21T10:00:07.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_2","output":"{\"output\":\"Success\",\"metadata\":{\"exit_code\":0}}"}}
+{"timestamp":"2026-10-21T10:00:08.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Added GET /health, which answers 200."}}
+{"timestamp":"2026-10-21T10:00:08.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Added GET /health, which answers 200."}]}}
+{"timestamp":"2026-10-21T10:00:09.000Z","type":"event_msg","payload":{"type":"token_count","info":null}}

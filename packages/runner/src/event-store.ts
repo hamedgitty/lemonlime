@@ -40,13 +40,16 @@ export class EventStore {
     return this.events.length;
   }
 
-  /** Assign seq + timestamp, persist, then notify subscribers. */
-  append(event: NewEvent): ThreadEvent {
+  /**
+   * Assign seq + timestamp, persist, then notify subscribers. `at` keeps an event's
+   * original time (history imported from elsewhere); live events are stamped now.
+   */
+  append(event: NewEvent, at: string = new Date().toISOString()): ThreadEvent {
     const full = ThreadEvent.parse({
       ...capEvent(this.transform(event)),
       threadId: this.threadId,
       seq: this.events.length + 1,
-      at: new Date().toISOString(),
+      at,
     });
     if (this.file) appendFileSync(this.file, JSON.stringify(full) + "\n");
     this.events.push(full);

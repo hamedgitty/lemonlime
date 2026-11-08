@@ -1,0 +1,7 @@
+{
+  "id": "msg_002",
+  "sessionID": "ses_fixture01",
+  "role": "assistant",
+  "modelID": "test-model",
+  "time": { "created": 1792911605000, "completed": 1792911660000 }
+}

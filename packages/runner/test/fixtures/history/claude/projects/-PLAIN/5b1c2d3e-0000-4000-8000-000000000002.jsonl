@@ -1,0 +1,2 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"Tidy up my notes folder."},"uuid":"p-1","timestamp":"2026-10-25T08:00:00.000Z","cwd":"__PLAIN__","sessionId":"5b1c2d3e-0000-4000-8000-000000000002"}
+{"parentUuid":"p-1","isSidechain":false,"type":"assistant","message":{"id":"msg_p","role":"assistant","model":"claude-test","content":[{"type":"text","text":"Sorted them into folders by month."}]},"uuid":"p-2","timestamp":"2026-10-25T08:00:10.000Z","cwd":"__PLAIN__","sessionId":"5b1c2d3e-0000-4000-8000-000000000002"}

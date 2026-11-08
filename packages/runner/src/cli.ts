@@ -20,6 +20,7 @@ import { biggestWriter, DiskGuard, formatBytes } from "./disk-guard.ts";
 import { runCommandGuardHook } from "./command-guard.ts";
 import { Relay, relayResponse } from "./relay.ts";
 import { startServer } from "./server.ts";
+import { importHistory, scanHistory } from "./history/index.ts";
 import { ThreadRunner } from "./thread-runner.ts";
 import { RUNNER_VERSION } from "./version.ts";
 
@@ -38,6 +39,11 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
        lemonlime-runner cleanup --thread <id> --source-repo <path>
                         Remove a local thread's worktree (its branch and commits stay)
                         and its local history
+       lemonlime-runner history scan [--since-days <n>] [--limit <n>]
+                        Summarise the Claude Code, Codex and OpenCode conversations
+                        saved on this computer, as JSON (they are only read)
+       lemonlime-runner history import <id>...
+                        Make local threads from conversations a scan listed, as JSON
 
   --thread <id>            Thread id (required)
   --agent <kind>           claude-code | codex | opencode | acp (required)
@@ -113,10 +119,16 @@ export function worktreePathFor(home: string, sourceRepo: string, threadId: stri
   return join(home, "worktrees", `${name}-${hash}`, threadId);
 }
 
+/** Set once main() has run: bundled into one file, both the entry check below and the bundle's own entry can call it. */
+let mainStarted = false;
+
 export async function main(args = process.argv.slice(2)): Promise<void> {
+  if (mainStarted) return;
+  mainStarted = true;
   // `pnpm runner -- --help` passes the `--` along; it isn't an argument.
   const argv = args[0] === "--" ? args.slice(1) : args;
   if (argv[0] === "cleanup") return cleanup(argv.slice(1));
+  if (argv[0] === "history") return historyCommand(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
   if (argv[0] === "subagents-mcp") return runSubagentsMcp();
   if (argv[0] === "preview") return previewCommand(argv.slice(1));
@@ -420,6 +432,37 @@ export async function cleanup(argv: string[]): Promise<void> {
   rmSync(workdir, { recursive: true, force: true });
   rmSync(dataDir, { recursive: true, force: true });
   process.stdout.write(JSON.stringify({ event: "cleaned", workdir, dataDir }) + "\n");
+}
+
+const HISTORY_USAGE = "usage: lemonlime-runner history scan [--since-days <n>] [--limit <n>] | history import <id>...";
+
+/**
+ * `lemonlime-runner history scan|import`: read other agents' saved conversations (never
+ * changing them) and turn chosen ones into local threads. Prints one JSON object.
+ */
+export async function historyCommand(argv: string[], write: (text: string) => void = t => void process.stdout.write(t)): Promise<void> {
+  const [sub, ...rest] = argv;
+  const home = lemonlimeHome();
+  if (sub === "scan") {
+    const { values } = parseArgs({
+      args: rest,
+      options: { "since-days": { type: "string", default: "30" }, limit: { type: "string", default: "200" } },
+      strict: true,
+    });
+    const sinceDays = Number(values["since-days"]);
+    const limit = Number(values.limit);
+    if (!Number.isInteger(sinceDays) || sinceDays < 1 || sinceDays > 3650) throw new Error("--since-days must be a whole number of days, 1 to 3650");
+    if (!Number.isInteger(limit) || limit < 0) throw new Error("--limit must be a whole number");
+    write(JSON.stringify(await scanHistory({ sinceDays, limit, lemonlimeHome: home })) + "\n");
+    return;
+  }
+  if (sub === "import") {
+    const { positionals } = parseArgs({ args: rest, allowPositionals: true, options: {}, strict: true });
+    if (!positionals.length) throw new Error(HISTORY_USAGE);
+    write(JSON.stringify(await importHistory({ ids: positionals, lemonlimeHome: home })) + "\n");
+    return;
+  }
+  throw new Error(HISTORY_USAGE);
 }
 
 const isEntry = import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith("cli.ts");

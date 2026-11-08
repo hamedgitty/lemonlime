@@ -1,0 +1,8 @@
+{
+  "id": "ses_fixture01",
+  "projectID": "proj_1",
+  "directory": "__REPO__",
+  "title": "New session - 2026-10-25T07:00:00.000Z",
+  "version": "0.9.0",
+  "time": { "created": 1792911600000, "updated": 1792911660000 }
+}

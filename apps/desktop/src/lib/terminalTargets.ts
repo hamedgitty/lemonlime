@@ -32,7 +32,7 @@ function trimUrl(raw: string): string {
   }
 }
 
-export function findTerminalLinks(text: string): TerminalLink[] {
+export function findTerminalTargets(text: string): TerminalLink[] {
   const links: TerminalLink[] = [];
   for (const m of text.matchAll(URL_RE)) {
     const url = trimUrl(m[0]);

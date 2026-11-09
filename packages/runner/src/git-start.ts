@@ -145,7 +145,7 @@ export async function preparePullRequestBranch(repo: string, pr: PullRequestLook
   let pushProblem = pr.pushProblem;
   if (pr.fromFork && pr.headRepo) {
     const url = forkRemoteUrl(await originUrl(ws), pr.headRepo);
-    if (url) remote = await ensureRemote(ws, pr.headRepo.split("/")[0]!, url);
+    if (url) remote = await addForkRemote(ws, pr.headRepo.split("/")[0]!, url);
   }
   const tracking = `refs/remotes/${remote}/${head}`;
   // GitHub keeps every pull request's head under refs/pull, for when its fork can't be reached.
@@ -174,7 +174,7 @@ async function originUrl(ws: GitWorkspace): Promise<string> {
 }
 
 /** A remote named after the fork's owner (or reused if one already points at it). Returns its name. */
-async function ensureRemote(ws: GitWorkspace, owner: string, url: string): Promise<string> {
+async function addForkRemote(ws: GitWorkspace, owner: string, url: string): Promise<string> {
   const names = (await ws.git(["remote"], { allowFail: true }))
     .split("\n")
     .map(r => r.trim())

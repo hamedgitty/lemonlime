@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchProjectScripts, focusedScripts, scriptForShortcut, setFocusedScripts, type Script } from "../src/lib/projectScripts.ts";
+import { fetchProjectScripts, focusedScripts, scriptForShortcut, setFocusedScripts, type Script } from "../src/lib/runScripts.ts";
 
 const connection = { url: "ws://127.0.0.1:7420/ws", token: async () => "tok" };
 const dev: Script = { id: "dev", name: "Dev", command: "pnpm dev", keybinding: "run-script-1" };

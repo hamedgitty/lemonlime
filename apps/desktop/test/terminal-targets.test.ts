@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { findTerminalLinks, projectPathCandidate } from "../src/lib/terminalLinks.ts";
+import { findTerminalTargets, projectPathCandidate } from "../src/lib/terminalTargets.ts";
 import { quoteTerminal } from "../src/lib/review.ts";
 
-describe("findTerminalLinks", () => {
+describe("findTerminalTargets", () => {
   it("finds web addresses without the punctuation after them", () => {
-    const links = findTerminalLinks("  ➜  Local:   http://localhost:5173/, see (https://example.com/a_(b)).");
+    const links = findTerminalTargets("  ➜  Local:   http://localhost:5173/, see (https://example.com/a_(b)).");
     expect(links.map(l => l.text)).toEqual(["http://localhost:5173/", "https://example.com/a_(b)"]);
     expect(links[0]).toMatchObject({ kind: "url", start: 14 });
   });
 
   it("finds path:line places in compiler and test output", () => {
-    const links = findTerminalLinks("src/app.ts:12:5 - error TS2322, and ./lib/a.js:3 and pkg/x.test.ts(40,2)");
+    const links = findTerminalTargets("src/app.ts:12:5 - error TS2322, and ./lib/a.js:3 and pkg/x.test.ts(40,2)");
     expect(links).toEqual([
       { kind: "path", start: 0, end: 15, text: "src/app.ts:12:5", path: "src/app.ts", line: 12, column: 5 },
       { kind: "path", start: 36, end: 48, text: "./lib/a.js:3", path: "./lib/a.js", line: 3 },
@@ -19,10 +19,10 @@ describe("findTerminalLinks", () => {
   });
 
   it("ignores paths without a line, inside addresses, or line 0", () => {
-    expect(findTerminalLinks("edited src/app.ts")).toEqual([]);
-    expect(findTerminalLinks("http://host/a.ts:12").map(l => l.kind)).toEqual(["url"]);
-    expect(findTerminalLinks("a.ts:0")).toEqual([]);
-    expect(findTerminalLinks("at 10:30:12 today")).toEqual([]);
+    expect(findTerminalTargets("edited src/app.ts")).toEqual([]);
+    expect(findTerminalTargets("http://host/a.ts:12").map(l => l.kind)).toEqual(["url"]);
+    expect(findTerminalTargets("a.ts:0")).toEqual([]);
+    expect(findTerminalTargets("at 10:30:12 today")).toEqual([]);
   });
 });
 

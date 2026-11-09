@@ -92,7 +92,7 @@ export interface ThreadSession {
   /** After a usage limit: another account, another agent, or wait for the reset. */
   limitAction: (action: Omit<ClientLimitAction, "type">) => void;
   /** Carry on after the runner restarted mid-turn (a careful "continue" prompt). */
-  continueAfterRestart: () => void;
+  resumeCutTurn: () => void;
   /** Preview a port the runner found listening. */
   offerPreview: (port: number) => void;
   /** Signing a cloud thread's agent in to the user's own account (never part of the history). */
@@ -431,7 +431,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const setOptions = useCallback((change: Omit<ClientSetOptions, "type">) => clientRef.current?.setOptions(change), []);
   const answerQuestion = useCallback((requestId: string, answers: string[][] | null) => clientRef.current?.answerQuestion(requestId, answers), []);
   const limitAction = useCallback((action: Omit<ClientLimitAction, "type">) => clientRef.current?.limitAction(action), []);
-  const continueAfterRestart = useCallback(() => clientRef.current?.continueAfterRestart(), []);
+  const resumeCutTurn = useCallback(() => clientRef.current?.resumeCutTurn(), []);
   const offerPreview = useCallback((port: number) => clientRef.current?.offerPreview(port), []);
   const sideAsk = useCallback(
     (text: string, sideId?: string) =>
@@ -493,7 +493,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setOptions,
     answerQuestion,
     limitAction,
-    continueAfterRestart,
+    resumeCutTurn,
     offerPreview,
     login,
     side,

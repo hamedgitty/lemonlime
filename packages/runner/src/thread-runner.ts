@@ -1926,7 +1926,7 @@ export class ThreadRunner {
    * The user pressed Continue on the notice that a restart cut the last turn short: send a
    * careful prompt so the agent checks what already happened before repeating it.
    */
-  continueAfterRestart(now = Date.now()): { ok: true; result: SendResult["result"] } | { error: string } {
+  resumeCutTurn(now = Date.now()): { ok: true; result: SendResult["result"] } | { error: string } {
     if (!this.initialised) return { error: "The thread isn't ready yet." };
     const events = this.store.since(0);
     const cut = events.findLast(e => e.type === "error" && e.code === "turn_outcome_unknown");

@@ -675,14 +675,14 @@ export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapsho
     state,
     headSha: String(v.headRefOid ?? ""),
     checks: rollupChecks(rollup),
-    failing: failingChecks(rollup),
+    failing: redChecks(rollup),
     conflicting: String(v.mergeable ?? "").toUpperCase() === "CONFLICTING",
     comments,
   };
 }
 
 /** Names of the failed checks in a `statusCheckRollup`. */
-export function failingChecks(rollup: unknown[]): string[] {
+export function redChecks(rollup: unknown[]): string[] {
   const out: string[] = [];
   for (const item of rollup) {
     const c = (item ?? {}) as { name?: string; context?: string; conclusion?: string; state?: string };

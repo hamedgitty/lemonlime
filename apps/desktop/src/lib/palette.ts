@@ -161,7 +161,7 @@ const PER_THREAD = 2;
  * Messages containing every word of the query (any case), newest first, as palette rows:
  * a snippet around the first match with it marked, and the thread's title.
  */
-export function searchMessages(messages: readonly MessageText[], query: string, limit = LIMITS.messages): PaletteItem[] {
+export function findInMessages(messages: readonly MessageText[], query: string, limit = LIMITS.messages): PaletteItem[] {
   const words = query
     .toLowerCase()
     .split(/\s+/)

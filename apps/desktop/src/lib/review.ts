@@ -80,7 +80,7 @@ export function fetchPullRequestDraft(connection: Connection, fetchImpl?: FetchL
   return call(connection, "/git/pull-request/draft", PullRequestDraft, {}, fetchImpl);
 }
 
-export function watchPullRequest(connection: Connection, on: boolean, fetchImpl?: FetchLike): Promise<PullRequestWatchState> {
+export function followPullRequest(connection: Connection, on: boolean, fetchImpl?: FetchLike): Promise<PullRequestWatchState> {
   return call(connection, "/git/pull-request/watch", PullRequestWatchState, { method: "POST", body: JSON.stringify({ on }) }, fetchImpl);
 }
 

@@ -21,7 +21,7 @@ import {
   Shrink,
   Trash2,
 } from "lucide-react";
-import { snoozePresets, threadMenuGroups, type ThreadMenuEntry, type ThreadMenuId, type ThreadMenuInput } from "../lib/threadMenu.ts";
+import { snoozeChoices, threadMenuGroups, type ThreadMenuEntry, type ThreadMenuId, type ThreadMenuInput } from "../lib/threadMenu.ts";
 import { ContextMenu, Menu, MenuItem, MenuSeparator, SubMenu } from "./primitives.tsx";
 import { toast } from "./Toaster.tsx";
 import { cx } from "./ui.tsx";
@@ -165,7 +165,7 @@ function SnoozeMenu({ label, onPick }: { label: string; onPick: (until: Date | "
   const now = new Date();
   return (
     <SubMenu icon={<Clock />} label={label}>
-      {snoozePresets(now).map(p => (
+      {snoozeChoices(now).map(p => (
         <MenuItem key={p.id} onSelect={() => onPick(p.until)} hint={p.hint}>
           {p.label}
         </MenuItem>

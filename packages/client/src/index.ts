@@ -136,7 +136,7 @@ export class RunnerClient {
   }
 
   /** Carry on after the runner restarted mid-turn (see ClientContinueAfterRestart). */
-  continueAfterRestart(): void {
+  resumeCutTurn(): void {
     this.post({ type: "continue_after_restart" });
   }
 

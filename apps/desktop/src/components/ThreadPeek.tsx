@@ -18,7 +18,7 @@ const OPEN_DELAY = 550;
 const CLOSE_DELAY = 80;
 
 /** Mount once, in the sidebar. */
-export function ThreadHoverCard() {
+export function ThreadPeek() {
   return (
     <PreviewCard.Root handle={handle}>
       {({ payload }) =>
@@ -50,6 +50,6 @@ export function ThreadHoverCard() {
 }
 
 /** Makes `render` (a row's button) show the card for it. */
-export function ThreadCardTrigger({ payload, render }: { payload: ThreadCardPayload; render: ReactElement }) {
+export function ThreadPeekTrigger({ payload, render }: { payload: ThreadCardPayload; render: ReactElement }) {
   return <PreviewCard.Trigger handle={handle} payload={payload} delay={OPEN_DELAY} closeDelay={CLOSE_DELAY} render={render} />;
 }

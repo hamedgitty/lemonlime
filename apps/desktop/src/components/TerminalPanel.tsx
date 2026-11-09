@@ -4,7 +4,7 @@ import { Terminal, type ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { runnerHttpBase, TerminalClient, terminalUrl, type TerminalState } from "@lemonlime/client";
-import { findTerminalLinks, projectPathCandidate } from "../lib/terminalLinks.ts";
+import { findTerminalTargets, projectPathCandidate } from "../lib/terminalTargets.ts";
 import { quoteTerminal } from "../lib/review.ts";
 import { QUOTE_ITEM, QuoteToolbar } from "./SelectionQuote.tsx";
 import { Button } from "./ui.tsx";
@@ -304,7 +304,7 @@ function linkProvider(
       for (let r = first; r <= last; r++) text += buf.getLine(r)?.translateToString(r === last) ?? "";
       const cols = term.cols;
       const at = (i: number) => ({ x: (i % cols) + 1, y: first + Math.floor(i / cols) + 1 });
-      const found = findTerminalLinks(text).filter(l => at(l.start).y <= y && at(l.end - 1).y >= y);
+      const found = findTerminalTargets(text).filter(l => at(l.start).y <= y && at(l.end - 1).y >= y);
       if (!found.length) return callback(undefined);
       void Promise.all(
         found.map(async (l): Promise<ILink | null> => {

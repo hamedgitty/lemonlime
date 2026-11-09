@@ -70,7 +70,7 @@ import { ForkDialog } from "./GitDialogs.tsx";
 import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { saveDraft } from "../lib/storage.ts";
 import { loadPanelState, openFile, openScript, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
-import { fetchProjectScripts, scriptForShortcut, setFocusedScripts, type Script } from "../lib/projectScripts.ts";
+import { fetchProjectScripts, scriptForShortcut, setFocusedScripts, type Script } from "../lib/runScripts.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import { betterTitle } from "../lib/threadTitle.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
@@ -1007,7 +1007,7 @@ function ThreadSessionView({
               subagents={subagents}
               onImplementPlan={session.state === "live" ? implementPlan : undefined}
               limit={limitActions}
-              onContinueAfterRestart={session.state === "live" ? session.continueAfterRestart : undefined}
+              onContinueAfterRestart={session.state === "live" ? session.resumeCutTurn : undefined}
             />
           </FileLinksContext.Provider>
           {find !== null && <FindBar root={timelineRef} version={timelineItems} focusNonce={find} onClose={() => setFind(null)} />}

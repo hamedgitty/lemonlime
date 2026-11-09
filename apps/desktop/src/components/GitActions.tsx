@@ -30,7 +30,7 @@ import {
   pushBranch,
   ReviewUnavailable,
   updateFromBase as postUpdateFromBase,
-  watchPullRequest,
+  followPullRequest,
 } from "../lib/review.ts";
 import { PullRequestDraftDialog } from "./GitDialogs.tsx";
 import { MenuItem, MenuSeparator, Tip } from "./primitives.tsx";
@@ -215,7 +215,7 @@ export function useGitState({
     if (!c || busy) return;
     setBusy("watch");
     try {
-      setWatchState(await watchPullRequest(c, on));
+      setWatchState(await followPullRequest(c, on));
       toast({
         title: on ? "Watching the pull request" : "Stopped watching the pull request",
         ...(on ? { description: "The agent gets a message when checks fail, comments arrive or the branch has merge conflicts." } : {}),

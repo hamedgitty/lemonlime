@@ -22,8 +22,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { MAX_TERMINALS, type ScriptIcon, type ScriptKeybinding } from "@lemonlime/protocol";
-import type { Script } from "../lib/projectScripts.ts";
+import { MAX_TERMINALS, type RunIcon, type ScriptKeybinding } from "@lemonlime/protocol";
+import type { Script } from "../lib/runScripts.ts";
 import type { useThreadSession } from "../lib/useThreadSession.ts";
 import {
   activeTab,
@@ -64,7 +64,7 @@ const BUILT_IN: Record<BuiltInTab, { label: string; icon: typeof FileDiff }> = {
 };
 
 /** Each icon a project script can pick. */
-const SCRIPT_ICONS: Record<ScriptIcon, LucideIcon> = {
+const RUN_ICONS: Record<RunIcon, LucideIcon> = {
   play: Play,
   test: FlaskConical,
   lint: ListChecks,
@@ -78,7 +78,7 @@ const SCRIPT_ICONS: Record<ScriptIcon, LucideIcon> = {
   database: Database,
   sparkles: Sparkles,
 };
-export const scriptIcon = (icon: ScriptIcon | undefined): LucideIcon => (icon ? SCRIPT_ICONS[icon] : Play);
+export const scriptIcon = (icon: RunIcon | undefined): LucideIcon => (icon ? RUN_ICONS[icon] : Play);
 
 /** How long to wait for a script's preview address to answer before opening it anyway. */
 const PREVIEW_WAIT_MS = 60_000;
@@ -214,7 +214,7 @@ export function ThreadPanel({
     const keys = s.keybinding && scriptKeys ? scriptKeys(s.keybinding) : "";
     return keys ? { hint: keyCaps(keys).join("") } : {};
   };
-  const scriptItems =
+  const runItems =
     scripts.length > 0 ? (
       <>
         <MenuLabel>Project scripts</MenuLabel>
@@ -386,7 +386,7 @@ export function ThreadPanel({
               </button>
             }
           >
-            {scriptItems}
+            {runItems}
             {scriptsError && (
               <p role="alert" className="max-w-[18rem] px-2.5 py-1.5 text-[13px] text-danger">
                 {scriptsError}
@@ -412,10 +412,10 @@ export function ThreadPanel({
           <MenuItem icon={<FileSearch />} onSelect={onQuickOpen} {...(shortcuts.quickOpen ? { hint: keyCaps(shortcuts.quickOpen).join("") } : {})}>
             Open a file…
           </MenuItem>
-          {scriptItems && onRunScript && (
+          {runItems && onRunScript && (
             <>
               <MenuSeparator />
-              {scriptItems}
+              {runItems}
             </>
           )}
           <MenuSeparator />

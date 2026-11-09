@@ -196,7 +196,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   const watcher = opts.watchPorts
     ? new PortWatcher({ ignore: () => [listenPort, ...(opts.ownPorts ?? [])], onChange: ports => runner.setListeningPorts(ports) })
     : null;
-  const stopWatching = watcher ? runner.onStatus(s => watcher.busy(s === "running")) : () => {};
+  const stopFollowing = watcher ? runner.onStatus(s => watcher.busy(s === "running")) : () => {};
 
   return new Promise((resolve, reject) => {
     http.once("error", reject);
@@ -212,7 +212,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
             wss.close();
             terminalWss.close();
             terminals?.closeAll();
-            stopWatching();
+            stopFollowing();
             watcher?.stop();
             http.close(() => done());
           }),
@@ -353,7 +353,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         if (!runner.offerListeningPort(msg.port)) send({ type: "error", code: "bad_request", message: "Nothing is listening on that port any more." });
         break;
       case "continue_after_restart": {
-        const r = runner.continueAfterRestart();
+        const r = runner.resumeCutTurn();
         if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
         break;
       }

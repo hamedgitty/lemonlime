@@ -63,7 +63,7 @@ import {
 } from "../lib/sidebarGroups.ts";
 import { knownPullRequestInfo, knownPullRequests, snoozeWhen, subscribePullRequests } from "../lib/threadMenu.ts";
 import { threadCardLines } from "../lib/threadCard.ts";
-import { ThreadCardTrigger, ThreadHoverCard } from "./ThreadHoverCard.tsx";
+import { ThreadPeekTrigger, ThreadPeek } from "./ThreadPeek.tsx";
 import { useMissingFolders } from "../lib/missingFolders.ts";
 import { RenameField, ThreadMenu, ThreadRightClickMenu, type ThreadMenuProps } from "./ThreadMenu.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
@@ -303,7 +303,7 @@ export function AppSidebar(p: AppSidebarProps) {
 
   return (
     <nav aria-label="LemonLime" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">
-      <ThreadHoverCard />
+      <ThreadPeek />
       {/* Window controls: room for the traffic lights, then sidebar and history buttons. */}
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center px-2">
         <div data-tauri-drag-region className="flex h-9 items-center gap-0.5 rounded-full border border-line bg-cream/70 pr-1.5 pl-1">
@@ -805,7 +805,7 @@ function ThreadRow({
             }}
           />
         ) : (
-          <ThreadCardTrigger
+          <ThreadPeekTrigger
             payload={{
               title: t.title,
               lines: threadCardLines(t, { machineName, pullRequest: prUrl ? (knownPullRequestInfo(t.id) ?? {}) : null, snoozedUntil: snoozedUntil ?? null }),

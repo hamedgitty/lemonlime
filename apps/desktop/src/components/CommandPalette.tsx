@@ -80,7 +80,7 @@ export function CommandPalette({
   recents,
   onRun,
   keysOf,
-  searchMessages,
+  findInMessages,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -92,7 +92,7 @@ export function CommandPalette({
   /** The keys a shortcut has now ("" when turned off). */
   keysOf: (id: ShortcutId) => string;
   /** Messages in threads that match what's typed (the "In messages" group). */
-  searchMessages?: (query: string) => PaletteItem[];
+  findInMessages?: (query: string) => PaletteItem[];
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -109,9 +109,9 @@ export function CommandPalette({
 
   const groups = useMemo(() => {
     if (!open) return [];
-    const found = searchMessages && !query.trimStart().startsWith(">") ? searchMessages(query.trim()) : [];
+    const found = findInMessages && !query.trimStart().startsWith(">") ? findInMessages(query.trim()) : [];
     return rankPalette(found.length ? [...items, ...found] : items, query, recents);
-  }, [open, items, query, recents, searchMessages]);
+  }, [open, items, query, recents, findInMessages]);
   const flat = useMemo(() => groups.flatMap(g => g.items.map(r => r.item)), [groups]);
   useEffect(() => setActive(0), [query]);
   const current = Math.min(active, Math.max(0, flat.length - 1));

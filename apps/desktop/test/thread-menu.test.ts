@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ThreadEvent, type NewEvent } from "@lemonlime/protocol";
-import { childRowKey, forkPrompt, snoozePresets, snoozeWhen, threadMenuGroups, type ThreadMenuId, type ThreadMenuInput } from "../src/lib/threadMenu.ts";
+import { childRowKey, forkPrompt, snoozeChoices, snoozeWhen, threadMenuGroups, type ThreadMenuId, type ThreadMenuInput } from "../src/lib/threadMenu.ts";
 
 const ALL: ThreadMenuId[] = ["rename", "pin", "unread", "split", "fork", "open-folder", "pull-request", "compact", "move", "archive", "remove"];
 
@@ -98,7 +98,7 @@ describe("opening a thread at a subagent", () => {
 });
 
 describe("snooze", () => {
-  const presets = (d: Date) => snoozePresets(d).map(p => [p.id, p.until.toString()]);
+  const presets = (d: Date) => snoozeChoices(d).map(p => [p.id, p.until.toString()]);
   const local = (day: number, h: number, m = 0) => new Date(2026, 10, day, h, m);
 
   it("sits with pin and unread, and wakes a snoozed thread", () => {
@@ -125,7 +125,7 @@ describe("snooze", () => {
   });
 
   it("goes a whole week ahead on a Monday, and skips next week on a Sunday, when it's tomorrow", () => {
-    expect(snoozePresets(local(9, 8)).find(p => p.id === "next-week")?.until).toEqual(local(16, 9));
+    expect(snoozeChoices(local(9, 8)).find(p => p.id === "next-week")?.until).toEqual(local(16, 9));
     expect(presets(local(8, 10)).map(([id]) => id)).toEqual(["hour", "evening", "tomorrow"]);
   });
 

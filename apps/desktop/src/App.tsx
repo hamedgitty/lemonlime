@@ -37,7 +37,7 @@ import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, relativeTime, repoName, titleFromPrompt } from "./lib/format.ts";
 import { COMPOSER_SHORTCUTS, keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
-import { appCommands, loadRecents, rememberPick, searchMessages, type MessageText, type PaletteItem } from "./lib/palette.ts";
+import { appCommands, loadRecents, rememberPick, findInMessages, type MessageText, type PaletteItem } from "./lib/palette.ts";
 import { SETTINGS_INDEX, settingAnchor } from "./lib/settingsIndex.ts";
 import {
   closeThreadNotifications,
@@ -53,7 +53,7 @@ import {
   type AgentInstall,
   type NotifyTarget,
 } from "./lib/system.ts";
-import { focusedScripts, requestScript } from "./lib/projectScripts.ts";
+import { focusedScripts, requestScript } from "./lib/runScripts.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -1656,12 +1656,12 @@ export function App() {
   // What was said in every thread kept on this computer, read once each time the palette opens.
   const messageIndex = useMemo<MessageText[]>(() => {
     if (!paletteOpen) return [];
-    // Oldest activity first, so the newest messages are found first (see searchMessages).
+    // Oldest activity first, so the newest messages are found first (see findInMessages).
     return [...summaries].reverse().flatMap(t => loadMessageTexts(t.id).map(m => ({ ...m, threadId: t.id, threadTitle: t.title })));
     // Only on opening: what arrives while it's open can wait for next time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paletteOpen]);
-  const findMessages = useCallback((query: string) => searchMessages(messageIndex, query), [messageIndex]);
+  const findMessages = useCallback((query: string) => findInMessages(messageIndex, query), [messageIndex]);
 
   const runPaletteItem = (item: PaletteItem, opts: { split?: boolean } = {}) => {
     const [kind, ...rest] = item.id.split(":");
@@ -1707,7 +1707,7 @@ export function App() {
       recents={paletteRecents}
       onRun={runPaletteItem}
       keysOf={id => keysFor(id, prefs.shortcuts)}
-      searchMessages={findMessages}
+      findInMessages={findMessages}
     />
   );
 

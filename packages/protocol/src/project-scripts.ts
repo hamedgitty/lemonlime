@@ -26,9 +26,9 @@ export const PROJECT_FILE_MAX_BYTES = 64 * 1024;
 export const SETUP_SCRIPT_TIMEOUT_SECONDS = 600;
 
 /** The icons a script can pick for its button. */
-export const SCRIPT_ICONS = ["play", "test", "lint", "build", "server", "package", "wrench", "terminal", "bug", "rocket", "database", "sparkles"] as const;
-export const ScriptIcon = z.enum(SCRIPT_ICONS);
-export type ScriptIcon = z.infer<typeof ScriptIcon>;
+export const RUN_ICONS = ["play", "test", "lint", "build", "server", "package", "wrench", "terminal", "bug", "rocket", "database", "sparkles"] as const;
+export const RunIcon = z.enum(RUN_ICONS);
+export type RunIcon = z.infer<typeof RunIcon>;
 
 /** The keyboard shortcuts scripts can take (their keys are set in Settings, Keyboard). */
 export const SCRIPT_KEYBINDINGS = ["run-script-1", "run-script-2", "run-script-3", "run-script-4"] as const;
@@ -51,12 +51,12 @@ export const LocalPreviewUrl = z
     }
   }, "previewUrl must be a local address, like http://localhost:5173");
 
-export const ProjectScript = z.object({
+export const RunScript = z.object({
   /** Stable id, for the terminal and shortcuts; made from the name when left out. */
   id: ScriptId.optional(),
   name: z.string().trim().min(1).max(40),
   command: z.string().min(1).max(8000),
-  icon: ScriptIcon.optional(),
+  icon: RunIcon.optional(),
   /** Run once when the thread's worktree is first made, before the agent starts (setup: copy .env files, install dependencies). */
   runOnWorktreeCreate: z.boolean().optional(),
   /** How long that setup may take, in seconds (default SETUP_SCRIPT_TIMEOUT_SECONDS). */
@@ -66,13 +66,13 @@ export const ProjectScript = z.object({
   /** Run it with one of the app's script shortcuts. */
   keybinding: ScriptKeybinding.optional(),
 });
-export type ProjectScript = z.infer<typeof ProjectScript>;
+export type RunScript = z.infer<typeof RunScript>;
 
 /** A script as the runner hands it to apps: always with an id. */
-export type ResolvedScript = ProjectScript & { id: string };
+export type ResolvedScript = RunScript & { id: string };
 
 export const ProjectConfig = z.object({
-  scripts: z.array(ProjectScript).max(MAX_PROJECT_SCRIPTS).default([]),
+  scripts: z.array(RunScript).max(MAX_PROJECT_SCRIPTS).default([]),
 });
 export type ProjectConfig = z.infer<typeof ProjectConfig>;
 
@@ -127,7 +127,7 @@ export const scriptTerminalId = (id: string) => `script-${id}`;
 
 /** `GET /project-scripts` on the runner. */
 export const ProjectScriptsResponse = z.object({
-  scripts: z.array(ProjectScript.extend({ id: ScriptId })),
+  scripts: z.array(RunScript.extend({ id: ScriptId })),
   /** What's wrong with the project file, when it couldn't be read. */
   error: z.string().optional(),
 });

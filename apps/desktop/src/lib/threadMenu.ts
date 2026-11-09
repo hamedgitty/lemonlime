@@ -86,7 +86,7 @@ export function threadMenuGroups(i: ThreadMenuInput): ThreadMenuEntry[][] {
 
 // ── Snooze ─────────────────────────────────────────────────
 
-export interface SnoozePreset {
+export interface SnoozeChoice {
   id: "hour" | "evening" | "tomorrow" | "next-week";
   label: string;
   until: Date;
@@ -108,9 +108,9 @@ const at = (base: Date, days: number, hour: number) => {
  * that's more than an hour away), tomorrow at 9:00, and next week (Monday at 9:00; left out
  * on a Sunday, when that's tomorrow).
  */
-export function snoozePresets(now: Date): SnoozePreset[] {
+export function snoozeChoices(now: Date): SnoozeChoice[] {
   const hour = new Date(now.getTime() + 3_600_000);
-  const out: SnoozePreset[] = [{ id: "hour", label: "In 1 hour", until: hour, hint: clock(hour) }];
+  const out: SnoozeChoice[] = [{ id: "hour", label: "In 1 hour", until: hour, hint: clock(hour) }];
   const evening = at(now, 0, 18);
   if (evening.getTime() - now.getTime() > 3_600_000) out.push({ id: "evening", label: "This evening", until: evening, hint: clock(evening) });
   const tomorrow = at(now, 1, 9);

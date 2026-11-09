@@ -309,20 +309,20 @@ describe("runner end to end", () => {
     cleanups.push(() => second.close());
     await second.init();
     const now = Date.now();
-    expect(second.continueAfterRestart(now)).toEqual({ ok: true, result: "started" });
+    expect(second.resumeCutTurn(now)).toEqual({ ok: true, result: "started" });
     await second.settled();
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(CONTINUE_AFTER_RESTART);
     // Pressing it again for the same notice does nothing more; once the thread moved on, it's refused.
-    expect(second.continueAfterRestart(now)).toEqual({ ok: true, result: "duplicate" });
+    expect(second.resumeCutTurn(now)).toEqual({ ok: true, result: "duplicate" });
     second.store.append({ type: "error", code: "turn_outcome_unknown", message: "cut short", fatal: false });
-    expect(second.continueAfterRestart(now + 1000)).toEqual({ ok: true, result: "started" });
+    expect(second.resumeCutTurn(now + 1000)).toEqual({ ok: true, result: "started" });
     await second.settled();
     second.store.append({ type: "error", code: "turn_outcome_unknown", message: "cut short", fatal: false });
-    expect(second.continueAfterRestart(now + 2000)).toEqual({ ok: true, result: "started" });
+    expect(second.resumeCutTurn(now + 2000)).toEqual({ ok: true, result: "started" });
     await second.settled();
     second.store.append({ type: "error", code: "turn_outcome_unknown", message: "cut short", fatal: false });
-    expect(second.continueAfterRestart(now + 3000)).toHaveProperty("error");
+    expect(second.resumeCutTurn(now + 3000)).toHaveProperty("error");
     expect(prompts).toHaveLength(3);
   });
 

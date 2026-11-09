@@ -10,7 +10,7 @@ export const IMAGE_MAX_EDGE = 2000;
 /** The most an image may weigh once sent (well under the API's per-image limit, base64 and all). */
 export const IMAGE_MAX_BYTES = 3.5 * 1024 * 1024;
 
-const QUALITY_STEPS = [0.9, 0.82, 0.74, 0.66, 0.58];
+const JPEG_QUALITIES = [0.9, 0.82, 0.74, 0.66, 0.58];
 /** Formats we can draw and encode again; GIFs (maybe animated), SVGs and the rest go as they are. */
 const SHRINKABLE = /^image\/(png|jpeg|webp)$/;
 
@@ -39,7 +39,7 @@ export function renameFor(name: string, type: string): string {
  * its format.
  */
 export function encodePlan(type: string): { type: string; quality?: number }[] {
-  const lossy = (t: string) => QUALITY_STEPS.map(quality => ({ type: t, quality }));
+  const lossy = (t: string) => JPEG_QUALITIES.map(quality => ({ type: t, quality }));
   if (type === "image/png") return [{ type: "image/png" }, ...lossy("image/webp"), ...lossy("image/jpeg")];
   if (type === "image/webp") return [...lossy("image/webp"), ...lossy("image/jpeg")];
   return lossy("image/jpeg");

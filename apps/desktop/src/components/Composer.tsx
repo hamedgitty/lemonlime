@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ArrowUp, BookOpen, FileText, Mic, Puzzle, Square, SquareSlash } from "lucide-react";
-import { joinDictation, startLevelMeter, useDictation } from "../lib/dictation.ts";
+import { allowMicrophone, joinDictation, listMicrophones, micOptions, startLevelMeter, useDictation } from "../lib/dictation.ts";
 import { loadUiPrefs } from "../lib/storage.ts";
 import { fuzzyFilter, fuzzyMatchPath, type AgentCommand, type FuzzyMatch } from "@lemonlime/protocol";
 import { applyPick, detectTrigger, insertQuote, type Trigger } from "../lib/composerTriggers.ts";
@@ -12,7 +12,7 @@ import { enterAction, sendKeyLabel, type SendKey } from "../lib/composerSend.ts"
 import { pasteBecomesFile } from "../lib/pastedText.ts";
 import { IS_MAC } from "../lib/shortcuts.ts";
 import { Highlighted } from "./Highlighted.tsx";
-import { Kbd, Tip } from "./primitives.tsx";
+import { Kbd, Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 
 export interface ComposerHandle {
@@ -40,9 +40,14 @@ type Option = { id: string; kind: "command"; command: AgentCommand; match: Fuzzy
 const MENU_WIDTH = 380;
 
 /**
- * The message card: a growing text box with a toolbar inside it. `tools` sits bottom-left
- * (agent and model pickers); the round send button turns lime once there's something
- * to send. Used on the home screen and docked under a thread.
+ * The message card and the row under it.
+ *
+ * `home` (a new thread): a roomy card with `leading` (the "+" menu) bottom-left inside it,
+ * and the microphone and send button bottom-right. `reply` (under a thread): a slim card,
+ * one line that grows, with send (and stop while the agent works) on its right; `leading`
+ * and the microphone sit in the row under it. That row has `footerStart` on the left and
+ * `footerEnd` on the right (the project, the model, permissions). It is a size container
+ * named `tools`, so the controls in it can drop their labels in a narrow pane.
  *
  * In a thread it also has typeahead (`/` for the agent's commands at the start, `@` for
  * files anywhere), Up and Down through earlier prompts, and a draft kept per thread.
@@ -58,7 +63,17 @@ export const Composer = forwardRef<
     disabled?: boolean;
     disabledReason?: string | undefined;
     placeholder?: string;
-    tools?: ReactNode;
+    /** "home": the roomy new-thread card; "reply": the slim card under a thread. */
+    variant?: "home" | "reply";
+    /** Home: bottom-left inside the card. Reply: first in the row under it. */
+    leading?: ReactNode;
+    /** The row under the card: left side (after the microphone on reply). */
+    footerStart?: ReactNode;
+    /** The row under the card: right side. */
+    footerEnd?: ReactNode;
+    /** The microphone the level meter listens on ("" for the system default), and where a pick goes. */
+    micDeviceId?: string;
+    onMicDevice?: (deviceId: string) => void;
     /** Keep the text after sending (e.g. while a thread is being created). */
     busy?: boolean;
     autoFocus?: boolean;
@@ -84,7 +99,12 @@ export const Composer = forwardRef<
     disabled = false,
     disabledReason,
     placeholder,
-    tools,
+    variant = "home",
+    leading,
+    footerStart,
+    footerEnd,
+    micDeviceId,
+    onMicDevice,
     busy = false,
     autoFocus,
     suggestions,
@@ -377,130 +397,166 @@ export const Composer = forwardRef<
     }
   };
 
+  const reply = variant === "reply";
+  const sendLabel = `Send (${sendKeyLabel(sendKey, text, IS_MAC ? "⌘" : "Ctrl+")})`;
+  const mic = dictation.supported && !disabled && (
+    <MicControl listening={dictation.listening} onToggle={dictation.toggle} deviceId={micDeviceId} onDevice={onMicDevice} side={reply ? "top" : "bottom"} />
+  );
+  const stopButton = working && onInterrupt && (
+    <Tip
+      label={
+        <>
+          Stop the agent <span className="font-normal opacity-75">Esc</span>
+        </>
+      }
+    >
+      <button
+        type="button"
+        onClick={onInterrupt}
+        aria-label="Stop the agent"
+        className={cx(
+          "inline-flex shrink-0 items-center justify-center rounded-full border border-line-strong bg-paper text-ink hover:bg-cream",
+          reply ? "size-8" : "size-9",
+        )}
+      >
+        <Square aria-hidden="true" className="size-3 fill-current" />
+      </button>
+    </Tip>
+  );
+  // While the agent works on a reply, an empty box shows only Stop; typing brings Send back (to queue it).
+  const sendButton = !(reply && working && onInterrupt && !canSend) && (
+    <button
+      type="button"
+      onClick={() => submit()}
+      disabled={!canSend}
+      aria-label="Send message"
+      title={sendLabel}
+      className={cx(
+        "inline-flex shrink-0 items-center justify-center rounded-full transition-colors duration-150",
+        reply ? "size-8" : "size-9",
+        canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
+      )}
+    >
+      <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />
+    </button>
+  );
+  const dictationRows = (
+    <>
+      {dictation.listening && <DictationBar interim={dictation.interim} onStop={dictation.stop} deviceId={micDeviceId ?? loadUiPrefs().micDeviceId} />}
+      {dictation.error && !dictation.listening && (
+        <p role="alert" className={cx("text-[13px] text-danger", reply ? "px-3.5 pb-2" : "px-5 pb-1")}>
+          {dictation.error}
+        </p>
+      )}
+    </>
+  );
+  const footerLeft = reply ? (
+    <>
+      {leading}
+      {mic}
+      {footerStart}
+    </>
+  ) : (
+    footerStart
+  );
+
   return (
     <div ref={wrapRef} className="relative" data-composer="">
       <div
         className={cx(
-          "rounded-xl border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",
+          "border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",
           "focus-within:border-line-strong focus-within:shadow-[0_1px_2px_rgb(23_32_14/0.04),0_6px_20px_rgb(23_32_14/0.07)]",
+          reply ? "rounded-2xl" : "rounded-[20px]",
         )}
       >
         <label htmlFor="composer" className="sr-only">
           Message the agent
         </label>
-        <textarea
-          id="composer"
-          ref={ref}
-          rows={2}
-          value={text}
-          autoFocus={autoFocus}
-          onChange={e => {
-            setText(e.target.value);
-            if (!ownEdit.current) historyState.current = HISTORY_IDLE;
-            if (dismissedAt !== null && !detectTrigger(e.target.value, e.target.selectionStart)) setDismissedAt(null);
-            readTrigger();
-          }}
-          onSelect={readTrigger}
-          onFocus={() => setSendKey(loadUiPrefs().sendKey)}
-          onBlur={() => setTrigger(null)}
-          onKeyDown={onKeyDown}
-          onPaste={e => {
-            const inline = plainPaste.current;
-            plainPaste.current = false;
-            // Files are attached by the thread; ⌘⇧V pastes the text as it is.
-            if (inline || e.clipboardData.files.length || !onLongPaste) return;
-            const pasted = e.clipboardData.getData("text/plain");
-            const el = e.currentTarget;
-            if (pasted && pasteBecomesFile(pasted, el.value.length, el.selectionEnd - el.selectionStart) && onLongPaste(pasted)) e.preventDefault();
-          }}
-          dir="auto"
-          disabled={disabled}
-          placeholder={
-            disabled
-              ? (disabledReason ?? "Not connected")
-              : (offered ?? placeholder ?? (working ? "Add to the conversation…" : "Ask the agent to build anything…"))
-          }
-          aria-describedby={offered ? hintId : undefined}
-          {...(suggestions
-            ? {
-                role: "combobox",
-                "aria-autocomplete": "list" as const,
-                "aria-expanded": open,
-                "aria-controls": open ? listId : undefined,
-                "aria-activedescendant": open && options.length > 0 ? optionId(activeIndex) : undefined,
-              }
-            : {})}
-          className={cx(
-            "block max-h-[260px] min-h-[56px] w-full resize-none bg-transparent px-4 pt-3.5 text-[15px] leading-relaxed text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed",
-            offered && "pr-24",
-          )}
-        />
-        {offered && (
-          <span id={hintId} className="pointer-events-none absolute top-3.5 right-3 inline-flex items-center gap-1 text-[13px] text-ink-faint">
-            <span className="sr-only">Suggested reply: {offered}.</span>
-            <Kbd>Tab</Kbd>
-            <span aria-hidden="true">to use</span>
-            <span className="sr-only">Press Tab to use it.</span>
-          </span>
-        )}
-        {dictation.listening && <DictationBar interim={dictation.interim} onStop={dictation.stop} />}
-        {dictation.error && !dictation.listening && (
-          <p role="alert" className="px-4 pb-1 text-[13px] text-danger">
-            {dictation.error}
-          </p>
-        )}
-        <div className="flex items-center gap-1 px-2.5 pt-1 pb-2.5">
-          {/* In a narrow column the pickers are cut off rather than running under the buttons. */}
-          <div className="-m-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden p-1">{tools}</div>
-          {dictation.supported && !disabled && (
-            <Tip label={dictation.listening ? "Stop dictating" : "Dictate"}>
-              <button
-                type="button"
-                onClick={dictation.toggle}
-                aria-label={dictation.listening ? "Stop dictating" : "Dictate a message"}
-                aria-pressed={dictation.listening}
-                className={cx(
-                  "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-cream-deep hover:text-ink",
-                  dictation.listening && "bg-lime text-ink hover:bg-lime",
-                )}
-              >
-                <Mic aria-hidden="true" className="size-4" />
-              </button>
-            </Tip>
-          )}
-          {working && onInterrupt && (
-            <Tip
-              label={
-                <>
-                  Stop the agent <span className="font-normal opacity-75">Esc</span>
-                </>
-              }
-            >
-              <button
-                type="button"
-                onClick={onInterrupt}
-                aria-label="Stop the agent"
-                className="inline-flex size-[34px] items-center justify-center rounded-full border border-line-strong bg-paper text-ink hover:bg-cream"
-              >
-                <Square aria-hidden="true" className="size-3 fill-current" />
-              </button>
-            </Tip>
-          )}
-          <button
-            type="button"
-            onClick={() => submit()}
-            disabled={!canSend}
-            aria-label="Send message"
-            title={`Send (${sendKeyLabel(sendKey, text, IS_MAC ? "⌘" : "Ctrl+")})`}
+        <div className={cx("relative", reply && "flex items-end gap-1.5 py-1.5 pr-1.5 pl-3.5")}>
+          <textarea
+            id="composer"
+            ref={ref}
+            rows={reply ? 1 : 2}
+            value={text}
+            autoFocus={autoFocus}
+            onChange={e => {
+              setText(e.target.value);
+              if (!ownEdit.current) historyState.current = HISTORY_IDLE;
+              if (dismissedAt !== null && !detectTrigger(e.target.value, e.target.selectionStart)) setDismissedAt(null);
+              readTrigger();
+            }}
+            onSelect={readTrigger}
+            onFocus={() => setSendKey(loadUiPrefs().sendKey)}
+            onBlur={() => setTrigger(null)}
+            onKeyDown={onKeyDown}
+            onPaste={e => {
+              const inline = plainPaste.current;
+              plainPaste.current = false;
+              // Files are attached by the thread; ⌘⇧V pastes the text as it is.
+              if (inline || e.clipboardData.files.length || !onLongPaste) return;
+              const pasted = e.clipboardData.getData("text/plain");
+              const el = e.currentTarget;
+              if (pasted && pasteBecomesFile(pasted, el.value.length, el.selectionEnd - el.selectionStart) && onLongPaste(pasted)) e.preventDefault();
+            }}
+            dir="auto"
+            disabled={disabled}
+            placeholder={disabled ? (disabledReason ?? "Not connected") : (offered ?? placeholder ?? (reply ? "Reply" : "Describe a task or ask a question"))}
+            aria-describedby={offered ? hintId : undefined}
+            {...(suggestions
+              ? {
+                  role: "combobox",
+                  "aria-autocomplete": "list" as const,
+                  "aria-expanded": open,
+                  "aria-controls": open ? listId : undefined,
+                  "aria-activedescendant": open && options.length > 0 ? optionId(activeIndex) : undefined,
+                }
+              : {})}
             className={cx(
-              "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full transition-colors duration-150",
-              canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
+              "block max-h-[260px] w-full resize-none bg-transparent text-[15px] text-ink placeholder:text-ink-faint focus:outline-none disabled:cursor-not-allowed",
+              // A whole-pixel line height on the one-line box, so it never shows a scrollbar for a fraction of a pixel.
+              reply ? "min-h-8 min-w-0 flex-1 py-1 leading-6" : "min-h-[72px] px-5 pt-4 leading-relaxed",
+              offered && "pr-24",
             )}
-          >
-            <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />
-          </button>
+          />
+          {offered && (
+            <span
+              id={hintId}
+              className={cx(
+                "pointer-events-none absolute inline-flex items-center gap-1 text-[13px] text-ink-faint",
+                reply ? "top-1/2 right-12 -translate-y-1/2" : "top-4 right-4",
+              )}
+            >
+              <span className="sr-only">Suggested reply: {offered}.</span>
+              <Kbd>Tab</Kbd>
+              <span aria-hidden="true">to use</span>
+              <span className="sr-only">Press Tab to use it.</span>
+            </span>
+          )}
+          {reply && (
+            <>
+              {stopButton}
+              {sendButton}
+            </>
+          )}
         </div>
+        {dictationRows}
+        {!reply && (
+          <div className="flex items-center gap-1 px-3 pt-1 pb-3">
+            {/* In a narrow column the menu is cut off rather than running under the buttons. */}
+            <div className="-m-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden p-1">{leading}</div>
+            {mic}
+            {stopButton}
+            {sendButton}
+          </div>
+        )}
       </div>
+      {(footerLeft || footerEnd) && (
+        // Labels give way first in a narrow pane (container queries on `tools`).
+        <div className="@container/tools mt-1.5 flex min-w-0 items-center gap-1 px-1 text-[14px] text-ink-soft">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">{footerLeft}</div>
+          {footerEnd && <div className="flex min-w-0 shrink items-center justify-end gap-0.5">{footerEnd}</div>}
+        </div>
+      )}
       {open && menuPos && (
         <SuggestionMenu
           id={listId}
@@ -520,20 +576,110 @@ export const Composer = forwardRef<
   );
 });
 
+/**
+ * The microphone: one button to dictate and, beside it, a chevron for which microphone the
+ * level meter listens on. The list is read when the chevron is pointed at or focused, so it's
+ * there by the time the menu opens; it never opens the microphone itself.
+ */
+function MicControl({
+  listening,
+  onToggle,
+  deviceId,
+  onDevice,
+  side,
+}: {
+  listening: boolean;
+  onToggle: () => void;
+  deviceId: string | undefined;
+  onDevice: ((id: string) => void) | undefined;
+  side: "top" | "bottom";
+}) {
+  const [mics, setMics] = useState<MediaDeviceInfo[] | null>(null);
+  const load = () => void listMicrophones().then(setMics);
+  const menu = Boolean(onDevice);
+  useEffect(() => {
+    if (!menu) return;
+    const media = navigator.mediaDevices;
+    const reload = () => void listMicrophones().then(setMics);
+    media?.addEventListener?.("devicechange", reload);
+    return () => media?.removeEventListener?.("devicechange", reload);
+  }, [menu]);
+  const choices = micOptions(mics ?? []);
+  const current = deviceId && choices.some(o => o.value === deviceId) ? deviceId : "";
+  // Until the microphone has been allowed once, the system keeps the names to itself.
+  const unnamed = (mics ?? []).length > 0 && !(mics ?? []).some(m => m.label);
+  return (
+    <span className="inline-flex shrink-0 items-center">
+      <Tip label={listening ? "Stop dictating" : "Dictate"}>
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={listening ? "Stop dictating" : "Dictate a message"}
+          aria-pressed={listening}
+          className={cx(
+            "inline-flex size-8 shrink-0 items-center justify-center text-ink-soft hover:bg-cream-deep hover:text-ink",
+            onDevice ? "rounded-l-full rounded-r-md" : "rounded-full",
+            listening && "bg-lime text-ink hover:bg-lime",
+          )}
+        >
+          <Mic aria-hidden="true" className="size-4" />
+        </button>
+      </Tip>
+      {onDevice && (
+        <Menu
+          side={side}
+          align="end"
+          className="w-[280px] max-w-[calc(100vw-24px)]"
+          trigger={
+            <button
+              type="button"
+              aria-label="Choose a microphone"
+              onPointerEnter={load}
+              onFocus={load}
+              className="inline-flex h-8 w-6 shrink-0 items-center justify-center rounded-l-md rounded-r-full text-ink-faint hover:bg-cream-deep hover:text-ink data-[popup-open]:bg-cream-deep data-[popup-open]:text-ink"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5">
+                <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          }
+        >
+          <MenuLabel>Microphone</MenuLabel>
+          {mics === null ? <MenuLabel>Looking for microphones…</MenuLabel> : <MenuChoice value={current} onChange={onDevice} closeOnClick options={choices} />}
+          {(unnamed || mics?.length === 0) && (
+            <>
+              <MenuSeparator />
+              {mics?.length === 0 ? (
+                <MenuLabel>No microphone found.</MenuLabel>
+              ) : (
+                <MenuItem onSelect={() => void allowMicrophone().then(load, () => undefined)}>Show microphone names</MenuItem>
+              )}
+            </>
+          )}
+          <MenuSeparator />
+          <p className="px-2.5 pt-1 pb-1.5 text-[13px] text-pretty text-ink-faint">
+            The level meter listens here. Speech recognition uses your system's default microphone.
+          </p>
+        </Menu>
+      )}
+    </span>
+  );
+}
+
 const BARS = 28;
 
 /**
  * Shown while dictating: a live level meter from the microphone, what's being heard so far,
  * and Stop. The meter is drawn by moving bars (transforms only), never by re-rendering.
  */
-function DictationBar({ interim, onStop }: { interim: string; onStop: () => void }) {
+function DictationBar({ interim, onStop, deviceId }: { interim: string; onStop: () => void; deviceId: string }) {
   const bars = useRef<(HTMLSpanElement | null)[]>([]);
   const [meter, setMeter] = useState<"on" | "off">("on");
   useEffect(() => {
     let stop: (() => void) | null = null;
     let cancelled = false;
     const levels: number[] = Array.from({ length: BARS }, () => 0);
-    void startLevelMeter(loadUiPrefs().micDeviceId, level => {
+    void startLevelMeter(deviceId, level => {
       levels.shift();
       levels.push(level);
       levels.forEach((l, i) => {
@@ -548,7 +694,7 @@ function DictationBar({ interim, onStop }: { interim: string; onStop: () => void
       cancelled = true;
       stop?.();
     };
-  }, []);
+  }, [deviceId]);
   return (
     <div className="mx-2.5 mb-1 flex h-9 items-center gap-3 rounded-lg bg-cream-deep pr-1 pl-3">
       {meter === "on" ? (

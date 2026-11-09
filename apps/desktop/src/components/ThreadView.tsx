@@ -10,6 +10,7 @@ import {
   Monitor,
   PanelRight,
   Paperclip,
+  Plus,
   Pause,
   Play,
   Power,
@@ -145,6 +146,9 @@ export interface ThreadViewProps {
   onFork?: (entry: ThreadEntry, note: string, title: string, o?: { startFrom: string | null }) => Promise<void>;
   /** Archive the thread and remove its worktree (its pull request was merged). */
   onTidyMerged?: () => Promise<void>;
+  /** The microphone the dictation meter listens on (a UI pref), and where a pick from the composer goes. */
+  micDeviceId?: string;
+  onMicDevice?: (deviceId: string) => void;
 }
 
 /** Below this width a pane's side panel lies over the conversation, and only in the active pane. */
@@ -201,6 +205,8 @@ function ThreadSessionView({
   threadMenu,
   onFork,
   onTidyMerged,
+  micDeviceId = "",
+  onMicDevice,
 }: ThreadViewProps & { target: SessionTarget }) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -1140,24 +1146,28 @@ function ThreadSessionView({
               suggestions={composerSuggestions}
               history={prompts}
               draftKey={summary.id}
-              placeholder="Add to the conversation…"
               suggestion={suggestion}
               onInterrupt={session.interrupt}
               working={working}
               disabled={composerDisabled}
-              tools={
-                <span className="@container/tools flex min-w-0 flex-1 items-center gap-1.5 px-1 text-[14px] text-ink-soft">
-                  <Tip label="Attach files (or drop or paste them)">
-                    <button
-                      type="button"
-                      aria-label="Attach files"
-                      disabled={!session.connection}
-                      onClick={() => fileInput.current?.click()}
-                      className="inline-flex size-8 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink disabled:opacity-50"
-                    >
-                      <Paperclip aria-hidden="true" className="size-4" />
-                    </button>
-                  </Tip>
+              variant="reply"
+              placeholder="Reply"
+              {...(onMicDevice ? { micDeviceId, onMicDevice } : {})}
+              leading={
+                <Tip label="Attach files (or drop or paste them)">
+                  <button
+                    type="button"
+                    aria-label="Attach files"
+                    disabled={!session.connection}
+                    onClick={() => fileInput.current?.click()}
+                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-cream-deep hover:text-ink disabled:opacity-50"
+                  >
+                    <Plus aria-hidden="true" className="size-[18px]" />
+                  </button>
+                </Tip>
+              }
+              footerEnd={
+                <>
                   <ModelPicker
                     kind={summary.agent.kind}
                     options={threadOptions}
@@ -1173,21 +1183,22 @@ function ThreadSessionView({
                     onChange={permission => session.setOptions({ permission })}
                   />
                   {/* In a narrow pane the branch gives way first, so the pickers keep their names. */}
-                  <span className="inline-flex min-w-0 shrink-[40] items-center gap-1.5 font-mono text-[13px] @max-[420px]/tools:hidden" title={summary.branch}>
+                  <span
+                    className="ml-1 inline-flex min-w-0 shrink-[40] items-center gap-1.5 px-1 font-mono text-[13px] text-ink-soft @max-[520px]/tools:hidden"
+                    title={summary.branch}
+                  >
                     <GitBranch aria-hidden="true" className="size-3.5 shrink-0 text-leaf" />
                     <span className="truncate">{summary.branch}</span>
                   </span>
                   {loop.usage && (
-                    <span className="ml-auto">
-                      <ContextMeter
-                        usage={loop.usage}
-                        canCompact={AGENT_CAPABILITIES[summary.agent.kind].compact}
-                        compactDisabled={session.state !== "live" || working}
-                        onCompact={session.compact}
-                      />
-                    </span>
+                    <ContextMeter
+                      usage={loop.usage}
+                      canCompact={AGENT_CAPABILITIES[summary.agent.kind].compact}
+                      compactDisabled={session.state !== "live" || working}
+                      onCompact={session.compact}
+                    />
                   )}
-                </span>
+                </>
               }
               disabledReason={
                 session.state === "starting"

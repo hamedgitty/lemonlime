@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type KeyboardEvent, type ReactNode } from "react";
-import { Check, Plus, RefreshCw, Search, Zap } from "lucide-react";
+import { Check, ChevronRight, Gauge, Plus, RefreshCw, Search, Zap } from "lucide-react";
 import { AGENT_CAPABILITIES, type AgentKind, type AgentModel, type ReasoningLevel } from "@lemonlime/protocol";
 import { AGENT_LABELS } from "../lib/format.ts";
 import { cycleEffort, filterModels, modelLabel, parseOpencodeModels, splitModels } from "../lib/models.ts";
@@ -7,15 +7,15 @@ import { openAgentsSettings } from "../lib/settingsNav.ts";
 import { keyCaps } from "../lib/shortcuts.ts";
 import { opencodeModelsText } from "../lib/system.ts";
 import { AgentIcon } from "./AgentIcon.tsx";
-import { Kbd, Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Popover, Tip, Toggle } from "./primitives.tsx";
+import { Kbd, Menu, MenuBadge, MenuChoice, MenuItem, MenuSeparator, Popover, Tip, Toggle } from "./primitives.tsx";
 import { Spinner, cx } from "./ui.tsx";
 
 /**
- * The composer's model control: one pill with the agent's mark and the model (opening the
- * model picker), and the effort level beside it (its own menu). The picker has a tab per
- * agent, a search box, the models, older ones under "More models", and fast mode where the
- * agent has one. On Home picking another agent's model switches the agent; in a thread only
- * the thread's agent is shown.
+ * The composer's model control: quiet text under the message box, the model's name and the
+ * effort level beside it ("Opus 5.5 Medium"), opening the model picker. The picker has a tab
+ * per agent, a search box, the models, older ones under "More models", an Effort row with
+ * its own submenu, and fast mode where the agent has one. On Home picking another agent's
+ * model switches the agent; in a thread only the thread's agent is shown.
  */
 
 export const EFFORT_LABELS: Record<ReasoningLevel, string> = {
@@ -117,7 +117,8 @@ export interface ModelControlProps {
   acpAgents?: readonly { id: string; name: string }[];
   acpId?: string | null;
   onModel: (agent: AgentKind, model: string | null) => void;
-  onReasoning?: ((r: ReasoningLevel) => void) | undefined;
+  /** null: let the agent use its own default effort. */
+  onReasoning?: ((r: ReasoningLevel | null) => void) | undefined;
   onFast?: ((on: boolean) => void) | undefined;
   /** "+": add another agent (Settings → Agents → Harness unless given). */
   onConnect?: () => void;
@@ -130,6 +131,8 @@ export interface ModelControlProps {
   fixedModel?: boolean;
   /** Where the menus open: below on Home, above in a thread (the composer is at the bottom). */
   side?: "top" | "bottom";
+  /** How the picker lines up with the trigger (it sits at the right end of the row under the composer). */
+  align?: "start" | "end";
 }
 
 export function ModelControl(p: ModelControlProps) {
@@ -160,38 +163,31 @@ export function ModelControl(p: ModelControlProps) {
     return () => box.removeEventListener("lemonlime:composer-shortcut", on);
   }, []);
 
+  const effortLabel = effort && p.reasoning ? EFFORT_LABELS[p.reasoning] : null;
   return (
     <span ref={rootRef} className="inline-flex min-w-0 items-center">
       <Popover
         open={open}
         onOpenChange={setOpen}
         side={p.side ?? "top"}
+        align={p.align ?? "end"}
         className="w-[340px] max-w-[calc(100vw-24px)]"
         trigger={
           <button
             type="button"
             disabled={p.disabled}
-            aria-label={`Model: ${label}${p.agent !== "acp" ? `, ${AGENT_LABELS[p.agent]}` : ""}`}
-            className={cx(
-              // The model's name keeps its room; the effort beside it gives way first.
-              "inline-flex h-8 max-w-[220px] shrink-0 items-center gap-1.5 rounded-lg px-2 text-[14px] font-medium text-ink transition-colors duration-100 hover:bg-cream-deep disabled:opacity-50 data-[popup-open]:bg-cream-deep",
-              effort && "rounded-r-none pr-2.5",
-            )}
+            aria-label={`Model: ${label}${p.agent !== "acp" ? `, ${AGENT_LABELS[p.agent]}` : ""}${effortLabel ? `, ${effortLabel} effort` : ""}`}
+            className="inline-flex h-8 max-w-[240px] min-w-0 items-center gap-1.5 rounded-lg px-2 text-[14px] transition-colors duration-100 hover:bg-cream-deep disabled:opacity-50 data-[popup-open]:bg-cream-deep"
           >
-            <AgentIcon kind={p.agent} />
-            <span className="min-w-0 truncate">{label}</span>
-            {!effort && <Chevron />}
+            {/* The model's name keeps its room; the effort beside it gives way first. */}
+            <span className="min-w-0 truncate font-medium text-ink">{label}</span>
+            {effortLabel && <span className="shrink-0 text-ink-soft @max-[420px]/tools:hidden">{effortLabel}</span>}
+            <Chevron />
           </button>
         }
       >
         {open && <Picker {...p} onClose={() => setOpen(false)} />}
       </Popover>
-      {effort && (
-        <>
-          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-line-strong/50" />
-          <EffortMenu {...p} />
-        </>
-      )}
     </span>
   );
 }
@@ -204,30 +200,47 @@ function Chevron() {
   );
 }
 
-function EffortMenu(p: ModelControlProps) {
+/** Levels slow and heavy enough to say so beside them. */
+const COSTLY: readonly ReasoningLevel[] = ["max", "ultra"];
+
+/** The picker's Effort row: the level now on the right, and a submenu of the levels. */
+function EffortRow(p: ModelControlProps) {
   const caps = keyCaps(p.cycleKeys);
   const current = p.reasoning ? EFFORT_LABELS[p.reasoning] : "Default";
+  const highest = p.levels[p.levels.length - 1];
   return (
     <Menu
-      side={p.side ?? "top"}
+      side="right"
+      align="start"
+      className="w-[280px] max-w-[calc(100vw-24px)]"
       trigger={
         <button
           type="button"
           disabled={p.disabled}
-          aria-label={`Effort: ${current}`}
-          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg rounded-l-none pr-2 pl-2.5 text-[14px] text-ink-soft transition-colors duration-100 hover:bg-cream-deep hover:text-ink disabled:opacity-50 data-[popup-open]:bg-cream-deep data-[popup-open]:text-ink"
+          className="flex h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[14px] text-ink hover:bg-cream-deep disabled:opacity-50 data-[popup-open]:bg-cream-deep"
         >
-          {current}
-          <Chevron />
+          <Gauge aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+          <span className="flex-1">Effort</span>
+          <span className="text-ink-soft">{current}</span>
+          <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
         </button>
       }
     >
-      <MenuLabel>Effort</MenuLabel>
+      <p className="px-2.5 pt-1.5 pb-2 text-[13px] leading-snug text-pretty text-ink-soft">
+        Higher effort means more thorough answers but takes longer and uses your plan's limits faster.
+      </p>
       <MenuChoice
         value={p.reasoning ?? ""}
-        onChange={v => v && p.onReasoning?.(v as ReasoningLevel)}
+        onChange={v => p.onReasoning?.(v ? (v as ReasoningLevel) : null)}
         closeOnClick
-        options={p.levels.map(r => ({ value: r, label: EFFORT_LABELS[r] }))}
+        options={[
+          { value: "", label: "Default", badge: <MenuBadge>Recommended</MenuBadge> },
+          ...p.levels.map(r => ({
+            value: r,
+            label: EFFORT_LABELS[r],
+            ...(r === highest && COSTLY.includes(r) ? { badge: <MenuBadge tone="caution">Uses more</MenuBadge> } : {}),
+          })),
+        ]}
       />
       <MenuSeparator />
       <MenuItem
@@ -245,14 +258,8 @@ function EffortMenu(p: ModelControlProps) {
           ) : undefined
         }
       >
-        Cycle
+        Next level
       </MenuItem>
-      {p.note && (
-        <>
-          <MenuSeparator />
-          <MenuLabel>{p.note}</MenuLabel>
-        </>
-      )}
     </Menu>
   );
 }
@@ -446,6 +453,11 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
             )}
           </>
         )}
+        {viewing === p.agent && p.levels.length > 0 && p.onReasoning && (
+          <div className="border-t border-line p-1">
+            <EffortRow {...p} />
+          </div>
+        )}
         {caps.fast && p.onFast && viewing === p.agent && !fixed && (
           <div className="flex h-11 items-center gap-2.5 border-t border-line px-3">
             <Zap aria-hidden="true" className="size-4 text-ink-soft" />
@@ -485,14 +497,20 @@ function ModelRow({
       tabIndex={-1}
       onClick={onPick}
       onMouseMove={onHover}
-      className={cx("flex h-8 cursor-default items-center gap-2 rounded-[7px] px-2.5 text-[14px] text-ink select-none", active && "bg-cream-deep")}
+      className={cx("flex min-h-8 cursor-default items-center gap-2 rounded-[7px] px-2.5 py-1.5 text-[14px] text-ink select-none", active && "bg-cream-deep")}
     >
-      <span className="min-w-0 truncate">{model.label}</span>
-      {model.context && <span className="shrink-0 text-[13px] text-ink-faint tabular-nums">{model.context}</span>}
-      <span className="flex-1" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate">{model.label}</span>
+        {model.context && <span className="block text-[13px] text-ink-soft tabular-nums">{contextNote(model.context)}</span>}
+      </span>
       {selected && <Check aria-hidden="true" className="size-4 shrink-0 text-leaf" />}
     </div>
   );
+}
+
+/** The second line under a model: how much it can keep in mind at once ("1M" → "1M context window"). */
+function contextNote(context: string): string {
+  return `${context} context window`;
 }
 
 function OlderModels({ models, chosen, onPick }: { models: AgentModel[]; chosen: string | null; onPick: (id: string) => void }) {
@@ -519,12 +537,8 @@ function OlderModels({ models, chosen, onPick }: { models: AgentModel[]; chosen:
         closeOnClick
         options={models.map(m => ({
           value: m.id,
-          label: (
-            <span className="inline-flex items-center gap-2">
-              {m.label}
-              {m.context && <span className="text-[13px] text-ink-faint">{m.context}</span>}
-            </span>
-          ),
+          label: m.label,
+          ...(m.context ? { description: contextNote(m.context) } : {}),
         }))}
       />
     </Menu>

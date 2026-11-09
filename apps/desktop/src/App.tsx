@@ -1821,6 +1821,8 @@ export function App() {
         runnerUp={entry.mode === "local" && running.has(entry.meta.id)}
         runnerPath={settings.runnerPath}
         cloudApi={cloudApi}
+        micDeviceId={prefs.micDeviceId}
+        onMicDevice={micDeviceId => onPrefs({ micDeviceId })}
         onLocalProgress={onLocalProgress}
         onLocalStatus={onLocalStatus}
         onLocalPromptSent={onLocalPromptSent}

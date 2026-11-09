@@ -100,7 +100,10 @@ export function ModelPicker({
   );
 }
 
-/** What the agent may do without asking, including plan mode. */
+/**
+ * What the agent may do without asking, including plan mode: quiet text under the composer,
+ * opening a menu of the modes, each with what it means underneath.
+ */
 export function PermissionPicker({
   kind,
   value,
@@ -121,13 +124,15 @@ export function PermissionPicker({
   return (
     <Menu
       side={side}
+      align="end"
+      className="w-[320px] max-w-[calc(100vw-24px)]"
       trigger={
         <PickerButton
           icon={PERMISSION_ICONS[value]}
           tone="muted"
           disabled={disabled}
-          aria-label={`Permissions: ${PERMISSION_MODES[value].label}`}
-          className={cx(value === "plan" && "bg-lemon-soft text-ink hover:bg-lemon-soft")}
+          aria-label={`Permission mode: ${PERMISSION_MODES[value].label}`}
+          className={cx("disabled:opacity-50", value === "plan" && "bg-lemon-soft text-ink hover:bg-lemon-soft")}
         >
           {/* A narrow composer (a split pane) keeps the icon; the name is in the label and tooltip. */}
           <span className="@max-[420px]/tools:sr-only" title={PERMISSION_MODES[value].label}>
@@ -136,14 +141,19 @@ export function PermissionPicker({
         </PickerButton>
       }
     >
-      <MenuLabel>What the agent may do without asking</MenuLabel>
+      <MenuLabel>Permission mode</MenuLabel>
       <MenuChoice
         value={value}
         onChange={onChange}
-        options={modes.map(m => ({ value: m, icon: PERMISSION_ICONS[m], label: <span title={PERMISSION_MODES[m].hint}>{PERMISSION_MODES[m].label}</span> }))}
+        closeOnClick
+        options={modes.map(m => ({ value: m, icon: PERMISSION_ICONS[m], label: PERMISSION_MODES[m].label, description: PERMISSION_MODES[m].hint }))}
       />
-      <MenuSeparator />
-      <MenuLabel>{working ? NEXT_TURN : PERMISSION_MODES[value].hint}</MenuLabel>
+      {working && (
+        <>
+          <MenuSeparator />
+          <MenuLabel>{NEXT_TURN}</MenuLabel>
+        </>
+      )}
     </Menu>
   );
 }

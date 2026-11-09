@@ -21,6 +21,9 @@ const POPUP =
 const ITEM =
   "flex h-8 cursor-default select-none items-center gap-2.5 rounded-[7px] px-2.5 outline-none data-[highlighted]:bg-cream-deep data-[disabled]:opacity-45 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-ink-faint";
 
+/** An item with a second line under its label. */
+const ITEM_TWO_LINE = ITEM.replace("flex h-8", "flex min-h-8 py-1.5").replace("items-center", "items-start") + " [&>svg]:mt-0.5";
+
 export function Menu({
   trigger,
   children,
@@ -123,22 +126,50 @@ export function MenuChoice<T extends string>({
 }: {
   value: T;
   onChange: (v: T) => void;
-  options: { value: T; label: ReactNode; icon?: ReactNode }[];
+  /** `description`: a second line under the label, in the muted colour. `badge`: a small pill after the label. */
+  options: { value: T; label: ReactNode; icon?: ReactNode; description?: ReactNode; badge?: ReactNode }[];
   /** Close the menu once a choice is picked (pickers), instead of staying open (settings). */
   closeOnClick?: boolean;
 }) {
   return (
     <BaseMenu.RadioGroup value={value} onValueChange={v => onChange(v as T)}>
       {options.map(o => (
-        <BaseMenu.RadioItem key={o.value} value={o.value} className={ITEM} closeOnClick={closeOnClick}>
+        <BaseMenu.RadioItem key={o.value} value={o.value} className={o.description ? ITEM_TWO_LINE : ITEM} closeOnClick={closeOnClick}>
           {o.icon}
-          <span className="min-w-0 flex-1 truncate">{o.label}</span>
-          <BaseMenu.RadioItemIndicator keepMounted className="data-[unchecked]:invisible">
+          {o.description ? (
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span className="min-w-0 truncate">{o.label}</span>
+                {o.badge}
+              </span>
+              <span className="block text-[13px] leading-snug text-pretty text-ink-soft">{o.description}</span>
+            </span>
+          ) : (
+            <span className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="min-w-0 truncate">{o.label}</span>
+              {o.badge}
+            </span>
+          )}
+          <BaseMenu.RadioItemIndicator keepMounted className={cx("data-[unchecked]:invisible", o.description ? "mt-0.5 flex" : null)}>
             <Check aria-hidden="true" className="!text-leaf" />
           </BaseMenu.RadioItemIndicator>
         </BaseMenu.RadioItem>
       ))}
     </BaseMenu.RadioGroup>
+  );
+}
+
+/** A small pill beside a menu choice: "Recommended", or a caution in lemon. */
+export function MenuBadge({ children, tone = "good" }: { children: ReactNode; tone?: "good" | "caution" }) {
+  return (
+    <span
+      className={cx(
+        "inline-flex h-5 shrink-0 items-center rounded-full px-1.5 text-[12px] font-medium",
+        tone === "good" ? "bg-lime-soft text-leaf-deep" : "bg-lemon-soft text-amber-ink",
+      )}
+    >
+      {children}
+    </span>
   );
 }
 

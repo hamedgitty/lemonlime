@@ -408,52 +408,245 @@ export function Home({
               return true;
             }}
             onTextChange={setTyped}
-            tools={
+            micDeviceId={prefs.micDeviceId}
+            onMicDevice={micDeviceId => onPrefs({ micDeviceId })}
+            leading={
+              <Menu
+                trigger={
+                  <button
+                    type="button"
+                    aria-label="Add files, a skill or plan mode"
+                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-full text-ink-soft hover:bg-cream-deep hover:text-ink data-[popup-open]:bg-cream-deep"
+                    onPointerEnter={loadSkills}
+                    onFocus={loadSkills}
+                  >
+                    <Plus aria-hidden="true" className="size-[18px]" />
+                  </button>
+                }
+              >
+                <MenuItem icon={<Paperclip />} onSelect={() => fileInput.current?.click()}>
+                  Attach files…
+                </MenuItem>
+                <SubMenu icon={<BookOpen />} label="Use a skill">
+                  {skills === null ? (
+                    <MenuLabel>Looking for skills…</MenuLabel>
+                  ) : skills.length === 0 ? (
+                    <MenuLabel>{shell ? "No skills yet. Add them on the Skills page." : "Skills are listed in the desktop app."}</MenuLabel>
+                  ) : (
+                    <div className="scroll-thin max-h-[280px] overflow-y-auto">
+                      {skills.map(k => (
+                        <MenuItem key={`${k.source}:${k.name}`} onSelect={() => composer.current?.fill(`/${k.name} ${typed.replace(/^\/\S+\s*/, "")}`)}>
+                          <span title={k.description || undefined}>{k.name}</span>
+                        </MenuItem>
+                      ))}
+                    </div>
+                  )}
+                </SubMenu>
+                {caps.permissions.includes("plan") && (
+                  <>
+                    <MenuSeparator />
+                    <MenuItem
+                      icon={<ListChecks />}
+                      onSelect={() => setPermissionPick(permission === "plan" ? null : "plan")}
+                      hint={permission === "plan" ? <Check aria-label="On" className="!text-leaf" /> : undefined}
+                    >
+                      Plan first
+                    </MenuItem>
+                  </>
+                )}
+              </Menu>
+            }
+            footerStart={
               <>
+                <Popover
+                  open={projectOpen}
+                  onOpenChange={setProjectOpen}
+                  trigger={
+                    <PickerButton icon={place === "local" ? <FolderPlus /> : <GitBranch />} tone={projectChosen ? "plain" : "muted"}>
+                      {projectLabel}
+                      {projectChosen && (
+                        <span className="ml-1 font-normal text-ink-faint">
+                          {prChosen
+                            ? `on ${prChosen.localBranch}`
+                            : forkFrom
+                              ? `from ${forkFrom}`
+                              : canPickBranch && startMode === "existing"
+                                ? `on ${baseBranch}`
+                                : `from ${baseBranch}`}
+                        </span>
+                      )}
+                    </PickerButton>
+                  }
+                  className="w-[360px]"
+                >
+                  {machine ? (
+                    <div className="space-y-3 p-3">
+                      <label className="block">
+                        <span className="mb-1 block text-[14px] font-medium">Project folder on {machine.name}</span>
+                        <TextInput
+                          value={remotePath}
+                          onChange={e => setRemotePath(e.target.value)}
+                          placeholder="~/code/my-app"
+                          className="font-mono text-[13px]"
+                          spellCheck={false}
+                          autoFocus
+                        />
+                        <span className="mt-1 block text-[13px] text-ink-faint">
+                          A git repository already on that machine. Folders there can't be browsed from here, so type its path.
+                        </span>
+                      </label>
+                      {machine.recentPaths.length > 0 && (
+                        <div className="-mx-1">
+                          {machine.recentPaths.map(p => (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => {
+                                setRemotePath(p);
+                                setProjectOpen(false);
+                              }}
+                              className={cx(
+                                "flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2 text-left hover:bg-cream-deep",
+                                p === remotePath.trim() && "bg-cream-deep",
+                              )}
+                            >
+                              <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                              <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{p}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <BranchField value={baseBranch} onChange={setBaseBranch} />
+                    </div>
+                  ) : place === "local" ? (
+                    <div className="p-1">
+                      {prefs.recentProjects.length > 0 && (
+                        <>
+                          <p className="px-2.5 pt-1.5 pb-1 text-[13px] font-medium text-ink-faint">Recent projects</p>
+                          {prefs.recentProjects.map(p => (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => {
+                                void pickProject(p);
+                                setProjectOpen(false);
+                              }}
+                              className={cx(
+                                "flex h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left hover:bg-cream-deep",
+                                p === repoPath && "bg-cream-deep",
+                              )}
+                            >
+                              <FolderOpen aria-hidden="true" className="size-4 text-ink-faint" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[14px]">{repoName(p)}</span>
+                                <span className="block truncate font-mono text-[12px] text-ink-faint">{p}</span>
+                              </span>
+                            </button>
+                          ))}
+                          <div className="mx-1 my-1 h-px bg-line" />
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        disabled={!shell}
+                        onClick={() => void chooseFolder().then(() => setProjectOpen(false))}
+                        className="flex h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[14px] hover:bg-cream-deep disabled:opacity-50"
+                      >
+                        <FolderPlus aria-hidden="true" className="size-4 text-ink-faint" />
+                        {shell ? "Choose a folder…" : "Choosing folders needs the desktop app"}
+                      </button>
+                      <div className="border-t border-line px-2.5 pt-2.5 pb-2">
+                        {canPickBranch ? (
+                          <StartBranch
+                            repoPath={repoPath}
+                            branches={branches}
+                            failed={branchesFailed}
+                            value={baseBranch}
+                            onChange={setBaseBranch}
+                            mode={startMode}
+                            onMode={setStartMode}
+                            forkFrom={forkFrom}
+                            onStartFresh={() => setForkFrom(null)}
+                          />
+                        ) : (
+                          <BranchField value={baseBranch} onChange={setBaseBranch} />
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 p-3">
+                      <label className="block">
+                        <span className="mb-1 block text-[14px] font-medium">Repository</span>
+                        <TextInput
+                          value={repoUrl}
+                          onChange={e => setRepoUrl(e.target.value)}
+                          placeholder="https://github.com/you/app.git"
+                          className="font-mono text-[13px]"
+                          autoFocus
+                        />
+                      </label>
+                      <BranchField value={baseBranch} onChange={setBaseBranch} />
+                      <div>
+                        <span className="mb-1 block text-[14px] font-medium">Sandbox size</span>
+                        <SegmentedControl
+                          label="Sandbox size"
+                          value={sandboxSize}
+                          onChange={setSandboxSize}
+                          options={(["small", "large"] as const).map(s => ({
+                            value: s,
+                            label: `${s === "small" ? "Small" : "Large"}: ${SANDBOX_RESOURCES[s].vcpu} CPU, ${SANDBOX_RESOURCES[s].memoryGiB} GB`,
+                          }))}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </Popover>
+
                 <Menu
                   trigger={
-                    <button
-                      type="button"
-                      aria-label="Add files, a skill or plan mode"
-                      className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink data-[popup-open]:bg-cream-deep"
-                      onPointerEnter={loadSkills}
-                      onFocus={loadSkills}
-                    >
-                      <Plus aria-hidden="true" className="size-[18px]" />
-                    </button>
+                    <PickerButton icon={place === "cloud" ? <Cloud className="text-leaf" /> : machine ? <Server /> : <Laptop />}>
+                      {/* In a narrow column the icon stays; the project's name gets the room. */}
+                      <span className="@max-[560px]/tools:sr-only">{place === "cloud" ? "Cloud" : machine ? machine.name : "This computer"}</span>
+                    </PickerButton>
                   }
                 >
-                  <MenuItem icon={<Paperclip />} onSelect={() => fileInput.current?.click()}>
-                    Attach files…
-                  </MenuItem>
-                  <SubMenu icon={<BookOpen />} label="Use a skill">
-                    {skills === null ? (
-                      <MenuLabel>Looking for skills…</MenuLabel>
-                    ) : skills.length === 0 ? (
-                      <MenuLabel>{shell ? "No skills yet. Add them on the Skills page." : "Skills are listed in the desktop app."}</MenuLabel>
-                    ) : (
-                      <div className="scroll-thin max-h-[280px] overflow-y-auto">
-                        {skills.map(k => (
-                          <MenuItem key={`${k.source}:${k.name}`} onSelect={() => composer.current?.fill(`/${k.name} ${typed.replace(/^\/\S+\s*/, "")}`)}>
-                            <span title={k.description || undefined}>{k.name}</span>
-                          </MenuItem>
-                        ))}
-                      </div>
-                    )}
-                  </SubMenu>
-                  {caps.permissions.includes("plan") && (
+                  <MenuChoice
+                    value={placeValue}
+                    onChange={v => {
+                      if (v === "cloud" && !cloudAvailable) return onConnectCloud();
+                      setPicked(v);
+                      if (v === "cloud") return onPrefs({ lastPlace: "cloud" });
+                      const id = v.startsWith("machine:") ? v.slice("machine:".length) : "";
+                      setRemotePath(machines.find(m => m.id === id)?.recentPaths[0] ?? "");
+                      onPrefs({ lastPlace: "local", lastMachine: id });
+                    }}
+                    options={[
+                      { value: "local", label: "This computer", icon: <Laptop /> },
+                      ...machines.map(m => ({ value: `machine:${m.id}`, label: m.name, icon: <Server /> })),
+                      { value: "cloud", label: cloudAvailable ? "Cloud" : "Cloud (connect an account)", icon: <Cloud /> },
+                    ]}
+                  />
+                  {onOpenSettings && (
                     <>
                       <MenuSeparator />
-                      <MenuItem
-                        icon={<ListChecks />}
-                        onSelect={() => setPermissionPick(permission === "plan" ? null : "plan")}
-                        hint={permission === "plan" ? <Check aria-label="On" className="!text-leaf" /> : undefined}
-                      >
-                        Plan first
+                      <MenuItem icon={<Plus />} onSelect={() => onOpenSettings("machines")}>
+                        {machines.length ? "Manage machines" : "Add a machine over SSH"}
+                      </MenuItem>
+                    </>
+                  )}
+                  {!cloudAvailable && (
+                    <>
+                      <MenuSeparator />
+                      <MenuItem icon={<ExternalLink />} onSelect={onConnectCloud}>
+                        Connect a cloud account
                       </MenuItem>
                     </>
                   )}
                 </Menu>
+              </>
+            }
+            footerEnd={
+              <>
                 <ModelControl
                   agent={agent}
                   tabs={tabs}
@@ -469,205 +662,16 @@ export function Home({
                   cycleKeys={keysFor("cycle-effort", prefs.shortcuts)}
                   side="bottom"
                 />
+                <PermissionPicker
+                  kind={agent}
+                  value={permission}
+                  working={false}
+                  disabled={false}
+                  side="bottom"
+                  onChange={mode => setPermissionPick(mode === usualPermission ? null : mode)}
+                />
               </>
             }
-          />
-        </div>
-
-        {/* Context row: the project, and where the agent runs. */}
-        <div className="mt-2.5 flex flex-wrap items-center gap-1 px-2">
-          <Popover
-            open={projectOpen}
-            onOpenChange={setProjectOpen}
-            trigger={
-              <PickerButton icon={place === "local" ? <FolderPlus /> : <GitBranch />} tone={projectChosen ? "plain" : "muted"}>
-                {projectLabel}
-                {projectChosen && (
-                  <span className="ml-1 font-normal text-ink-faint">
-                    {prChosen
-                      ? `on ${prChosen.localBranch}`
-                      : forkFrom
-                        ? `from ${forkFrom}`
-                        : canPickBranch && startMode === "existing"
-                          ? `on ${baseBranch}`
-                          : `from ${baseBranch}`}
-                  </span>
-                )}
-              </PickerButton>
-            }
-            className="w-[360px]"
-          >
-            {machine ? (
-              <div className="space-y-3 p-3">
-                <label className="block">
-                  <span className="mb-1 block text-[14px] font-medium">Project folder on {machine.name}</span>
-                  <TextInput
-                    value={remotePath}
-                    onChange={e => setRemotePath(e.target.value)}
-                    placeholder="~/code/my-app"
-                    className="font-mono text-[13px]"
-                    spellCheck={false}
-                    autoFocus
-                  />
-                  <span className="mt-1 block text-[13px] text-ink-faint">
-                    A git repository already on that machine. Folders there can't be browsed from here, so type its path.
-                  </span>
-                </label>
-                {machine.recentPaths.length > 0 && (
-                  <div className="-mx-1">
-                    {machine.recentPaths.map(p => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => {
-                          setRemotePath(p);
-                          setProjectOpen(false);
-                        }}
-                        className={cx(
-                          "flex h-8 w-full items-center gap-2.5 rounded-[7px] px-2 text-left hover:bg-cream-deep",
-                          p === remotePath.trim() && "bg-cream-deep",
-                        )}
-                      >
-                        <FolderOpen aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-                        <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{p}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <BranchField value={baseBranch} onChange={setBaseBranch} />
-              </div>
-            ) : place === "local" ? (
-              <div className="p-1">
-                {prefs.recentProjects.length > 0 && (
-                  <>
-                    <p className="px-2.5 pt-1.5 pb-1 text-[13px] font-medium text-ink-faint">Recent projects</p>
-                    {prefs.recentProjects.map(p => (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => {
-                          void pickProject(p);
-                          setProjectOpen(false);
-                        }}
-                        className={cx(
-                          "flex h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left hover:bg-cream-deep",
-                          p === repoPath && "bg-cream-deep",
-                        )}
-                      >
-                        <FolderOpen aria-hidden="true" className="size-4 text-ink-faint" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-[14px]">{repoName(p)}</span>
-                          <span className="block truncate font-mono text-[12px] text-ink-faint">{p}</span>
-                        </span>
-                      </button>
-                    ))}
-                    <div className="mx-1 my-1 h-px bg-line" />
-                  </>
-                )}
-                <button
-                  type="button"
-                  disabled={!shell}
-                  onClick={() => void chooseFolder().then(() => setProjectOpen(false))}
-                  className="flex h-9 w-full items-center gap-2.5 rounded-[7px] px-2.5 text-left text-[14px] hover:bg-cream-deep disabled:opacity-50"
-                >
-                  <FolderPlus aria-hidden="true" className="size-4 text-ink-faint" />
-                  {shell ? "Choose a folder…" : "Choosing folders needs the desktop app"}
-                </button>
-                <div className="border-t border-line px-2.5 pt-2.5 pb-2">
-                  {canPickBranch ? (
-                    <StartBranch
-                      repoPath={repoPath}
-                      branches={branches}
-                      failed={branchesFailed}
-                      value={baseBranch}
-                      onChange={setBaseBranch}
-                      mode={startMode}
-                      onMode={setStartMode}
-                      forkFrom={forkFrom}
-                      onStartFresh={() => setForkFrom(null)}
-                    />
-                  ) : (
-                    <BranchField value={baseBranch} onChange={setBaseBranch} />
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3 p-3">
-                <label className="block">
-                  <span className="mb-1 block text-[14px] font-medium">Repository</span>
-                  <TextInput
-                    value={repoUrl}
-                    onChange={e => setRepoUrl(e.target.value)}
-                    placeholder="https://github.com/you/app.git"
-                    className="font-mono text-[13px]"
-                    autoFocus
-                  />
-                </label>
-                <BranchField value={baseBranch} onChange={setBaseBranch} />
-                <div>
-                  <span className="mb-1 block text-[14px] font-medium">Sandbox size</span>
-                  <SegmentedControl
-                    label="Sandbox size"
-                    value={sandboxSize}
-                    onChange={setSandboxSize}
-                    options={(["small", "large"] as const).map(s => ({
-                      value: s,
-                      label: `${s === "small" ? "Small" : "Large"}: ${SANDBOX_RESOURCES[s].vcpu} CPU, ${SANDBOX_RESOURCES[s].memoryGiB} GB`,
-                    }))}
-                  />
-                </div>
-              </div>
-            )}
-          </Popover>
-
-          <Menu
-            trigger={
-              <PickerButton icon={place === "cloud" ? <Cloud className="text-leaf" /> : machine ? <Server /> : <Laptop />}>
-                {place === "cloud" ? "Cloud" : machine ? machine.name : "This computer"}
-              </PickerButton>
-            }
-          >
-            <MenuChoice
-              value={placeValue}
-              onChange={v => {
-                if (v === "cloud" && !cloudAvailable) return onConnectCloud();
-                setPicked(v);
-                if (v === "cloud") return onPrefs({ lastPlace: "cloud" });
-                const id = v.startsWith("machine:") ? v.slice("machine:".length) : "";
-                setRemotePath(machines.find(m => m.id === id)?.recentPaths[0] ?? "");
-                onPrefs({ lastPlace: "local", lastMachine: id });
-              }}
-              options={[
-                { value: "local", label: "This computer", icon: <Laptop /> },
-                ...machines.map(m => ({ value: `machine:${m.id}`, label: m.name, icon: <Server /> })),
-                { value: "cloud", label: cloudAvailable ? "Cloud" : "Cloud (connect an account)", icon: <Cloud /> },
-              ]}
-            />
-            {onOpenSettings && (
-              <>
-                <MenuSeparator />
-                <MenuItem icon={<Plus />} onSelect={() => onOpenSettings("machines")}>
-                  {machines.length ? "Manage machines" : "Add a machine over SSH"}
-                </MenuItem>
-              </>
-            )}
-            {!cloudAvailable && (
-              <>
-                <MenuSeparator />
-                <MenuItem icon={<ExternalLink />} onSelect={onConnectCloud}>
-                  Connect a cloud account
-                </MenuItem>
-              </>
-            )}
-          </Menu>
-
-          <PermissionPicker
-            kind={agent}
-            value={permission}
-            working={false}
-            disabled={false}
-            side="bottom"
-            onChange={mode => setPermissionPick(mode === usualPermission ? null : mode)}
           />
         </div>
 

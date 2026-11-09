@@ -13,6 +13,12 @@ export interface PluginEvents {
   onUserCreated?(user: { userId: string; email: string | null; workspaceId: string }): Promise<void>;
   /** A thread was created (for cloud threads: once its sandbox started). */
   onThreadCreated?(thread: { threadId: string; workspaceId: string; userId: string; mode: ThreadMode; agent: AgentKind }): Promise<void>;
+  /**
+   * Called about once a minute by the control plane's sweep (the Workers cron trigger, or
+   * POST /api/cron/sweep on Node), for periodic work such as reminder emails. Keep it quick:
+   * a slow hook delays the next sweep.
+   */
+  onSchedule?(now: number): Promise<void>;
 }
 
 /** A deployment's hooks. */

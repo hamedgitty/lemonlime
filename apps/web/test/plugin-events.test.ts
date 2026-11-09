@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAuth } from "../src/lib/better-auth.ts";
+import { runPluginSchedule } from "../src/lib/plugin-schedule.ts";
 import { createThread } from "../src/lib/threads.ts";
 import { addUser, createTestApp } from "./helpers.ts";
 
@@ -49,5 +50,19 @@ describe("plugin events", () => {
       },
     };
     expect((await createThread(app.ctx, alice.userId, alice.workspaceId, req)).thread.mode).toBe("local");
+  });
+
+  it("gives the deployment its periodic turn, and a failing one never breaks the sweep", async () => {
+    const app = await createTestApp();
+    const ticks: number[] = [];
+    app.ctx.plugin.events = { onSchedule: async now => void ticks.push(now) };
+    await runPluginSchedule(app.ctx, 1_800_000_000_000);
+    expect(ticks).toEqual([1_800_000_000_000]);
+    app.ctx.plugin.events = {
+      onSchedule: async () => {
+        throw new Error("mail is down");
+      },
+    };
+    await expect(runPluginSchedule(app.ctx)).resolves.toBeUndefined();
   });
 });

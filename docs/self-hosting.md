@@ -518,8 +518,12 @@ inside the sandbox, so a policy can use them to notice runaway or unwanted work 
 shouldn't treat them as proof.
 
 A plugin can also listen for `events`: `onUserCreated` after someone's first sign-in
-(with their new workspace) and `onThreadCreated` after each thread is created. A failing
-listener is logged and never blocks sign-up or the thread.
+(with their new workspace), `onThreadCreated` after each thread is created, and
+`onSchedule` about once a minute with the sweep, for periodic work such as reminder
+emails. A failing listener is logged and never blocks sign-up, the thread or the sweep.
+
+Plugin emails can use the app's own layout: `renderEmail` from `@lemonlime/plugins`, with
+`services.emailBrand()` for this deployment's name, logo and links.
 
 ## The desktop app
 

@@ -13,6 +13,7 @@
 import openNext from "./.open-next/worker.js";
 import { createWorkersContext } from "./src/lib/context.ts";
 import { closeInactiveThreads, sweepRunningSandboxes } from "./src/lib/threads.ts";
+import { runPluginSchedule } from "./src/lib/plugin-schedule.ts";
 import { runDueAutomations } from "./src/lib/automations.ts";
 import { bridgePath, type DurableObjectNamespaceLike } from "./src/lib/phone-bridge.ts";
 
@@ -64,6 +65,7 @@ export default {
         if (auto && (auto.started.length || auto.skipped.length || auto.failed.length)) console.log("[lemonlime] automations:", auto);
         const closed = await closeInactiveThreads(app).catch(err => (console.error("[lemonlime] auto-delete failed:", err), null));
         if (closed && (closed.closed.length || closed.errors.length)) console.log("[lemonlime] auto-delete:", closed);
+        await runPluginSchedule(app);
       })().catch(err => {
         // A rejected waitUntil promise is dropped without a trace; say why the sweep didn't run.
         console.error("[lemonlime] sweep failed:", err);

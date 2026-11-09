@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ThreadEvent, type NewEvent } from "@lemonlime/protocol";
-import { childRowKey, forkPrompt, threadMenuGroups, type ThreadMenuId, type ThreadMenuInput } from "../src/lib/threadMenu.ts";
+import { childRowKey, forkPrompt, snoozePresets, snoozeWhen, threadMenuGroups, type ThreadMenuId, type ThreadMenuInput } from "../src/lib/threadMenu.ts";
 
 const ALL: ThreadMenuId[] = ["rename", "pin", "unread", "split", "fork", "open-folder", "pull-request", "compact", "move", "archive", "remove"];
 
@@ -94,5 +94,47 @@ describe("opening a thread at a subagent", () => {
     const events = [ev(4, { type: "tool_call", callId: "call-1", name: "Task", input: { description: "Look around" } })];
     expect(childRowKey(events, "call-1")).toBe("e4");
     expect(childRowKey(events, "other")).toBeNull();
+  });
+});
+
+describe("snooze", () => {
+  const presets = (d: Date) => snoozePresets(d).map(p => [p.id, p.until.toString()]);
+  const local = (day: number, h: number, m = 0) => new Date(2026, 10, day, h, m);
+
+  it("sits with pin and unread, and wakes a snoozed thread", () => {
+    const can = new Set<ThreadMenuId>([...ALL, "snooze"]);
+    expect(ids({ ...base, can })[0]).toEqual(["rename", "pin", "unread", "snooze"]);
+    expect(labels({ ...base, can })).toContain("Snooze");
+    expect(labels({ ...base, can, snoozed: true })).toContain("Unsnooze");
+    expect(ids({ ...base, can, archived: true }).flat()).not.toContain("snooze");
+  });
+
+  it("offers an hour, this evening, tomorrow and next Monday at 9", () => {
+    // Tuesday 10 November, 14:30.
+    expect(presets(local(10, 14, 30))).toEqual([
+      ["hour", local(10, 15, 30).toString()],
+      ["evening", local(10, 18).toString()],
+      ["tomorrow", local(11, 9).toString()],
+      ["next-week", local(16, 9).toString()],
+    ]);
+  });
+
+  it("drops this evening once it's less than an hour away", () => {
+    expect(presets(local(10, 17, 15)).map(([id]) => id)).toEqual(["hour", "tomorrow", "next-week"]);
+    expect(presets(local(10, 21)).map(([id]) => id)).toEqual(["hour", "tomorrow", "next-week"]);
+  });
+
+  it("goes a whole week ahead on a Monday, and skips next week on a Sunday, when it's tomorrow", () => {
+    expect(snoozePresets(local(9, 8)).find(p => p.id === "next-week")?.until).toEqual(local(16, 9));
+    expect(presets(local(8, 10)).map(([id]) => id)).toEqual(["hour", "evening", "tomorrow"]);
+  });
+
+  it("says when a snooze ends in a few words", () => {
+    const now = local(10, 14);
+    const time = (d: Date) => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    expect(snoozeWhen(local(10, 18), now)).toBe(time(local(10, 18)));
+    expect(snoozeWhen(local(11, 9), now)).toBe(`tomorrow, ${time(local(11, 9))}`);
+    expect(snoozeWhen(local(16, 9), now)).toContain(time(local(16, 9)));
+    expect(snoozeWhen(local(16, 9), now)).not.toContain("tomorrow");
   });
 });

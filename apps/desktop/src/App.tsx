@@ -16,7 +16,8 @@ import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
 import { OPEN_SETTINGS_EVENT, openAgentsSettings } from "./lib/settingsNav.ts";
 import { forkPrompt, removeThreadText, requestRevealChild } from "./lib/threadMenu.ts";
-import type { GroupProject, ThreadGroup } from "./lib/sidebarGroups.ts";
+import { newlyNeedingYou, nextWake, wakeSnoozes, type GroupProject, type ThreadGroup } from "./lib/sidebarGroups.ts";
+import { SnoozeDialog } from "./components/SnoozeDialog.tsx";
 import { useAgentUsage } from "./lib/agentUsage.ts";
 import { loadMachines } from "./lib/machines.ts";
 import { SidebarUsageCard } from "./components/SidebarUsage.tsx";
@@ -975,7 +976,7 @@ export function App() {
   const runShortcut = useCallback(
     (id: ShortcutId) => {
       const { place: here, summaries: list, prefs: pr } = shortcutState.current;
-      const open = list.filter(t => !pr.archived[t.id]);
+      const open = list.filter(t => !pr.archived[t.id] && !pr.snoozed[t.id]);
       const currentId = here.view === "thread" ? here.selection.id : null;
       const at = open.findIndex(t => t.id === currentId);
       const select = (t: ThreadSummary | undefined) => t && go({ view: "thread", selection: { mode: t.mode, id: t.id } });
@@ -1015,7 +1016,7 @@ export function App() {
           if (currentId) onPrefs({ pinned: pr.pinned.includes(currentId) ? pr.pinned.filter(x => x !== currentId) : [currentId, ...pr.pinned] });
           return;
         case "archive-thread": {
-          const t = open[at];
+          const t = list.find(x => x.id === currentId && !pr.archived[x.id]);
           if (t) void onArchiveRef.current(t, true);
           return;
         }
@@ -1140,6 +1141,8 @@ export function App() {
     const glyphs: Record<string, RowGlyph> = {};
     const unread = new Set<string>();
     const waiting: { id: string; waiting: number }[] = [];
+    // The agent asks for an approval or an answer, or its turn failed.
+    const needsYou = new Set<string>();
     for (const t of summaries) {
       const input = {
         status: t.status,
@@ -1155,9 +1158,10 @@ export function App() {
       };
       glyphs[t.id] = rowGlyph(input);
       if (isUnread(input)) unread.add(t.id);
+      if (input.waiting > 0 || t.status === "failed") needsYou.add(t.id);
       waiting.push({ id: t.id, waiting: input.waiting });
     }
-    return { glyphs, unread, waiting: waitingCount(waiting, prefs.archived) };
+    return { glyphs, unread, needsYou, waiting: waitingCount(waiting, prefs.archived) };
   }, [summaries, localWaiting, openWaiting, latestSeq, prefs.seenSeq, prefs.unreadSince, prefs.markedUnread, prefs.archived, drafts, visibleIds]);
   // The dock (macOS) shows how many threads are waiting for you.
   useEffect(() => {
@@ -1194,6 +1198,53 @@ export function App() {
   );
   const onArchiveRef = useRef(onArchive);
   onArchiveRef.current = onArchive;
+
+  // ── Snooze: out of the list until a time, or until the agent needs you ──
+  const [snoozeAsk, setSnoozeAsk] = useState<ThreadSummary | null>(null);
+  const onSnooze = useCallback(
+    (t: ThreadSummary, until: Date | "custom" | null) => {
+      if (until === "custom") return setSnoozeAsk(t);
+      const next = { ...prefsRef.current.snoozed };
+      if (until) next[t.id] = until.toISOString();
+      else delete next[t.id];
+      onPrefs({ snoozed: next });
+    },
+    [onPrefs],
+  );
+  const visibleIdsRef = useRef<ReadonlySet<string>>(new Set());
+  visibleIdsRef.current = visibleIds;
+  /** End the snoozes that are due, and those of `needsYou`; the threads coming back show as unread. */
+  const wakeThreads = useCallback(
+    (needsYou: readonly string[] = []) => {
+      const p = prefsRef.current;
+      const { snoozed, woke } = wakeSnoozes(p.snoozed, Date.now(), new Set(needsYou));
+      if (!woke.length) return;
+      const unread = woke.filter(id => !visibleIdsRef.current.has(id) && !p.markedUnread.includes(id));
+      onPrefs({ snoozed, ...(unread.length ? { markedUnread: [...p.markedUnread, ...unread] } : {}) });
+    },
+    [onPrefs],
+  );
+  useEffect(() => {
+    wakeThreads();
+    const at = nextWake(prefs.snoozed, Date.now());
+    // Also on coming back to the window: timers wait out a sleeping computer.
+    const onFocus = () => wakeThreads();
+    window.addEventListener("focus", onFocus);
+    const t = at === null ? undefined : setTimeout(() => wakeThreads(), Math.min(at - Date.now() + 250, 2 ** 31 - 1));
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      clearTimeout(t);
+    };
+  }, [prefs.snoozed, wakeThreads]);
+  // A snoozed thread whose agent starts waiting for you, or whose turn fails, comes back early.
+  const needsYouBefore = useRef<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    const before = needsYouBefore.current;
+    needsYouBefore.current = rowStates.needsYou;
+    if (!before) return;
+    const fresh = newlyNeedingYou(before, rowStates.needsYou).filter(id => prefsRef.current.snoozed[id]);
+    if (fresh.length) wakeThreads(fresh);
+  }, [rowStates.needsYou, wakeThreads]);
 
   // ── The thread menu (sidebar row, right-click, thread header) ──
   const setPinned = useCallback(
@@ -1482,6 +1533,7 @@ export function App() {
                 actions: {
                   pin: (pin: boolean) => setPinned(summary.id, pin),
                   unread: (u: boolean) => onMarkUnread(summary, u),
+                  snooze: (until: Date | "custom" | null) => onSnooze(summary, until),
                   split: () => openInSplit({ mode: summary.mode, id: summary.id }),
                   fork: () => onFork(summary),
                   archive: (a: boolean) => void onArchive(summary, a),
@@ -1670,6 +1722,7 @@ export function App() {
         searchOpen={searchOpen}
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
+        onSnooze={onSnooze}
         glyphs={rowStates.glyphs}
         childrenOf={sidebarChildren}
         unread={rowStates.unread}
@@ -1713,6 +1766,7 @@ export function App() {
       <ShortcutHints enabled={prefs.shortcutHints} overrides={prefs.shortcuts} />
       <Toaster>
         {palette}
+        <SnoozeDialog title={snoozeAsk?.title ?? null} onClose={() => setSnoozeAsk(null)} onSnooze={until => snoozeAsk && onSnooze(snoozeAsk, until)} />
         <div className="flex h-full overflow-hidden">
           {sidebar}
           <div className="relative flex min-w-0 flex-1 flex-col">

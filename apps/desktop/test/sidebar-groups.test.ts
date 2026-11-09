@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { GROUP_ROWS, groupThreads, moveGroup, orderGroups, toggleKey, groupRows } from "../src/lib/sidebarGroups.ts";
+import {
+  GROUP_ROWS,
+  groupThreads,
+  isSnoozed,
+  moveGroup,
+  newlyNeedingYou,
+  nextWake,
+  orderGroups,
+  splitSnoozed,
+  toggleKey,
+  groupRows,
+  wakeSnoozes,
+} from "../src/lib/sidebarGroups.ts";
 import type { ThreadSummary } from "../src/lib/threads.ts";
 
 const thread = (id: string, repo: string, extra: Partial<ThreadSummary> = {}): ThreadSummary => ({
@@ -91,5 +103,47 @@ describe("show more", () => {
     const { shown, hidden } = groupRows(rows(12), { expanded: false, selectedId: "t9" });
     expect(shown.map(t => t.id)).toEqual(["t0", "t1", "t2", "t3", "t4", "t9"]);
     expect(hidden).toBe(6);
+  });
+});
+
+describe("snoozed threads", () => {
+  const now = Date.parse("2026-11-08T12:00:00.000Z");
+  const snoozed = { a: "2026-11-08T13:00:00.000Z", b: "2026-11-09T09:00:00.000Z", old: "2026-11-08T11:00:00.000Z" };
+
+  it("leaves the list until their time, soonest back first in their own list", () => {
+    expect(isSnoozed("a", snoozed, now)).toBe(true);
+    expect(isSnoozed("old", snoozed, now)).toBe(false);
+    expect(isSnoozed("c", snoozed, now)).toBe(false);
+    const { awake, snoozed: asleep } = splitSnoozed([{ id: "b" }, { id: "c" }, { id: "a" }, { id: "old" }], snoozed, now);
+    expect(awake.map(t => t.id)).toEqual(["c", "old"]);
+    expect(asleep.map(t => t.id)).toEqual(["a", "b"]);
+  });
+
+  it("wakes the ones whose time has come", () => {
+    expect(wakeSnoozes(snoozed, now)).toEqual({ snoozed: { a: snoozed.a, b: snoozed.b }, woke: ["old"] });
+    const later = wakeSnoozes(snoozed, Date.parse("2026-11-08T13:00:00.000Z"));
+    expect(later.woke.sort()).toEqual(["a", "old"]);
+    expect(later.snoozed).toEqual({ b: snoozed.b });
+  });
+
+  it("wakes a thread early when it needs you", () => {
+    const r = wakeSnoozes({ a: snoozed.a, b: snoozed.b }, now, new Set(["b", "not-snoozed"]));
+    expect(r).toEqual({ snoozed: { a: snoozed.a }, woke: ["b"] });
+  });
+
+  it("drops a snooze it can't read, and leaves the rest alone when nothing is due", () => {
+    expect(wakeSnoozes({ x: "not a date" }, now)).toEqual({ snoozed: {}, woke: ["x"] });
+    expect(wakeSnoozes({ a: snoozed.a }, now)).toEqual({ snoozed: { a: snoozed.a }, woke: [] });
+  });
+
+  it("knows when the next one ends", () => {
+    expect(nextWake(snoozed, now)).toBe(Date.parse(snoozed.a));
+    expect(nextWake({ old: snoozed.old }, now)).toBeNull();
+    expect(nextWake({}, now)).toBeNull();
+  });
+
+  it("only counts a thread that has just started needing you", () => {
+    expect(newlyNeedingYou(new Set(["a"]), new Set(["a", "b"]))).toEqual(["b"]);
+    expect(newlyNeedingYou(new Set(["a", "b"]), new Set(["a"]))).toEqual([]);
   });
 });

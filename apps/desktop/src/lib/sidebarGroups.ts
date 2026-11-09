@@ -106,3 +106,60 @@ export function groupRows<T extends { id: string }>(
   if (selected) shown.push(selected);
   return { shown, hidden: threads.length - shown.length };
 }
+
+// ── Snoozed threads ─────────────────────────────────────────
+
+/** Snoozed until a later time (ISO, by thread id), so out of the list for now. */
+export function isSnoozed(id: string, snoozed: Readonly<Record<string, string>>, now: number): boolean {
+  const until = snoozed[id];
+  return until !== undefined && Date.parse(until) > now;
+}
+
+/** The threads the list shows now, and the snoozed ones (soonest back first). */
+export function splitSnoozed<T extends { id: string }>(
+  threads: readonly T[],
+  snoozed: Readonly<Record<string, string>>,
+  now: number,
+): { awake: T[]; snoozed: T[] } {
+  const awake: T[] = [];
+  const asleep: T[] = [];
+  for (const t of threads) (isSnoozed(t.id, snoozed, now) ? asleep : awake).push(t);
+  asleep.sort((a, b) => Date.parse(snoozed[a.id]!) - Date.parse(snoozed[b.id]!));
+  return { awake, snoozed: asleep };
+}
+
+/**
+ * Snoozes that end now: their time has come, or the thread needs you (the agent asks for an
+ * approval or an answer, or its turn failed). `woke` are the threads coming back, to mark
+ * unread; snoozes that have expired are dropped from `snoozed` without counting as woken
+ * twice.
+ */
+export function wakeSnoozes(
+  snoozed: Readonly<Record<string, string>>,
+  now: number,
+  needsYou: ReadonlySet<string> = new Set(),
+): { snoozed: Record<string, string>; woke: string[] } {
+  const next: Record<string, string> = {};
+  const woke: string[] = [];
+  for (const [id, until] of Object.entries(snoozed)) {
+    const t = Date.parse(until);
+    if (Number.isNaN(t) || t <= now || needsYou.has(id)) woke.push(id);
+    else next[id] = until;
+  }
+  return { snoozed: woke.length ? next : { ...snoozed }, woke };
+}
+
+/** When the next snooze ends (ms since the epoch), or null with none left. */
+export function nextWake(snoozed: Readonly<Record<string, string>>, now: number): number | null {
+  let soonest: number | null = null;
+  for (const until of Object.values(snoozed)) {
+    const t = Date.parse(until);
+    if (t > now && (soonest === null || t < soonest)) soonest = t;
+  }
+  return soonest;
+}
+
+/** Threads that need you now but didn't before: these cut a snooze short. */
+export function newlyNeedingYou(before: ReadonlySet<string>, now: ReadonlySet<string>): string[] {
+  return [...now].filter(id => !before.has(id));
+}

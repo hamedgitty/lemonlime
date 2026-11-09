@@ -162,6 +162,11 @@ export const UiPrefs = z.object({
   pinned: z.array(z.string()).default([]),
   /** Archived threads, by id, with when (ISO). Out of the list; local ones are cleaned up after 21 days. */
   archived: z.record(z.string(), z.string()).default({}),
+  /**
+   * Snoozed threads, by id, with when each comes back (ISO). Out of the list until then, or
+   * until the agent needs you or its turn fails (sidebarGroups.ts `wakeSnoozes`).
+   */
+  snoozed: z.record(z.string(), z.string()).catch({}).default({}),
   /** The archive explanation has been shown once. */
   archivedHint: z.boolean().default(false),
   /** What each cloud thread's agent may do on this computer (missing = off). */

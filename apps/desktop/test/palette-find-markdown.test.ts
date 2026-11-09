@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appCommands, parseQuery, rankPalette, type PaletteItem } from "../src/lib/palette.ts";
+import { appCommands, parseQuery, rankPalette, searchMessages, type MessageText, type PaletteItem } from "../src/lib/palette.ts";
 import { findOffsets, matchLabel, stepMatch } from "../src/lib/findInThread.ts";
 import { splitMarkdownBlocks } from "../src/lib/markdownStreamBlocks.ts";
 import { grammarFor, highlightCode, type HlNode } from "../src/lib/highlightGrammars.ts";
@@ -56,6 +56,65 @@ describe("command palette", () => {
     // With a query, a recent pick ranks above an equally good match.
     const both = [thread("x", "Deploy notes"), thread("y", "Deploy notes")];
     expect(rankPalette(both, "deploy", ["thread:y"])[0]!.items[0]!.item.id).toBe("thread:y");
+  });
+});
+
+describe("command palette, more to find", () => {
+  const said = (threadId: string, seq: number, text: string, from: "you" | "agent" = "agent"): MessageText => ({
+    threadId,
+    threadTitle: `Thread ${threadId}`,
+    seq,
+    from,
+    text,
+  });
+  const messages = [
+    said("a", 1, "Please fix the flaky login test", "you"),
+    said("a", 2, "I fixed the login test by waiting for the redirect."),
+    said("a", 3, "The login test passes now, and the other login checks too."),
+    said("b", 1, "Deploy the site to staging"),
+    said("b", 2, "x".repeat(200) + " the login form " + "y".repeat(200)),
+  ];
+
+  it("finds what was said, newest first, a couple per thread, with the match marked", () => {
+    const hits = searchMessages(messages, "login");
+    expect(hits.map(h => h.id)).toEqual(["message:b:2", "message:a:3", "message:a:2"]);
+    expect(hits.every(h => h.section === "messages")).toBe(true);
+    const long = hits[0]!;
+    expect(long.label.startsWith("…") && long.label.endsWith("…")).toBe(true);
+    expect(long.label.length).toBeLessThan(100);
+    const p = long.positions!;
+    expect(long.label.slice(p[0], p.at(-1)! + 1)).toBe("login");
+    expect(hits[1]!.detail).toBe("Agent, in Thread a");
+    expect(searchMessages(messages, "fix flaky").map(h => [h.id, h.detail])).toEqual([["message:a:1", "You, in Thread a"]]);
+  });
+
+  it("needs every word and more than one letter", () => {
+    expect(searchMessages(messages, "login staging")).toEqual([]);
+    expect(searchMessages(messages, "l")).toEqual([]);
+    expect(searchMessages(messages, "  ")).toEqual([]);
+  });
+
+  it("puts messages last, and never with > or on an empty search", () => {
+    const items: PaletteItem[] = [thread("t", "Login page"), ...searchMessages(messages, "login")];
+    const groups = rankPalette(items, "login", []);
+    expect(groups.at(-1)!.section).toBe("messages");
+    expect(groups[0]!.section).toBe("threads");
+    expect(rankPalette(items, ">login", []).some(g => g.section === "messages")).toBe(false);
+    expect(rankPalette(items, "", []).some(g => g.section === "messages")).toBe(false);
+  });
+
+  it("keeps settings and New thread in … for searches, and the open thread last", () => {
+    const items: PaletteItem[] = [
+      { ...thread("open", "Deploy fixes"), demote: true },
+      thread("other", "Deploy notes"),
+      { id: "new-in:local:/code/site", section: "projects", label: "New thread in site", searchOnly: true },
+      { id: "setting:1", section: "commands", label: "Keep the screen on too", searchOnly: true },
+    ];
+    const idle = rankPalette(items, "", []);
+    expect(idle.flatMap(g => g.items.map(r => r.item.id))).toEqual(["thread:other", "thread:open"]);
+    expect(rankPalette(items, "deploy", [])[0]!.items.map(r => r.item.id)).toEqual(["thread:other", "thread:open"]);
+    expect(rankPalette(items, "new thread site", []).flatMap(g => g.items.map(r => r.item.id))).toContain("new-in:local:/code/site");
+    expect(rankPalette(items, "screen", []).flatMap(g => g.items.map(r => r.item.id))).toEqual(["setting:1"]);
   });
 });
 

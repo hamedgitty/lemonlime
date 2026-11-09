@@ -14,7 +14,7 @@ import { ReleaseNotes } from "./components/ReleaseNotes.tsx";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
-import { OPEN_SETTINGS_EVENT, openAgentsSettings } from "./lib/settingsNav.ts";
+import { OPEN_SETTINGS_EVENT, openAgentsSettings, requestSettingTarget, requestSettingsTab } from "./lib/settingsNav.ts";
 import { forkPrompt, removeThreadText, requestRevealChild } from "./lib/threadMenu.ts";
 import { newlyNeedingYou, nextWake, wakeSnoozes, type GroupProject, type ThreadGroup } from "./lib/sidebarGroups.ts";
 import { SnoozeDialog } from "./components/SnoozeDialog.tsx";
@@ -33,9 +33,10 @@ import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadSta
 import { settled, withChildren } from "./lib/children.ts";
 import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
-import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
+import { AGENT_LABELS, relativeTime, repoName, titleFromPrompt } from "./lib/format.ts";
 import { COMPOSER_SHORTCUTS, keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
-import { appCommands, loadRecents, rememberPick, type PaletteItem } from "./lib/palette.ts";
+import { appCommands, loadRecents, rememberPick, searchMessages, type MessageText, type PaletteItem } from "./lib/palette.ts";
+import { SETTINGS_INDEX, settingAnchor } from "./lib/settingsIndex.ts";
 import {
   closeThreadNotifications,
   detectAgents,
@@ -74,6 +75,7 @@ import {
   forgetEvents,
   loadEvents,
   loadLocalThreads,
+  loadMessageTexts,
   loadSettings,
   loadSplitLayout,
   loadUiPrefs,
@@ -1518,20 +1520,56 @@ export function App() {
   const inThread = place.view === "thread";
   const paletteItems = useMemo<PaletteItem[]>(() => {
     if (!paletteOpen) return [];
+    const now = Date.now();
     const threads = summaries.map<PaletteItem>(t => ({
       id: `thread:${t.id}`,
       section: "threads",
       label: t.title || "Untitled thread",
-      detail: `${repoName(t.repo)}${prefs.archived[t.id] ? ", archived" : ""}`,
+      detail: `${repoName(t.repo)}${prefs.archived[t.id] ? ", archived" : prefs.snoozed[t.id] ? ", snoozed" : ""}`,
       keywords: `${t.branch} ${AGENT_LABELS[t.agent.kind]} ${t.mode === "cloud" ? "cloud" : "local"}`,
+      trailing: relativeTime(t.updatedAt, now),
+      // The one you're in goes last: you're more likely looking for another.
+      ...(t.id === sidebarSelected ? { demote: true } : {}),
     }));
-    const projects = prefs.recentProjects.map<PaletteItem>(path => ({
-      id: `project:${path}`,
-      section: "projects",
-      label: repoName(path),
-      detail: path,
-      keywords: "new thread in project",
-    }));
+    // Picking a project starts a thread in it; "New thread in …" finds the same from its name.
+    const cloudRepos = [...new Set(summaries.filter(t => t.mode === "cloud").map(t => t.repo))];
+    const projectsAt: GroupProject[] = [
+      ...prefs.recentProjects.map(path => ({ mode: "local" as const, path })),
+      ...cloudRepos.filter(url => !prefs.recentProjects.some(p => repoName(p) === repoName(url))).map(url => ({ mode: "cloud" as const, url })),
+    ];
+    const projects = projectsAt.flatMap<PaletteItem>(pj => {
+      const where = pj.mode === "local" ? pj.path : pj.url;
+      const key = `${pj.mode}:${where}`;
+      return [
+        ...(pj.mode === "local"
+          ? [{ id: `project:${key}`, section: "projects" as const, label: repoName(where), detail: where, keywords: "new thread in project" }]
+          : []),
+        {
+          id: `new-in:${key}`,
+          section: "projects" as const,
+          label: `New thread in ${repoName(where)}`,
+          detail: pj.mode === "cloud" ? "In the cloud" : where,
+          keywords: "start create project",
+          searchOnly: true,
+        },
+      ];
+    });
+    // Every single setting, reached straight from here (shortcuts are commands already).
+    const pageLabel = new Map(SETTINGS_PAGES.map(pg => [pg.id as string, pg.label]));
+    const settingRows = SETTINGS_INDEX.flatMap<PaletteItem>((e, i) =>
+      e.page === "keyboard" && e.anchor !== "shortcut-hints"
+        ? []
+        : [
+            {
+              id: `setting:${i}`,
+              section: "commands",
+              label: e.title,
+              detail: `${pageLabel.get(e.page) ?? "Settings"} settings`,
+              keywords: `settings ${e.keywords ?? ""} ${e.description ?? ""}`,
+              searchOnly: true,
+            },
+          ],
+    );
     const extras = [
       { id: "plugins", label: "Plugins", keywords: "extensions marketplace install" },
       { id: "add-project", label: "Add a project…", keywords: "folder repository open" },
@@ -1550,12 +1588,22 @@ export function App() {
     ];
     // Unarchived threads first, as in the sidebar.
     const sortedThreads = [...threads.filter(t => !t.detail?.endsWith(", archived")), ...threads.filter(t => t.detail?.endsWith(", archived"))];
-    return [...sortedThreads, ...projects, ...appCommands(extras, skip)];
-  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, inThread, layout]);
+    return [...sortedThreads, ...projects, ...appCommands(extras, skip), ...settingRows];
+  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, prefs.snoozed, inThread, layout, sidebarSelected]);
+  // What was said in every thread kept on this computer, read once each time the palette opens.
+  const messageIndex = useMemo<MessageText[]>(() => {
+    if (!paletteOpen) return [];
+    // Oldest activity first, so the newest messages are found first (see searchMessages).
+    return [...summaries].reverse().flatMap(t => loadMessageTexts(t.id).map(m => ({ ...m, threadId: t.id, threadTitle: t.title })));
+    // Only on opening: what arrives while it's open can wait for next time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paletteOpen]);
+  const findMessages = useCallback((query: string) => searchMessages(messageIndex, query), [messageIndex]);
 
   const runPaletteItem = (item: PaletteItem, opts: { split?: boolean } = {}) => {
-    setPaletteRecents(r => rememberPick(r, item.id));
     const [kind, ...rest] = item.id.split(":");
+    // A message found once isn't one to come back to from the top of the list.
+    if (kind !== "message") setPaletteRecents(r => rememberPick(r, item.id));
     const value = rest.join(":");
     if (kind === "thread") {
       const t = summaries.find(x => x.id === value);
@@ -1563,9 +1611,24 @@ export function App() {
       else if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
       return;
     }
-    if (kind === "project") {
-      onPrefs({ recentProjects: [value, ...prefs.recentProjects.filter(x => x !== value)] });
-      return go({ view: "home" });
+    if (kind === "message") {
+      const threadId = value.slice(0, value.lastIndexOf(":"));
+      const t = summaries.find(x => x.id === threadId);
+      if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
+      return;
+    }
+    if (kind === "project" || kind === "new-in") {
+      const [mode, ...where] = value.split(":");
+      const at = where.join(":");
+      if (mode === "local") onPrefs({ recentProjects: [at, ...prefs.recentProjects.filter(x => x !== at)] });
+      return startInProject(mode === "local" ? { mode: "local", path: at } : { mode: "cloud", url: at });
+    }
+    if (kind === "setting") {
+      const e = SETTINGS_INDEX[Number(value)];
+      if (!e) return;
+      if (e.tab) requestSettingsTab(e.page, e.tab);
+      requestSettingTarget(e.page, settingAnchor(e));
+      return go({ view: "settings", page: e.page as SettingsPage });
     }
     if (value === "plugins") return go({ view: "plugins" });
     if (value === "add-project") return void addProject();
@@ -1580,6 +1643,7 @@ export function App() {
       recents={paletteRecents}
       onRun={runPaletteItem}
       keysOf={id => keysFor(id, prefs.shortcuts)}
+      searchMessages={findMessages}
     />
   );
 

@@ -25,11 +25,13 @@ import {
   AGENT_CAPABILITIES,
   DEFAULT_ACCOUNT_ID,
   IMPLEMENT_PLAN_PROMPT,
+  MAX_TERMINALS,
   modeAfterPlan,
   type ChildWork,
   type AccountsList,
   type AgentKind,
   type PolicyDenied,
+  type ScriptKeybinding,
   type ThreadOptions,
   type ThreadStatus,
 } from "@lemonlime/protocol";
@@ -62,7 +64,8 @@ import { ApprovalCard, EditingCard, QueuedCard } from "./WaitingStack.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
 import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { saveDraft } from "../lib/storage.ts";
-import { loadPanelState, openFile, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
+import { loadPanelState, openFile, openScript, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
+import { fetchProjectScripts, scriptForShortcut, setFocusedScripts, type Script } from "../lib/projectScripts.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import { betterTitle } from "../lib/threadTitle.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
@@ -626,6 +629,47 @@ function ThreadSessionView({
     () => (suggestNext && !working && session.pending.length === 0 ? suggestNextPrompt(session.events, { uncommittedFiles }) : null),
     [suggestNext, working, session.pending.length, session.events, uncommittedFiles],
   );
+  // The project's scripts (lemonlime.json), read through the runner; run in the panel's terminals.
+  const [scripts, setScripts] = useState<{ list: Script[]; error?: string | undefined } | null>(null);
+  useEffect(() => {
+    const conn = session.connection;
+    if (!conn) return;
+    let live = true;
+    void fetchProjectScripts(conn)
+      .then(r => live && setScripts(r ? { list: r.scripts as Script[], error: r.error } : null))
+      .catch(() => live && setScripts(null));
+    return () => {
+      live = false;
+    };
+  }, [session.connection, liveStatus]);
+  useEffect(() => {
+    if (active) setFocusedScripts(summary.id, scripts?.list ?? []);
+    return () => setFocusedScripts(summary.id, null);
+  }, [active, scripts, summary.id]);
+  // Each run asked for, by tab: the terminal runs the script once per new number.
+  const [scriptRuns, setScriptRuns] = useState<Record<string, number>>({});
+  const runScript = (script: Script) => {
+    const next = openScript(panel, script);
+    if (!next) return setActionError(`A thread can have ${MAX_TERMINALS} terminals open at once. Close one to run ${script.name}.`);
+    setPanelState(next);
+    setPanelOpen(true);
+    setScriptRuns(r => ({ ...r, [`term:script-${script.id}`]: (r[`term:script-${script.id}`] ?? 0) + 1 }));
+  };
+  const runScriptRef = useRef(runScript);
+  runScriptRef.current = runScript;
+  const scriptsRef = useRef(scripts);
+  scriptsRef.current = scripts;
+  useEffect(() => {
+    const onRun = (e: Event) => {
+      if (!activeRef.current) return;
+      const detail = (e as CustomEvent<{ id?: string; keybinding?: ScriptKeybinding }>).detail ?? {};
+      const list = scriptsRef.current?.list ?? [];
+      const script = detail.id ? list.find(x => x.id === detail.id) : detail.keybinding ? scriptForShortcut(list, detail.keybinding) : undefined;
+      if (script) runScriptRef.current(script);
+    };
+    window.addEventListener("lemonlime:run-script", onRun);
+    return () => window.removeEventListener("lemonlime:run-script", onRun);
+  }, []);
   const showChanges = () => {
     setPanel(s => ({ ...s, active: "changes" }));
     setPanelOpen(true);
@@ -1064,6 +1108,11 @@ function ThreadSessionView({
           refreshKey={gitRefresh}
           onQuickOpen={() => setQuickOpen(true)}
           shortcuts={{ quickOpen: keysFor("quick-open", shortcuts), reopen: keysFor("reopen-tab", shortcuts) }}
+          scripts={scripts?.list ?? []}
+          scriptsError={scripts?.error}
+          scriptKeys={(id: ScriptKeybinding) => keysFor(id, shortcuts)}
+          scriptRuns={scriptRuns}
+          onRunScript={runScript}
           onAddToChat={text => {
             insertIntoComposer(text);
             composerRef.current?.focus();

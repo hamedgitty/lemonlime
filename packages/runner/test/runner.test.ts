@@ -397,4 +397,66 @@ describe("local threads in their own worktree", () => {
     expect(runner.store.since(0).some(e => e.type === "file_diff" && e.path === "notes.md")).toBe(true);
     expect(existsSync(join(home, "threads", "wt-thread-1", "events.jsonl"))).toBe(true);
   });
+
+  it("runs the project's setup scripts in a new worktree before the agent starts", async () => {
+    if (process.platform === "win32") return;
+    const repo = tempRepo();
+    writeFileSync(join(repo, ".env"), "SECRET=local\n");
+    writeFileSync(
+      join(repo, "lemonlime.json"),
+      JSON.stringify({
+        scripts: [
+          {
+            name: "Copy env",
+            command: 'cp "$LEMONLIME_PROJECT_ROOT/.env" . && sleep 0.2 && echo "$LEMONLIME_WORKTREE_PATH" > where.txt',
+            runOnWorktreeCreate: true,
+          },
+          { name: "Broken", command: "echo oh no; exit 4", runOnWorktreeCreate: true },
+          { name: "Never", command: "touch never.txt", runOnWorktreeCreate: true },
+          { name: "Dev", command: "touch dev.txt" },
+        ],
+      }),
+    );
+    const home = mkdtempSync(join(tmpdir(), "lemonlime-home-"));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    const workdir = join(home, "worktrees", "demo", "wt-thread-2");
+    const prompts: string[] = [];
+    const recording: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => ({ runTurn: async ctx => void prompts.push(ctx.prompt), saveState: () => ({}), dispose: async () => {} }),
+    };
+    const make = () =>
+      new ThreadRunner({
+        thread: makeThread("wt-thread-2"),
+        workdir,
+        dataDir: join(home, "threads", "wt-thread-2"),
+        adapter: recording,
+        session: { autonomy: "edits" },
+        sourceRepo: repo,
+      });
+    const runner = make();
+    await runner.init();
+    // A message sent during setup waits for it.
+    expect(runner.sendMessage("hello").result).toBe("queued");
+    expect(prompts).toEqual([]);
+    await runner.setupDone();
+    await runner.settled();
+    await until(() => prompts.length === 1);
+    expect(readFileSync(join(workdir, ".env"), "utf8")).toBe("SECRET=local\n");
+    expect(readFileSync(join(workdir, "where.txt"), "utf8").trim()).toBe(workdir);
+    expect(existsSync(join(workdir, "never.txt"))).toBe(false);
+    expect(existsSync(join(workdir, "dev.txt"))).toBe(false);
+    const events = runner.store.since(0);
+    expect(events.some(e => e.type === "notice" && e.code === "project_setup_done")).toBe(true);
+    const failed = events.find(e => e.type === "error" && e.code === "project_setup_failed");
+    expect(failed && failed.type === "error" && failed.message).toMatch(/“Broken” failed with exit code 4[\s\S]*oh no/);
+    await runner.close();
+
+    // The next start of the same worktree doesn't set it up again.
+    const again = make();
+    cleanups.push(() => again.close());
+    await again.init();
+    await again.setupDone();
+    expect(again.store.since(0).filter(e => e.type === "notice" && e.code === "project_setup_started")).toHaveLength(2);
+  });
 });

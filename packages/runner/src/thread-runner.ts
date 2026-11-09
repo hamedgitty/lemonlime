@@ -7,6 +7,9 @@ import {
   hasAccounts,
   PERMISSION_MODES,
   PermissionMode,
+  PROJECT_FILE,
+  scriptEnv,
+  SETUP_SCRIPT_TIMEOUT_SECONDS,
   ReasoningLevel,
   withoutRewound,
   type AccountRef,
@@ -57,6 +60,8 @@ import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
 import { installPluginsIntoThread, loadEnabledPlugins } from "./agent-plugins.ts";
 import { listCommands } from "./composer.ts";
+import { loadProjectScripts } from "./project-scripts.ts";
+import { runScriptToEnd } from "./terminal.ts";
 
 export interface ThreadRunnerOptions {
   /** Shortest wait before continuing after a usage limit (default 5 s; tests use less). */
@@ -244,6 +249,8 @@ interface SavedState {
   limitStop?: LimitStop;
   /** When the user pressed Continue after a restart cut a turn short (ms), for the cap. */
   restartContinues?: number[];
+  /** The project's setup scripts still have to run in this new worktree. */
+  setupPending?: boolean;
 }
 
 /** A change to the thread's options (see ThreadRunner.setOptions). */
@@ -277,6 +284,14 @@ export const RESTART_CONTINUE_WINDOW_MS = 5 * 60_000;
 export function restartContinueAllowed(times: readonly number[], now: number): { recent: number[]; allowed: boolean } {
   const recent = times.filter(t => t > now - RESTART_CONTINUE_WINDOW_MS && t <= now);
   return { recent, allowed: recent.length < MAX_RESTART_CONTINUES };
+}
+
+/** "45s", "3 min", "1 min 5s". */
+export function formatSeconds(total: number): string {
+  if (total < 60) return `${Math.max(0, total)}s`;
+  const m = Math.floor(total / 60);
+  const sec = total % 60;
+  return sec ? `${m} min ${sec}s` : `${m} min`;
 }
 
 /** Commit subject for changes an interrupted turn left behind. */
@@ -469,6 +484,8 @@ export class ThreadRunner {
     this.setAccount(typeof saved?.account === "string" ? saved.account : ranBefore ? DEFAULT_ACCOUNT_ID : null);
     if (this.git) {
       if (this.opts.sourceRepo) {
+        // A worktree made just now gets the project's setup scripts (see runWorktreeSetup).
+        if (!existsSync(join(this.opts.workdir, ".git"))) this.setupPending = true;
         await this.git.ensureWorktree(this.opts.sourceRepo, this.opts.thread.branch, this.opts.thread.repo.baseBranch);
       } else {
         await this.git.ensureRepo(this.opts.repoUrl);
@@ -524,6 +541,7 @@ export class ThreadRunner {
     for (const q of this.queue) this.seen.add(q.clientMsgId);
     this.autoContinues = saved?.autoContinues ?? [];
     this.restartContinues = (saved?.restartContinues ?? []).filter(t => typeof t === "number");
+    if (saved?.setupPending && this.opts.sourceRepo) this.setupPending = true;
     const lastPreviews = [...this.store.since(0)].reverse().find(e => e.type === "preview_update");
     if (lastPreviews?.type === "preview_update") this.previewList = lastPreviews.previews;
     if (saved?.usageLimit) {
@@ -553,9 +571,110 @@ export class ThreadRunner {
       this.setStatus("idle");
     }
     if (this.queue.length) this.publishQueue();
+    if (this.setupPending) {
+      const setup = this.runWorktreeSetup();
+      this.settingUp = setup;
+      void setup.finally(() => {
+        if (this.settingUp === setup) this.settingUp = null;
+        if (!this.closing) this.startNext();
+      });
+    }
     this.startNext();
     if (this.opts.checkAgentVersion) void this.checkVersion();
   }
+
+  // ── Project scripts (lemonlime.json) ───────────────────────────
+
+  private setupPending = false;
+  /** The project's setup scripts are running: new messages wait in the queue until they finish. */
+  private settingUp: Promise<void> | null = null;
+
+  /** Where the project's own files are: the user's checkout for a local thread, else the thread's folder. */
+  get projectRoot(): string {
+    return this.opts.sourceRepo ?? this.opts.workdir;
+  }
+
+  /** The project's scripts, read from its `lemonlime.json` now. */
+  get projectScripts(): ReturnType<typeof loadProjectScripts> {
+    return loadProjectScripts(this.projectRoot);
+  }
+
+  /** Variables scripts and terminals get, to find the project and the thread's worktree. */
+  get scriptEnv(): Record<string, string> {
+    return scriptEnv({ projectRoot: this.projectRoot, worktree: this.opts.workdir, threadId: this.opts.thread.id });
+  }
+
+  /** A script with a preview address started: offer its port in the panel's browser (unless it's offered already). */
+  offerScriptPreview(url: string, name: string, ownPorts: readonly number[] = []): void {
+    let port: number;
+    try {
+      const u = new URL(url);
+      port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
+    } catch {
+      return;
+    }
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || ownPorts.includes(port)) return;
+    if (this.previewList.some(p => p.port === port)) return;
+    this.setPreview(port, name);
+  }
+
+  /** Resolves once a new worktree's setup scripts are done (at once when there are none). */
+  async setupDone(): Promise<void> {
+    await this.settingUp;
+  }
+
+  /**
+   * A local thread's new worktree: run the project's `runOnWorktreeCreate` scripts in order,
+   * before the agent starts, each with its time limit. A failure is shown plainly and the
+   * rest are skipped; the agent still starts, so the user can ask it to fix things.
+   * Only ever for local threads, from the user's own project file.
+   */
+  private async runWorktreeSetup(): Promise<void> {
+    const { scripts, error } = this.projectScripts;
+    const setup = scripts.filter(s => s.runOnWorktreeCreate);
+    if (error) this.store.append({ type: "notice", code: "project_scripts_invalid", message: `Project scripts weren't run: ${error}` });
+    try {
+      for (const script of setup) {
+        if (this.closing) return;
+        const timeout = script.timeoutSeconds ?? SETUP_SCRIPT_TIMEOUT_SECONDS;
+        this.store.append({
+          type: "notice",
+          code: "project_setup_started",
+          message: `Setting up the new worktree: running “${script.name}”. Messages you send wait until it's done.`,
+        });
+        const r = await runScriptToEnd({
+          command: script.command,
+          cwd: this.opts.workdir,
+          env: this.scriptEnv,
+          timeoutMs: timeout * 1000,
+          signal: this.setupAbort.signal,
+        });
+        if (this.closing) return;
+        if (!r.ok) {
+          const why = r.timedOut
+            ? `didn't finish within ${formatSeconds(timeout)}, so it was stopped`
+            : r.code === null
+              ? "was stopped"
+              : `failed with exit code ${r.code}`;
+          this.store.append({
+            type: "error",
+            code: "project_setup_failed",
+            message: `The setup script “${script.name}” ${why}.${setup.length > 1 ? " The setup scripts after it were skipped." : ""} The agent can still work; fix the script in ${PROJECT_FILE}, or ask the agent for help.${r.output ? `\n\n${r.output}` : ""}`,
+            fatal: false,
+          });
+          return;
+        }
+        this.store.append({ type: "notice", code: "project_setup_done", message: `“${script.name}” finished in ${formatSeconds(Math.round(r.ms / 1000))}.` });
+      }
+    } finally {
+      if (!this.closing) {
+        this.setupPending = false;
+        this.saveState();
+      }
+    }
+  }
+
+  private readonly setupAbort = new AbortController();
 
   /** Where the list of files plugins put into the workdir is kept, so they can be removed later. */
   private get pluginFilesPath(): string | null {
@@ -667,7 +786,7 @@ export class ThreadRunner {
     this.cancelRetry("You sent a new message, so LemonLime stopped waiting to try the last one again.");
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
-    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching) {
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching || this.settingUp) {
       this.queue.push({ clientMsgId, text, queuedAt: new Date().toISOString(), ...(attachments.length ? { attachments } : {}) });
       this.publishQueue();
       this.saveState();
@@ -1353,6 +1472,7 @@ export class ThreadRunner {
 
   async close(): Promise<void> {
     this.closing = true;
+    this.setupAbort.abort();
     await this.side.closeAll();
     await this.subagents.close();
     if (this.limitTimer) clearTimeout(this.limitTimer);
@@ -1398,7 +1518,7 @@ export class ThreadRunner {
 
   /** Start the oldest queued message if the agent is free. */
   private startNext(): void {
-    if (this.closing || this.held || this.switching || this.status === "running" || this.current || !this.queue.length) return;
+    if (this.closing || this.held || this.switching || this.settingUp || this.status === "running" || this.current || !this.queue.length) return;
     const next = this.queue.shift()!;
     this.publishQueue();
     this.startTurn(next.text, next.clientMsgId, next.attachments ?? []);
@@ -1794,6 +1914,7 @@ export class ThreadRunner {
       ...(this.usageLimit ? { usageLimit: this.usageLimit } : {}),
       ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
       ...(this.restartContinues.length ? { restartContinues: this.restartContinues } : {}),
+      ...(this.setupPending ? { setupPending: true } : {}),
       ...(this.recap ? { recap: this.recap } : {}),
       ...(this.retry ? { retry: this.retry } : {}),
       options: this.options,

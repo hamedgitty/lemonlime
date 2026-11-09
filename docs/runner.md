@@ -160,7 +160,10 @@ sandbox's. Your instructions and thread settings go along as flags (instructions
 - Every `send_message` gets an `ack` with `started`, `queued` or `duplicate`.
 - If the runner stops in the middle of a turn, it never runs that message again. On
   restart it commits whatever the agent left behind, records an error with code
-  `turn_outcome_unknown`, then carries on with the queue.
+  `turn_outcome_unknown`, then carries on with the queue. The apps show a Continue button
+  on that error: `{"type":"continue_after_restart"}` sends a careful prompt that asks the
+  agent to check whether a command already took effect before repeating it. It works at
+  most 3 times in 5 minutes, so a runner that keeps crashing can't loop.
 
 ## Terminal
 
@@ -175,6 +178,10 @@ the whole kept screen if that's gone). Input is capped at 64 KB per message, out
 sent in 64 KB pieces, and a client more than 4 MB behind for 10 seconds is dropped and
 reconnects. The shell doesn't get the runner's thread secret or approval token.
 
+`GET /file-exists?path=<path>` answers with the file's path inside the working folder (or
+404), so terminal output like `src/app.ts:12` can open the file. Absolute paths count only
+when they point inside the folder.
+
 `GET /file?path=<relative path>` (client token) returns one file from the working folder
 for the app's file tabs, up to 20 MB. The path must be relative and stay inside the
 working folder once symlinks are followed; `..`, absolute paths, `.git` and the runner's
@@ -183,6 +190,39 @@ own `.lemonlime` folder are refused.
 The PTY comes from `@lydell/node-pty` (prebuilt, no compiler needed). The desktop app's
 single-file runner can't hold a native module, so `build:sea` copies it next to the
 executable and the app passes `LEMONLIME_NODE_PTY_DIR`.
+
+## Project scripts
+
+A project can keep a few named commands in `lemonlime.json` at its repository root. The
+apps show them as buttons in the thread's panel and in the command palette (⌘K), and each
+runs in its own panel terminal in the thread's folder:
+
+```json
+{
+  "scripts": [
+    { "name": "Setup", "command": "cp \"$LEMONLIME_PROJECT_ROOT/.env\" . && pnpm install", "runOnWorktreeCreate": true, "timeoutSeconds": 600 },
+    { "name": "Dev", "command": "pnpm dev", "icon": "play", "previewUrl": "http://localhost:5173", "keybinding": "run-script-1" },
+    { "name": "Test", "command": "pnpm test", "icon": "test" }
+  ]
+}
+```
+
+- `name` and `command` are required; `id` is made from the name when left out.
+- `icon` is one of `play`, `test`, `lint`, `build`, `server`, `package`, `wrench`,
+  `terminal`, `bug`, `rocket`, `database`, `sparkles`.
+- `runOnWorktreeCreate`: run it once when a local thread's worktree is first made, before
+  the agent starts (messages wait). Each has a time limit (`timeoutSeconds`, 10 minutes by
+  default); a failure is shown with the end of its output, and the agent still starts.
+- `previewUrl`: a local address opened in the panel's browser once the script starts.
+- `keybinding`: `run-script-1` to `run-script-4`, the app's script shortcuts (⌘⌥1 to ⌘⌥4
+  by default, changeable in Settings, Keyboard).
+
+Every script and terminal gets `LEMONLIME_PROJECT_ROOT` (your own checkout for a local
+thread, the thread's folder otherwise), `LEMONLIME_WORKTREE_PATH` and `LEMONLIME_THREAD_ID`.
+The runner reads the file itself (`GET /project-scripts` lists what it found): the app only
+ever names a script, so a script runs only where its file is. For a local thread that's
+the file in your checkout; a cloud sandbox uses the copy in its own clone of the repository,
+and setup scripts never run there.
 
 ## Going back (rewind) and compacting
 

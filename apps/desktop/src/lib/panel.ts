@@ -11,7 +11,15 @@ export const BUILT_IN_TABS = ["changes", "browser", "side"] as const;
 export type BuiltInTab = (typeof BUILT_IN_TABS)[number];
 
 export const PanelTab = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("terminal"), id: z.string().min(1).max(60), terminal: z.string().min(1).max(40), n: z.number().int().positive() }),
+  z.object({
+    kind: z.literal("terminal"),
+    id: z.string().min(1).max(60),
+    terminal: z.string().min(1).max(40),
+    n: z.number().int().positive(),
+    /** The project script it runs (see lemonlime.json), and the script's name for the tab. */
+    script: z.string().min(1).max(40).optional(),
+    label: z.string().min(1).max(60).optional(),
+  }),
   z.object({
     kind: z.literal("file"),
     id: z.string().min(1).max(4200),
@@ -92,6 +100,22 @@ export function newTerminal(s: PanelState, random: () => string = () => Math.ran
   return openTab(s, { kind: "terminal", id: `term:${terminal}`, terminal, n });
 }
 
+/**
+ * The tab of a project script's terminal, opened if it isn't (null when the thread has as
+ * many terminals as the runner allows).
+ */
+export function openScript(s: PanelState, script: { id: string; name: string }): PanelState | null {
+  const terminal = `script-${script.id}`;
+  const id = `term:${terminal}`;
+  if (s.tabs.some(t => t.id === id)) return { ...s, active: id };
+  const terms = s.tabs.filter(t => t.kind === "terminal");
+  if (terms.length >= MAX_TERMINALS) return null;
+  const used = new Set(terms.map(t => (t.kind === "terminal" ? t.n : 0)));
+  let n = 1;
+  while (used.has(n)) n++;
+  return openTab(s, { kind: "terminal", id, terminal, n, script: script.id, label: script.name });
+}
+
 /** Close a tab; the one to its right (or left) becomes active if it was. */
 export function closeTab(s: PanelState, id: string): PanelState {
   const at = s.tabs.findIndex(t => t.id === id);
@@ -139,7 +163,8 @@ export function activeTab(s: PanelState): string {
 }
 
 /** "zsh", "zsh 2"…; the title the shell set (often its folder) wins when there is one. */
-export function terminalLabel(tab: { n: number }, shell: string | undefined, title: string | undefined): string {
+export function terminalLabel(tab: { n: number; label?: string | undefined }, shell: string | undefined, title: string | undefined): string {
+  if (tab.label) return tab.label;
   const t = title?.trim();
   if (t) return shortTitle(t);
   return `${shell || "Terminal"}${tab.n > 1 ? ` ${tab.n}` : ""}`;

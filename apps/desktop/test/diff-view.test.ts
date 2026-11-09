@@ -33,7 +33,10 @@ describe("diff highlighting", () => {
     ];
     expect(splitHighlightedLines(nodes)).toEqual([
       [{ type: "element", className: ["token", "comment"], children: [{ type: "text", value: "/* a" }] }],
-      [{ type: "element", className: ["token", "comment"], children: [{ type: "text", value: "b */" }] }, { type: "text", value: " x" }],
+      [
+        { type: "element", className: ["token", "comment"], children: [{ type: "text", value: "b */" }] },
+        { type: "text", value: " x" },
+      ],
       [{ type: "text", value: "y" }],
     ]);
   });

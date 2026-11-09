@@ -33,10 +33,18 @@ export const TerminalClientMessage = z.discriminatedUnion("type", [
     resumeFrom: z.number().int().nonnegative().optional(),
     /** Which of the thread's terminals; opened if it isn't running yet. */
     terminal: TerminalId.optional(),
+    /**
+     * This terminal runs one of the project's scripts (by id, from the runner's own copy of
+     * the project file) instead of a shell. It isn't started by hello: `restart` runs it.
+     */
+    script: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]{0,31}$/)
+      .optional(),
   }),
   z.object({ type: z.literal("input"), data: z.string().min(1).max(TERMINAL_MAX_INPUT_CHARS) }),
   z.object({ type: z.literal("resize"), ...Size }),
-  /** Start a new shell after the last one exited. */
+  /** Start a new shell after the last one exited (or run the terminal's script again). */
   z.object({ type: z.literal("restart") }),
   /** End this terminal's shell for good and forget it (the app closed its tab). */
   z.object({ type: z.literal("close") }),

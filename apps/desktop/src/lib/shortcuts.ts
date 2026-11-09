@@ -31,6 +31,11 @@ export const SHORTCUTS = [
   { id: "focus-pane-6", label: "Go to pane 6", group: "Split view", keys: "mod+6" },
   { id: "quick-open", label: "Open a file in the side panel", group: "Threads", keys: "mod+p" },
   { id: "reopen-tab", label: "Reopen the last closed panel tab", group: "Threads", keys: "mod+shift+t" },
+  // The project's scripts (lemonlime.json) pick one of these with "keybinding".
+  { id: "run-script-1", label: "Run the project script on shortcut 1", group: "Project scripts", keys: "mod+alt+1" },
+  { id: "run-script-2", label: "Run the project script on shortcut 2", group: "Project scripts", keys: "mod+alt+2" },
+  { id: "run-script-3", label: "Run the project script on shortcut 3", group: "Project scripts", keys: "mod+alt+3" },
+  { id: "run-script-4", label: "Run the project script on shortcut 4", group: "Project scripts", keys: "mod+alt+4" },
   // Only while the message box has focus (see ModelControl).
   { id: "cycle-effort", label: "Cycle the agent's effort, in the message box", group: "Threads", keys: "alt+t" },
 ] as const;
@@ -61,8 +66,13 @@ export function keysFor(id: ShortcutId, overrides: Record<string, string>): stri
 
 /** A keydown as a combo string, or null for a bare modifier press. */
 export function comboOf(e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"> & { code?: string }): string | null {
-  // Alt (⌥) changes the character on macOS (⌥T types "†"), so letters come from the key's place.
-  const key = e.altKey && e.code && /^Key[A-Z]$/.test(e.code) ? e.code.slice(3).toLowerCase() : e.key.toLowerCase();
+  // Alt (⌥) changes the character on macOS (⌥T types "†", ⌥1 "¡"), so letters and digits come from the key's place.
+  const key =
+    e.altKey && e.code && /^Key[A-Z]$/.test(e.code)
+      ? e.code.slice(3).toLowerCase()
+      : e.altKey && e.code && /^Digit[0-9]$/.test(e.code)
+        ? e.code.slice(5)
+        : e.key.toLowerCase();
   if (["meta", "control", "shift", "alt"].includes(key)) return null;
   const parts: string[] = [];
   if (IS_MAC ? e.metaKey : e.ctrlKey) parts.push("mod");

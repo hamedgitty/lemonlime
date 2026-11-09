@@ -57,6 +57,9 @@ export function TerminalPanel({
   onAddToChat,
   onOpenUrl,
   onOpenFile,
+  script,
+  run = 0,
+  onRun,
 }: {
   connection: { url: string; token: () => Promise<string> } | null;
   /** Which of the thread's terminals (the runner's default when left out). */
@@ -73,6 +76,12 @@ export function TerminalPanel({
   onOpenUrl?: (url: string) => void;
   /** A `path:line` in the output that is a file in the project was clicked. */
   onOpenFile?: (path: string, line: number) => void;
+  /** This terminal runs one of the project's scripts (by id) instead of a shell. */
+  script?: string | undefined;
+  /** Bumped each time the user asks to run the script: it runs unless it's running already. */
+  run?: number;
+  /** The script was started (to open its preview). */
+  onRun?: () => void;
 }) {
   const termRef = useRef<Terminal | null>(null);
   const names = useRef({ onName, onTitle, onOpenUrl, onOpenFile });
@@ -121,6 +130,7 @@ export function TerminalPanel({
       url: terminalUrl(connection.url),
       token: connection.token,
       ...(terminal ? { terminal } : {}),
+      ...(script ? { script } : {}),
       onName: n => names.current.onName?.(n),
       cols: term.cols,
       rows: term.rows,
@@ -157,7 +167,25 @@ export function TerminalPanel({
       clientRef.current = null;
       term.dispose();
     };
-  }, [connection, terminal]);
+  }, [connection, terminal, script]);
+
+  // Run the script when asked: once the runner says it isn't running, start it.
+  const handledRun = useRef(0);
+  const ran = useRef(onRun);
+  ran.current = onRun;
+  const startScript = () => {
+    clientRef.current?.restart();
+    ran.current?.();
+  };
+  useEffect(() => {
+    if (!script || run <= handledRun.current) return;
+    if (state === "exited") {
+      handledRun.current = run;
+      startScript();
+    } else if (state === "live") handledRun.current = run;
+    // startScript only reads refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [script, run, state]);
 
   // Coming back to this tab: refit (it was hidden) and take the keyboard.
   useEffect(() => {
@@ -180,18 +208,25 @@ export function TerminalPanel({
       </p>
     );
   }
-  const note = LABELS[state];
+  const note =
+    script && state === "exited"
+      ? detail
+        ? "The script finished"
+        : "The script isn't running."
+      : script && state === "closed"
+        ? LABELS.closed
+        : LABELS[state];
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-rind">
       {note && (
         <div role="status" className="flex items-center gap-3 border-b border-rind-line px-3 py-2 text-[13px] text-rind-muted">
           <span className="flex-1">
             {note}
-            {detail ? ` ${detail}` : ""}
+            {detail ? (script ? ` (${detail}).` : ` ${detail}`) : ""}
           </span>
           {state === "exited" && (
-            <Button size="sm" variant="secondary" onClick={() => clientRef.current?.restart()}>
-              New shell
+            <Button size="sm" variant="secondary" onClick={() => (script ? startScript() : clientRef.current?.restart())}>
+              {script ? (detail ? "Run again" : "Run") : "New shell"}
             </Button>
           )}
         </div>

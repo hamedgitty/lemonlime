@@ -13,6 +13,8 @@ import {
   parseTerminalClientMessage,
   verifyToken,
   MAX_TOKEN_LIFETIME_SECONDS,
+  PROJECT_FILE,
+  type ResolvedScript,
   type VerifyResult,
   type ServerMessage,
   type TerminalServerMessage,
@@ -176,7 +178,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_FRAME_BYTES });
   const tunnelWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const terminals = opts.terminal?.spawn ? new TerminalPool(opts.terminal.spawn, opts.terminal.cwd, opts.terminal.max) : null;
+  const terminals = opts.terminal?.spawn ? new TerminalPool(opts.terminal.spawn, opts.terminal.cwd, opts.terminal.max, undefined, runner.scriptEnv) : null;
   http.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
     if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
@@ -419,6 +421,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
 function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminals: TerminalPool | null): void {
   let terminal: TerminalSession | null = null;
   let terminalId = DEFAULT_TERMINAL_ID;
+  let script: ResolvedScript | null = null;
   let slowSince: number | null = null;
   const send = (m: TerminalServerMessage) => {
     if (ws.readyState !== ws.OPEN) return;
@@ -464,13 +467,23 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
         return ws.close(1011, "unavailable");
       }
       terminalId = msg.terminal ?? DEFAULT_TERMINAL_ID;
-      terminal = terminals.open(terminalId);
+      // A project script: its command comes from the runner's own copy of the project file, never from the app.
+      if (msg.script) {
+        const found = runner.projectScripts.scripts.find(x => x.id === msg.script);
+        if (!found) {
+          send({ type: "error", code: "unavailable", message: `This project has no script “${msg.script}” any more (see ${PROJECT_FILE}).` });
+          return ws.close(1011, "no such script");
+        }
+        script = found;
+      }
+      terminal = terminals.open(terminalId, script ? { command: script.command } : {});
       if (!terminal) {
         send({ type: "error", code: "limit", message: `A thread can have ${terminals.max} terminals open at once. Close one first.` });
         return ws.close(1008, "too many terminals");
       }
       terminal.resize(msg.cols, msg.rows);
-      terminal.start();
+      // A script runs when asked (restart), never just because an app connected.
+      if (terminal.command === null) terminal.start();
       const { reset, data } = terminal.replay(msg.resumeFrom, msg.shell);
       send({ type: "ready", reset, running: terminal.running, shell: terminal.generation, name: terminal.name });
       if (data) sendOutput(data, terminal.end);
@@ -491,6 +504,13 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
         terminal.resize(msg.cols, msg.rows);
         break;
       case "restart":
+        if (script) {
+          // Pick up edits to the project file since the terminal opened.
+          const now = runner.projectScripts.scripts.find(x => x.id === script!.id);
+          if (now) script = now;
+          if (!terminal.running) terminal.command = script.command;
+          if (script.previewUrl) runner.offerScriptPreview(script.previewUrl, script.name, opts.ownPorts ?? []);
+        }
         terminal.start();
         break;
       case "close":
@@ -691,6 +711,7 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     res.end(found.data);
     return;
   }
+  if (path === "/project-scripts" && req.method === "GET") return reply(res, 200, runner.projectScripts);
   // Whether a path the terminal printed is a file in the thread's folder, for clickable `path:line`.
   if (path === "/file-exists" && req.method === "GET") {
     const asked = new URL(req.url ?? "/", "http://runner").searchParams.get("path") ?? "";

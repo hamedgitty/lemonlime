@@ -17,7 +17,10 @@ describe("renderEmail", () => {
       title: "Your <sign-in> code",
       intro: ["Enter it in **LemonLime**. See [the docs](https://example.com/docs?a=1&b=2)."],
       code: "123456",
-      details: [{ label: "Plan", value: "Team" }, { label: "Paid", value: "$12", strong: true }],
+      details: [
+        { label: "Plan", value: "Team" },
+        { label: "Paid", value: "$12", strong: true },
+      ],
       button: { label: "Open LemonLime", url: "https://app.example.com/?x=1&y=2" },
       note: "If this wasn't you, ignore it.",
       reason: "You're getting this because you signed up.",
@@ -52,9 +55,12 @@ describe("renderEmail", () => {
   });
 
   it("leaves out what isn't given", () => {
-    const bare = renderEmail({ subject: "Hi", preview: "Hi", title: "Hi", intro: ["Hello."] }, { name: "X", appUrl: "https://x.test", logoUrl: "https://x.test/l.png" });
+    const bare = renderEmail(
+      { subject: "Hi", preview: "Hi", title: "Hi", intro: ["Hello."] },
+      { name: "X", appUrl: "https://x.test", logoUrl: "https://x.test/l.png" },
+    );
     expect(bare.html).not.toContain("mailto:");
     expect(bare.html).not.toContain('bgcolor="#FFD60A"');
-    expect(bare.html).not.toContain("<img src=\"https://x.test/l.png\" width=\"480\"");
+    expect(bare.html).not.toContain('<img src="https://x.test/l.png" width="480"');
   });
 });

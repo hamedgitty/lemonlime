@@ -158,7 +158,9 @@ export async function inviteMember(ctx: AppContext, o: { userId: string; workspa
   const who = inviter?.name || inviter?.email || "Someone";
   const link = new URL(`/invite/${token}`, ctx.config.publicUrl()).toString();
   try {
-    await ctx.email.send(inviteEmail(ctx.config.emailBrand(), { to: address, inviter: who, workspace: ws?.name ?? "a LemonLime workspace", link, days: INVITE_TTL_DAYS }));
+    await ctx.email.send(
+      inviteEmail(ctx.config.emailBrand(), { to: address, inviter: who, workspace: ws?.name ?? "a LemonLime workspace", link, days: INVITE_TTL_DAYS }),
+    );
   } catch (err) {
     await ctx.db.delete(workspaceInvites).where(eq(workspaceInvites.id, invite.id));
     console.error("[lemonlime] invite email failed:", err);
@@ -166,7 +168,6 @@ export async function inviteMember(ctx: AppContext, o: { userId: string; workspa
   }
   return { id: invite.id, email: address, createdAt: invite.createdAt, expiresAt: invite.expiresAt };
 }
-
 
 export type InviteLookup =
   | { ok: true; inviteId: string; workspaceId: string; workspaceName: string; email: string; invitedBy: string | null }

@@ -84,9 +84,7 @@ const inline = (s: string) =>
 const plain = (s: string) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)");
 
 function paragraphs(list: string[] | undefined, top = 0): string {
-  return (list ?? [])
-    .map((p, i) => `<p style="margin:${i === 0 ? top : 14}px 0 0;font:400 16px/1.6 ${SANS};color:${C.ink2}">${inline(p)}</p>`)
-    .join("");
+  return (list ?? []).map((p, i) => `<p style="margin:${i === 0 ? top : 14}px 0 0;font:400 16px/1.6 ${SANS};color:${C.ink2}">${inline(p)}</p>`).join("");
 }
 
 function codeTile(code: string): string {
@@ -123,10 +121,11 @@ export function renderEmail(content: EmailContent, brand: EmailBrand): RenderedE
     ? `<p style="margin:${content.note ? 10 : 0}px 0 0;font:400 14px/1.6 ${SANS};color:${C.ink3}">Questions? Write to <a href="mailto:${esc(brand.supportEmail)}" style="color:${C.leaf};text-decoration:underline">${esc(brand.supportEmail)}</a> and a person will answer.</p>`
     : "";
   const note = content.note ? `<p style="margin:0;font:400 14px/1.6 ${SANS};color:${C.ink3}">${inline(content.note)}</p>` : "";
-  const quiet = help || note ? `<tr><td class="pad" style="padding:28px 40px 36px"><div style="border-top:1px solid ${C.line};padding-top:20px">${note}${help}</div></td></tr>` : `<tr><td style="padding:0 0 36px"></td></tr>`;
-  const links = (brand.links ?? [])
-    .map(l => `<a href="${esc(l.url)}" style="color:${C.ink3};text-decoration:none;margin:0 10px">${esc(l.label)}</a>`)
-    .join("");
+  const quiet =
+    help || note
+      ? `<tr><td class="pad" style="padding:28px 40px 36px"><div style="border-top:1px solid ${C.line};padding-top:20px">${note}${help}</div></td></tr>`
+      : `<tr><td style="padding:0 0 36px"></td></tr>`;
+  const links = (brand.links ?? []).map(l => `<a href="${esc(l.url)}" style="color:${C.ink3};text-decoration:none;margin:0 10px">${esc(l.label)}</a>`).join("");
 
   const html = `<!doctype html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">

@@ -151,7 +151,9 @@ export function inviteEmail(brand: EmailBrand, o: { to: string; inviter: string;
         subject: `${o.inviter} invited you to ${o.workspace} on ${brand.name}`,
         preview: `Join the workspace to share coding agent threads with ${o.inviter}.`,
         title: `Join ${o.workspace}`,
-        intro: [`**${o.inviter}** invited you to the **${o.workspace}** workspace on ${brand.name}, where your team runs coding agents and shares their threads.`],
+        intro: [
+          `**${o.inviter}** invited you to the **${o.workspace}** workspace on ${brand.name}, where your team runs coding agents and shares their threads.`,
+        ],
         button: { label: "Accept the invitation", url: o.link },
         note: `The link works for ${o.days} days, and only for ${o.to}. If you weren't expecting this, you can ignore it.`,
         reason: `You're getting this because someone in a ${brand.name} workspace invited this address.`,

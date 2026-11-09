@@ -102,7 +102,16 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
     env: opts.env,
     db: opts.db,
     production,
-    plugin: opts.plugin ?? resolvePlugin(pluginExport, { env: opts.env, services: pluginServices(opts.db, () => email, () => makeConfig(vars).emailBrand()) }),
+    plugin:
+      opts.plugin ??
+      resolvePlugin(pluginExport, {
+        env: opts.env,
+        services: pluginServices(
+          opts.db,
+          () => email,
+          () => makeConfig(vars).emailBrand(),
+        ),
+      }),
     email,
     sandbox:
       opts.sandbox ??

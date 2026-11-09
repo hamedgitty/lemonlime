@@ -91,6 +91,8 @@ export const GitStatusResponse = z.object({
   commits: z.number().int().nonnegative(),
   /** Commits not on the remote branch yet (all of them when it was never pushed). */
   unpushed: z.number().int().nonnegative(),
+  /** Commits on the base branch that this branch doesn't have yet. Older runners leave it out. */
+  behind: z.number().int().nonnegative().default(0),
   hasRemote: z.boolean(),
   /** Pushed at least once. */
   pushed: z.boolean(),
@@ -101,12 +103,110 @@ export const GitStatusResponse = z.object({
 });
 export type GitStatusResponse = z.infer<typeof GitStatusResponse>;
 
+/** Watching a pull request: the agent is woken when its checks fail, it gets comments or it can't merge. */
+export const PullRequestWatchState = z.object({
+  on: z.boolean(),
+  /** Times the agent was woken by new comments alone (they stop counting at the limit). */
+  commentWakes: z.number().int().nonnegative().default(0),
+  /** Most times new comments alone wake the agent, so a bot can't keep it going forever. */
+  maxCommentWakes: z.number().int().positive(),
+});
+export type PullRequestWatchState = z.infer<typeof PullRequestWatchState>;
+
+export const WatchPullRequestBody = z.object({ on: z.boolean() });
+export type WatchPullRequestBody = z.infer<typeof WatchPullRequestBody>;
+
 export const GitPullRequestResponse = z.object({
   pullRequest: PullRequestInfo.nullable(),
   /** No `gh` here: open this page in the browser instead (null if the remote isn't on GitHub). */
   compareUrl: z.string().nullable().optional(),
+  /** Whether the pull request is being watched (runners that can watch one). */
+  watch: PullRequestWatchState.optional(),
+  /** The agent can't push to the pull request's branch (a fork that doesn't allow edits), in plain words. */
+  pushProblem: z.string().optional(),
 });
 export type GitPullRequestResponse = z.infer<typeof GitPullRequestResponse>;
+
+/** `GET /git/pull-request/draft`: a title and description written from the thread's commits, to edit before opening. */
+export const PullRequestDraft = z.object({ title: z.string(), body: z.string() });
+export type PullRequestDraft = z.infer<typeof PullRequestDraft>;
+
+/** `POST /git/update-from-base`: bring the base branch's new commits into the thread's branch. */
+export const UpdateFromBaseResponse = z.object({
+  /** merged: a merge commit was made; up_to_date: nothing to bring in; conflicts: nothing changed (the merge was undone). */
+  result: z.enum(["merged", "up_to_date", "conflicts"]),
+  /** The files that conflicted (result `conflicts`). */
+  conflicts: z.array(z.string()).default([]),
+  /** The base branch it merged, as git named it (e.g. origin/main). */
+  base: z.string(),
+});
+export type UpdateFromBaseResponse = z.infer<typeof UpdateFromBaseResponse>;
+
+/** One branch for the branch picker. */
+export const BranchInfo = z.object({
+  name: z.string(),
+  /** Only on the remote (`origin`) so far; working on it makes the local branch. */
+  remote: z.boolean(),
+  /** The folder it's checked out in, if any (a thread can't work on it then). */
+  checkedOutAt: z.string().nullable(),
+  /** ISO date of its latest commit. */
+  date: z.string(),
+});
+export type BranchInfo = z.infer<typeof BranchInfo>;
+
+/** `lemonlime-runner git branches`: the repository's branches, most recently changed first. */
+export const BranchList = z.object({
+  /** The branch checked out in the project folder, or null when it's detached. */
+  current: z.string().nullable(),
+  branches: z.array(BranchInfo),
+});
+export type BranchList = z.infer<typeof BranchList>;
+
+/** `lemonlime-runner git pull-request`: a pull request found from a link or `#123`, to start a thread on. */
+export const PullRequestLookup = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  url: z.string(),
+  state: z.enum(["open", "closed", "merged"]),
+  draft: z.boolean(),
+  baseBranch: z.string(),
+  /** The pull request's branch, as named in the repository it comes from. */
+  headBranch: z.string(),
+  /** `owner/repo` of the repository the branch is in. */
+  headRepo: z.string().nullable(),
+  /** The branch is in a fork, not in this repository. */
+  fromFork: z.boolean(),
+  /** The branch name the thread works on here. */
+  localBranch: z.string(),
+  /** Why the agent's commits can't be pushed to the pull request, in plain words; null when they can. */
+  pushProblem: z.string().nullable(),
+});
+export type PullRequestLookup = z.infer<typeof PullRequestLookup>;
+
+/**
+ * A pull request reference typed or pasted by the user: a GitHub pull request link, or
+ * `#123`. Null for anything else (a sentence that merely mentions a number isn't one).
+ */
+export function parsePullRequestRef(text: string): { number: number; url?: string } | null {
+  const t = text.trim();
+  const short = /^#(\d{1,9})$/.exec(t);
+  if (short) return Number(short[1]) > 0 ? { number: Number(short[1]) } : null;
+  const link = /^https?:\/\/[^\s/]+\/[\w.-]+\/[\w.-]+\/pull\/(\d{1,9})(?:[/?#][^\s]*)?$/i.exec(t);
+  if (link && /(^|\.)github(\.|$)/i.test(new URL(t).hostname))
+    return { number: Number(link[1]), url: t.replace(/[?#].*$/, "").replace(/\/(files|commits|checks)\/?$/, "") };
+  return null;
+}
+
+/** The branch a thread works on for a pull request: its own name, or (from a fork) one that can't clash with ours. */
+export function pullRequestLocalBranch(pr: { number: number; headBranch: string; fromFork: boolean }): string {
+  if (!pr.fromFork) return pr.headBranch;
+  const tail =
+    pr.headBranch
+      .replace(/[^\w./-]+/g, "-")
+      .replace(/\.{2,}/g, ".")
+      .replace(/^[-./]+|[-./]+$/g, "") || "branch";
+  return `pr/${pr.number}-${tail}`.slice(0, 200);
+}
 
 export const CreatePullRequestBody = z.object({
   title: z.string().max(200).optional(),

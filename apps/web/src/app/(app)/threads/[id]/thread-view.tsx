@@ -58,7 +58,7 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
   const [runnerError, setRunnerError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [denied, setDenied] = useState<PolicyDenied | null>(null);
-  const [busy, setBusy] = useState<null | "pause" | "resume" | "close" | "pr">(null);
+  const [busy, setBusy] = useState<null | "pause" | "resume" | "close" | "pr" | "forget">(null);
   const [pullRequestUrl, setPullRequestUrl] = useState<string | null>(initial.pullRequestUrl);
   const [draft, setDraft] = useState("");
   // Voice input, handy on a phone: each finished phrase lands at the end of the message.
@@ -227,6 +227,19 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
     } else setActionError(res.message);
   }
 
+  async function deleteForever() {
+    const message =
+      "Delete this thread for good? Its sandbox, its whole conversation and everything LemonLime stored for it are removed. This can't be undone.";
+    if (!window.confirm(message)) return;
+    setBusy("forget");
+    const res = await apiFetch(`/api/threads/${id}?forever=1`, { method: "DELETE" });
+    setBusy(null);
+    if (res.ok) {
+      router.push("/");
+      router.refresh();
+    } else setActionError(res.message);
+  }
+
   function send(e?: FormEvent) {
     e?.preventDefault();
     const text = draft.trim();
@@ -335,6 +348,15 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
                 Interrupt
               </button>
             )}
+          </div>
+        )}
+
+        {closed && (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="mr-auto text-sm text-muted">This thread is closed. Its conversation is kept until you delete it.</span>
+            <button type="button" className="btn-danger h-8" onClick={deleteForever} disabled={busy !== null}>
+              {busy === "forget" ? "Deleting..." : "Delete forever"}
+            </button>
           </div>
         )}
 

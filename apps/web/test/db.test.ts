@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { sandboxRuns, threads, workspaceMembers, workspaces } from "@lemonlime/db";
+import { account, sandboxRuns, threads, workspaceMembers, workspaces } from "@lemonlime/db";
 import { IDLE_PAUSE_AFTER_MS, type CreateThreadRequest } from "@lemonlime/protocol";
 import { userWorkspaceIds } from "../src/lib/access.ts";
 import { generateAccessToken, hashAccessToken } from "../src/lib/access-tokens.ts";
@@ -257,5 +257,28 @@ describe("personal access tokens", () => {
     expect(stored!.tokenHash).toBe(hashAccessToken(raw));
     expect(JSON.stringify(stored)).not.toContain(raw);
     expect(stored!.lastUsedAt).not.toBeNull();
+  });
+});
+
+describe("GitHub sign-in", () => {
+  it("never keeps the tokens GitHub hands over", async () => {
+    const { ctx, db } = await createTestApp();
+    const { userId } = await addUser(db, "gh@example.com");
+    const auth = createAuth(ctx);
+    const adapter = (await auth.$context).internalAdapter;
+    const created = await adapter.createAccount({
+      userId,
+      providerId: "github",
+      accountId: "12345",
+      accessToken: "gho_secret",
+      refreshToken: "ghr_secret",
+      idToken: "id_secret",
+      accessTokenExpiresAt: new Date(Date.now() + 3600_000),
+      scope: "read:user,user:email",
+    });
+    await adapter.updateAccount(created.id, { accessToken: "gho_again", refreshToken: "ghr_again" });
+    const [row] = await db.select().from(account).where(eq(account.userId, userId));
+    expect(row).toMatchObject({ providerId: "github", accountId: "12345", accessToken: null, refreshToken: null, idToken: null, accessTokenExpiresAt: null });
+    expect(JSON.stringify(row)).not.toMatch(/secret|again/);
   });
 });

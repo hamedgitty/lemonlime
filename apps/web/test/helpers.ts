@@ -64,7 +64,8 @@ export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}
     },
   };
   const history = memoryHistoryStore();
-  const plugin: ResolvedPlugin = { ...defaultPlugin, usagePolicy: { ...defaultPlugin.usagePolicy, ...opts.policy } };
+  // Each app gets its own events object, so a test that sets a hook can't leak it into the next.
+  const plugin: ResolvedPlugin = { ...defaultPlugin, events: { ...defaultPlugin.events }, usagePolicy: { ...defaultPlugin.usagePolicy, ...opts.policy } };
   const ctx = createAppContext({
     runtime: "node",
     env: { ...TEST_ENV },

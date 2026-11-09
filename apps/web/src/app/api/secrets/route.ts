@@ -18,7 +18,7 @@ export const GET = route(async request => {
   return json({ secrets: await listSecrets(ctx, workspaceId) });
 });
 
-/** Add or replace a secret. It is encrypted at once; new cloud sandboxes get it as an environment variable. */
+/** Add or replace a secret (owners only). It is encrypted at once; new cloud sandboxes get it as an environment variable. */
 export const PUT = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);

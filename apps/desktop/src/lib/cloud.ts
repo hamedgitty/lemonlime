@@ -212,6 +212,11 @@ export class CloudApi {
     await this.request("DELETE", `/api/secrets/${encodeURIComponent(name)}`);
   }
 
+  /** Delete a cloud thread for good: its sandbox, stored conversation and the thread itself. */
+  async deleteThreadForever(id: string): Promise<void> {
+    await this.request("DELETE", `/api/threads/${encodeURIComponent(id)}?forever=1`);
+  }
+
   /** Settings every cloud sandbox in the workspace starts with. */
   async workspaceSettings(): Promise<WorkspaceCloudSettings> {
     const body = (await this.request("GET", "/api/workspace/settings")) as { canEdit?: boolean; settings?: Partial<WorkspaceCloudSettings> } | null;

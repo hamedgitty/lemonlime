@@ -1512,9 +1512,21 @@ export function App() {
       const machine = t.machine ? (loadMachines().find(m => m.id === t.machine)?.name ?? "a removed machine") : null;
       if (!(await confirmAction(removeThreadText(t, machine)))) return;
       const open = placeRef.current.view === "thread" && placeRef.current.selection.id === t.id;
+      if (t.mode === "cloud") {
+        if (!cloudApi) return;
+        try {
+          await cloudApi.deleteThreadForever(t.id);
+        } catch (err) {
+          toast({ title: "The thread wasn't deleted", description: err instanceof Error ? err.message : String(err), tone: "error" });
+          return;
+        }
+        if (open) go({ view: "home" });
+        void refreshCloud();
+        return;
+      }
       onRemoveLocal(t.id, { stay: !open });
     },
-    [onRemoveLocal],
+    [onRemoveLocal, cloudApi, go, refreshCloud],
   );
   /** "Remove from list" on a project: its threads are archived (Undo puts them back) and it leaves the recent projects. */
   const removeProject = useCallback(

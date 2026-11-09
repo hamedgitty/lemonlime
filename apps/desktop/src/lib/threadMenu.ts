@@ -78,7 +78,7 @@ export function threadMenuGroups(i: ThreadMenuInput): ThreadMenuEntry[][] {
     ],
     [
       has("archive") && entry("archive", i.archived ? "Unarchive" : "Archive"),
-      i.mode === "local" && has("remove") && entry("remove", "Remove thread", { danger: true }),
+      has("remove") && entry("remove", i.mode === "local" ? "Remove thread" : "Delete thread", { danger: true }),
     ],
   ];
   return groups.map(g => g.filter((e): e is ThreadMenuEntry => e !== false)).filter(g => g.length > 0);
@@ -229,7 +229,9 @@ export function childRowKey(events: readonly ThreadEvent[], childId: string): st
 }
 
 /** What removing a local thread does, for the confirmation. */
-export function removeThreadText(t: { title: string; branch: string }, machine: string | null): string {
+export function removeThreadText(t: { title: string; branch: string; mode?: "local" | "cloud" }, machine: string | null): string {
+  if (t.mode === "cloud")
+    return `Delete “${t.title}” for good? Its cloud sandbox, its whole conversation and everything stored for it are deleted, and work not pushed from the sandbox is lost. This can't be undone.`;
   return machine
     ? `Remove “${t.title}” from LemonLime? The runner on ${machine} is stopped, and the thread's worktree and history there are removed. Your project there and the ${t.branch} branch are not touched.`
     : `Remove “${t.title}” from LemonLime? The runner is stopped and the history cached in this app is cleared. Your repository and the ${t.branch} branch are not touched.`;

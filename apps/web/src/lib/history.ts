@@ -14,6 +14,8 @@ export interface HistoryStore {
   put(key: string, body: string): Promise<void>;
   get(key: string): Promise<string | null>;
   list(prefix: string): Promise<string[]>;
+  /** Remove these objects; ones already gone are fine. */
+  delete(keys: readonly string[]): Promise<void>;
 }
 
 /** The subset of Cloudflare's R2 bucket binding we use. */
@@ -21,6 +23,7 @@ interface R2Like {
   put(key: string, body: string): Promise<unknown>;
   get(key: string): Promise<{ text(): Promise<string> } | null>;
   list(opts: { prefix: string; cursor?: string }): Promise<{ objects: { key: string }[]; truncated: boolean; cursor?: string }>;
+  delete(keys: string | string[]): Promise<void>;
 }
 
 export function r2HistoryStore(bucket: R2Like): HistoryStore {
@@ -42,6 +45,10 @@ export function r2HistoryStore(bucket: R2Like): HistoryStore {
         cursor = page.truncated ? page.cursor : undefined;
       } while (cursor);
       return keys;
+    },
+    async delete(keys) {
+      // R2 takes up to 1,000 keys per call.
+      for (let i = 0; i < keys.length; i += 1000) await bucket.delete(keys.slice(i, i + 1000));
     },
   };
 }
@@ -68,6 +75,10 @@ export function fileHistoryStore(dir: string): HistoryStore {
       const names = await readdir(join(dir, folder)).catch(() => [] as string[]);
       return names.map(n => `${folder}/${n}`).filter(k => k.startsWith(prefix));
     },
+    async delete(keys) {
+      const [{ rm }, { join }] = await Promise.all([fs(), path()]);
+      for (const key of keys) await rm(join(dir, key), { force: true });
+    },
   };
 }
 
@@ -84,6 +95,9 @@ export function memoryHistoryStore(): HistoryStore & { objects: Map<string, stri
     },
     async list(prefix) {
       return [...objects.keys()].filter(k => k.startsWith(prefix)).sort();
+    },
+    async delete(keys) {
+      for (const key of keys) objects.delete(key);
     },
   };
 }
@@ -120,6 +134,12 @@ export async function appendHistory(ctx: AppContext, row: ThreadRow, events: rea
   if (updated) return { storedSeq: updated.historySeq };
   const [current] = await ctx.db.select({ historySeq: threads.historySeq }).from(threads).where(eq(threads.id, row.id));
   return { storedSeq: current?.historySeq ?? row.historySeq };
+}
+
+/** Delete everything stored for a thread. */
+export async function deleteHistory(ctx: AppContext, threadId: string): Promise<void> {
+  if (!ctx.history) return;
+  await ctx.history.delete(await ctx.history.list(prefixFor(threadId)));
 }
 
 /** Stored history after `after`, oldest first, at most `limit` events. */

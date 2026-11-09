@@ -14,6 +14,7 @@ import openNext from "./.open-next/worker.js";
 import { createWorkersContext } from "./src/lib/context.ts";
 import { closeInactiveThreads, sweepRunningSandboxes } from "./src/lib/threads.ts";
 import { runPluginSchedule } from "./src/lib/plugin-schedule.ts";
+import { pruneOldRecords } from "./src/lib/retention.ts";
 import { runDueAutomations } from "./src/lib/automations.ts";
 import { bridgePath, type DurableObjectNamespaceLike } from "./src/lib/phone-bridge.ts";
 
@@ -66,6 +67,8 @@ export default {
         const closed = await closeInactiveThreads(app).catch(err => (console.error("[lemonlime] auto-delete failed:", err), null));
         if (closed && (closed.closed.length || closed.errors.length)) console.log("[lemonlime] auto-delete:", closed);
         await runPluginSchedule(app);
+        // Expired sessions, sign-in codes, rate-limit counters and old invitations.
+        await pruneOldRecords(app).catch(err => console.error("[lemonlime] cleanup failed:", err));
       })().catch(err => {
         // A rejected waitUntil promise is dropped without a trace; say why the sweep didn't run.
         console.error("[lemonlime] sweep failed:", err);

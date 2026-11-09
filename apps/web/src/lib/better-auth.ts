@@ -11,6 +11,15 @@ import { hit, LIMITS } from "./rate-limit.ts";
 export const SIGN_IN_CODE_LENGTH = 6;
 export const SIGN_IN_CODE_TTL_SECONDS = 10 * 60;
 
+/** What a stored sign-in account keeps of the provider's tokens: nothing. */
+export const FORGET_TOKENS = {
+  accessToken: null,
+  refreshToken: null,
+  idToken: null,
+  accessTokenExpiresAt: null,
+  refreshTokenExpiresAt: null,
+} as const;
+
 export function githubEnabled(vars: AppContext["vars"]): boolean {
   return Boolean(vars.GITHUB_CLIENT_ID && vars.GITHUB_CLIENT_SECRET);
 }
@@ -83,6 +92,12 @@ export function createAuth(ctx: AppContext) {
       }),
     ],
     databaseHooks: {
+      // GitHub only proves who someone is; LemonLime never calls GitHub with their sign-in
+      // token (repositories go through the GitHub App), so the tokens are never kept.
+      account: {
+        create: { before: async data => ({ data: { ...data, ...FORGET_TOKENS } }) },
+        update: { before: async data => ({ data: { ...data, ...FORGET_TOKENS } }) },
+      },
       user: {
         create: {
           async after(created) {

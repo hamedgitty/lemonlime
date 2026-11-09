@@ -36,8 +36,8 @@ describe("secrets", () => {
     const [row] = await db.select().from(secrets).where(eq(secrets.workspaceId, alice.workspaceId));
     expect(row!.ciphertext).not.toContain("second");
     await expect(setSecret(ctx, alice.userId, alice.workspaceId, "bad name", "x")).rejects.toMatchObject({ status: 400 });
-    expect(await deleteSecret(ctx, alice.workspaceId, "NPM_TOKEN")).toBe(true);
-    expect(await deleteSecret(ctx, alice.workspaceId, "NPM_TOKEN")).toBe(false);
+    expect(await deleteSecret(ctx, alice.userId, alice.workspaceId, "NPM_TOKEN")).toBe(true);
+    expect(await deleteSecret(ctx, alice.userId, alice.workspaceId, "NPM_TOKEN")).toBe(false);
   });
 
   it("are given to new sandboxes, marked for redaction, and never to other workspaces", async () => {

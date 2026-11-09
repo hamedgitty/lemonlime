@@ -522,6 +522,28 @@ A plugin can also listen for `events`: `onUserCreated` after someone's first sig
 `onSchedule` about once a minute with the sweep, for periodic work such as reminder
 emails. A failing listener is logged and never blocks sign-up, the thread or the sweep.
 
+Three more events are about people's data. `onWorkspaceDeleted` runs when a workspace is
+deleted (its sandboxes are already gone, its rows go once the listener returns) and
+`onUserDeleted` when an account is; both may throw to stop the deletion, for things that
+must not be left behind such as a paid subscription. `exportUserData` adds what your
+deployment keeps about a person (billing records, say) to their data export.
+
+## People's data
+
+**Settings → Your data** lets anyone download everything kept about them as one JSON file
+(account, sign-in methods, sessions, workspaces with settings, secret names, automations,
+and the threads they started with their full stored history), and delete their account.
+Deleting an account deletes every workspace only they own, with its threads, sandboxes,
+stored history, secrets and automations; they leave the team workspaces they're only in.
+Owners can delete a team workspace the same way, and a thread can be deleted for good
+from its page. All of these need a signed-in browser and typing the email or workspace
+name to confirm; personal access tokens can't delete accounts or workspaces.
+
+Some things are never kept: GitHub sign-in hands over tokens, but LemonLime never stores
+them (repositories go through the GitHub App, with tokens that last an hour). The sweep
+also deletes expired sessions and sign-in codes, rate-limit counters older than a day,
+and invitations a month after they were accepted or expired.
+
 Plugin emails can use the app's own layout: `renderEmail` from `@lemonlime/plugins`, with
 `services.emailBrand()` for this deployment's name, logo and links.
 
@@ -542,7 +564,11 @@ All bodies are JSON and validated with the schemas in `packages/protocol`.
 | `GET /api/threads/:id` | session or token | The thread, plus a fresh endpoint and token while its sandbox runs. |
 | `POST /api/threads/:id/pause` | session or token | Pause the sandbox. |
 | `POST /api/threads/:id/resume` | session or token | Resume the sandbox (402 if the usage policy declines). |
-| `DELETE /api/threads/:id` | session or token | Close the thread and delete its sandbox. |
+| `DELETE /api/threads/:id` | session or token | Close the thread and delete its sandbox. With `?forever=1`, also delete its stored history and the thread (its starter or a workspace owner). |
+| `GET /api/account/export` | session | Download everything kept about the signed-in person as JSON. |
+| `GET /api/account` | session or token | What deleting this account would delete. |
+| `DELETE /api/account` | session | Delete the account (body `{ confirm: "<email>" }`). |
+| `DELETE /api/workspaces/:id` | session | Delete a team workspace, owners only (body `{ confirm: "<name>" }`). |
 | `POST /api/runner/heartbeat` | runner token | Runner status (`RunnerHeartbeat` → `HeartbeatResponse`). |
 | `POST /api/cron/sweep` | cron secret | Pause idle and disallowed sandboxes (Node deployments). |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | session (create), session or token (list, revoke) | Personal access tokens. The raw value is returned once, on create. |

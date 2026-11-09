@@ -1,7 +1,8 @@
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { z } from "zod";
-import { json, parseBody, route } from "@/lib/http.ts";
+import { json, parseBody, requireSameSite, route } from "@/lib/http.ts";
+import { deleteThreadForever } from "@/lib/account.ts";
 import { deleteThread, getThreadRowForUser, renameThread, threadResponse } from "@/lib/threads.ts";
 
 export const dynamic = "force-dynamic";
@@ -26,9 +27,19 @@ export const PATCH = route<Context>(async (request, { params }) => {
   return json(await renameThread(ctx, user.userId, (await params).id, body.title));
 });
 
-/** Close the thread and destroy its sandbox. */
+/**
+ * Close the thread and destroy its sandbox. With `?forever=1`, also delete its stored
+ * history and the thread itself (the person who started it or a workspace owner).
+ */
 export const DELETE = route<Context>(async (request, { params }) => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  return json(await deleteThread(ctx, user.userId, (await params).id));
+  const id = (await params).id;
+  if (new URL(request.url).searchParams.get("forever") === "1") {
+    // A desktop app sends its token from its own origin; a browser session must be on this site.
+    if (user.via === "session") requireSameSite(request);
+    await deleteThreadForever(ctx, user.userId, id);
+    return json({ ok: true });
+  }
+  return json(await deleteThread(ctx, user.userId, id));
 });

@@ -19,6 +19,19 @@ export interface PluginEvents {
    * a slow hook delays the next sweep.
    */
   onSchedule?(now: number): Promise<void>;
+  /**
+   * A workspace is about to be deleted (by its owner, or with its owner's account). Its
+   * sandboxes are already gone; its rows go once this returns. Throwing stops the deletion,
+   * so use it for what must not be left behind, such as ending a paid subscription.
+   */
+  onWorkspaceDeleted?(workspace: { workspaceId: string; deletedBy: string }): Promise<void>;
+  /** An account is about to be deleted, after its workspaces. Throwing stops the deletion. */
+  onUserDeleted?(user: { userId: string; email: string | null }): Promise<void>;
+  /**
+   * Anything more the deployment keeps about this person, for their data export (for
+   * example billing records). Returned under `deployment` in the export file.
+   */
+  exportUserData?(user: { userId: string; email: string | null; workspaceIds: string[] }): Promise<Record<string, unknown>>;
 }
 
 /** A deployment's hooks. */

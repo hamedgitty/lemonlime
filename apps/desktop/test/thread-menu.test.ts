@@ -44,8 +44,10 @@ describe("thread actions menu", () => {
     const cloud = { ...base, mode: "cloud" as const };
     const flat = ids(cloud).flat();
     expect(flat).not.toContain("open-folder");
-    expect(flat).not.toContain("remove");
     expect(labels(cloud)).toContain("Move to this computer");
+    // A cloud thread is deleted for good rather than removed from this computer.
+    expect(labels(cloud)).toContain("Delete thread");
+    expect(labels(cloud)).not.toContain("Remove thread");
   });
 
   it("offers an archived thread little more than unarchiving it", () => {

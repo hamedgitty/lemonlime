@@ -34,6 +34,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <Logo />
         <h1 className="mt-10 text-3xl font-semibold">Sign in</h1>
         <p className="mt-2 text-muted">Your coding agents keep working after you close your laptop.</p>
+        {params.deleted === "1" && (
+          <p role="status" className="mt-6 rounded-lg border border-line bg-paper px-3 py-2 text-sm">
+            Your account and its data were deleted.
+          </p>
+        )}
         <LoginForm github={githubEnabled(ctx.vars)} error={error} next={next} codeLength={SIGN_IN_CODE_LENGTH} />
       </div>
     </main>

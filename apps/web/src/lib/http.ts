@@ -27,6 +27,15 @@ export async function parseBody<S extends z.ZodType>(request: Request, schema: S
   return result.data;
 }
 
+/**
+ * For changes that can't be undone: refuse requests a browser says came from another site.
+ * (The session cookie is SameSite=Lax already; this is a second lock.)
+ */
+export function requireSameSite(request: Request): void {
+  const site = request.headers.get("sec-fetch-site");
+  if (site && site !== "same-origin" && site !== "none") throw new HttpError(403, "That request came from another site.");
+}
+
 type Handler<C> = (request: Request, context: C) => Promise<Response>;
 
 /** Turn thrown HttpErrors into JSON responses and anything else into a logged 500. */

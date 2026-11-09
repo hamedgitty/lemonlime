@@ -13,6 +13,7 @@ import { MembersManager } from "./members-manager.tsx";
 import { listMembers, listWorkspaces } from "@/lib/members.ts";
 import { getWorkspaceSettings } from "@/lib/workspace-settings.ts";
 import { CloudEnvironment } from "./cloud-environment.tsx";
+import { YourData } from "./your-data.tsx";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -56,7 +57,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </dl>
       </section>
 
-      {renderSlot(billingUI.accountSection, { workspaceId })}
+      {renderSlot(billingUI.accountSection, { workspaceId, isOwner })}
 
       <section aria-labelledby="members-heading" className="card p-6">
         <h2 id="members-heading" className="text-xl font-semibold">
@@ -98,7 +99,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           Keys and tokens your agents need in cloud sandboxes, such as NPM_TOKEN. Each one is encrypted, given to new cloud threads as an environment variable,
           and removed from everything the thread records. Never paste secrets into the chat.
         </p>
-        <SecretsManager initial={secretList} />
+        <SecretsManager initial={secretList} canEdit={isOwner} />
       </section>
 
       <section aria-labelledby="tokens-heading" className="card p-6">
@@ -110,6 +111,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           token any time to sign that app out.
         </p>
         <TokensManager initial={tokens} />
+      </section>
+
+      <section aria-labelledby="data-heading" className="card p-6">
+        <h2 id="data-heading" className="text-xl font-semibold">
+          Your data
+        </h2>
+        <p className="mt-1 text-sm text-muted">Take a copy of everything kept about you, or delete it.</p>
+        <YourData email={user.email} workspace={{ id: workspaceId, name: workspace?.name ?? "Workspace", canDelete: isOwner && !workspace?.personal }} />
       </section>
     </main>
   );

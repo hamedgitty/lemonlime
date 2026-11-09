@@ -2,6 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { secrets } from "@lemonlime/db";
 import type { AppContext } from "./context.ts";
 import { HttpError } from "./errors.ts";
+import { requireOwner } from "./members.ts";
 
 /** Environment variable names a secret may use. */
 export const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
@@ -88,7 +89,9 @@ export async function listSecrets(ctx: AppContext, workspaceId: string): Promise
   return rows;
 }
 
+/** Add or replace a secret. Secrets reach every cloud sandbox in the workspace, so only owners may. */
 export async function setSecret(ctx: AppContext, userId: string, workspaceId: string, name: string, value: string): Promise<SecretSummary> {
+  await requireOwner(ctx.db, userId, workspaceId);
   const problem = validateSecretName(name);
   if (problem) throw new HttpError(400, problem);
   if (!value) throw new HttpError(400, "Enter a value.");
@@ -106,7 +109,9 @@ export async function setSecret(ctx: AppContext, userId: string, workspaceId: st
   return row!;
 }
 
-export async function deleteSecret(ctx: AppContext, workspaceId: string, name: string): Promise<boolean> {
+/** Remove a secret (owners only). */
+export async function deleteSecret(ctx: AppContext, userId: string, workspaceId: string, name: string): Promise<boolean> {
+  await requireOwner(ctx.db, userId, workspaceId);
   const rows = await ctx.db
     .delete(secrets)
     .where(and(eq(secrets.workspaceId, workspaceId), eq(secrets.name, name)))

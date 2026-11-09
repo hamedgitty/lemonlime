@@ -4,6 +4,7 @@ import { HttpError, json, route } from "@/lib/http.ts";
 import { closeInactiveThreads, sweepRunningSandboxes } from "@/lib/threads.ts";
 import { runDueAutomations } from "@/lib/automations.ts";
 import { runPluginSchedule } from "@/lib/plugin-schedule.ts";
+import { pruneOldRecords } from "@/lib/retention.ts";
 import { relayEnabled, relayRunnerCalls } from "@/lib/relay.ts";
 import { dispatchRunnerCall } from "@/lib/relay-routes.ts";
 
@@ -27,5 +28,6 @@ export const POST = route(async request => {
   // Threads idle longer than their workspace keeps them: closed, sandboxes deleted.
   const autoDelete = await closeInactiveThreads(ctx);
   await runPluginSchedule(ctx);
-  return json({ ...sweep, automations, autoDelete, ...(relay ? { relay } : {}) });
+  const pruned = await pruneOldRecords(ctx);
+  return json({ ...sweep, automations, autoDelete, pruned, ...(relay ? { relay } : {}) });
 });

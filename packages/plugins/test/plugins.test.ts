@@ -10,7 +10,7 @@ describe("defaults", () => {
   });
 
   it("render nothing", () => {
-    expect(renderSlot(defaultPlugin.billingUI.accountSection, { workspaceId: "w" })).toBeNull();
+    expect(renderSlot(defaultPlugin.billingUI.accountSection, { workspaceId: "w", isOwner: true })).toBeNull();
   });
 });
 

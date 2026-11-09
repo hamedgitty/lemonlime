@@ -15,7 +15,7 @@ const NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
  * Add, replace and remove workspace secrets. Values are typed once, sent straight to the
  * server to be encrypted, and never shown again, here or anywhere else.
  */
-export function SecretsManager({ initial }: { initial: SecretInfo[] }) {
+export function SecretsManager({ initial, canEdit }: { initial: SecretInfo[]; canEdit: boolean }) {
   const [list, setList] = useState(initial);
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
@@ -53,44 +53,47 @@ export function SecretsManager({ initial }: { initial: SecretInfo[] }) {
   const now = Date.now();
   return (
     <div className="mt-5 space-y-5">
-      <form onSubmit={save} className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] sm:items-end" autoComplete="off">
-        <div>
-          <label htmlFor="secret-name" className="label">
-            Name
-          </label>
-          <input
-            id="secret-name"
-            required
-            maxLength={64}
-            className="field font-mono"
-            placeholder="NPM_TOKEN"
-            spellCheck={false}
-            autoCapitalize="characters"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            aria-invalid={nameProblem ? true : undefined}
-            aria-describedby={nameProblem ? "secret-name-problem" : undefined}
-          />
-        </div>
-        <div>
-          <label htmlFor="secret-value" className="label">
-            Value
-          </label>
-          <input
-            id="secret-value"
-            required
-            type="password"
-            className="field font-mono"
-            autoComplete="new-password"
-            spellCheck={false}
-            value={value}
-            onChange={e => setValue(e.target.value)}
-          />
-        </div>
-        <button type="submit" className="btn-primary h-10" disabled={busy || !cleanName || !value || Boolean(nameProblem)}>
-          {busy ? "Saving..." : replacing ? "Replace" : "Add secret"}
-        </button>
-      </form>
+      {!canEdit && <p className="text-sm text-muted">Only the workspace's owners can add or remove secrets.</p>}
+      {canEdit && (
+        <form onSubmit={save} className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] sm:items-end" autoComplete="off">
+          <div>
+            <label htmlFor="secret-name" className="label">
+              Name
+            </label>
+            <input
+              id="secret-name"
+              required
+              maxLength={64}
+              className="field font-mono"
+              placeholder="NPM_TOKEN"
+              spellCheck={false}
+              autoCapitalize="characters"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              aria-invalid={nameProblem ? true : undefined}
+              aria-describedby={nameProblem ? "secret-name-problem" : undefined}
+            />
+          </div>
+          <div>
+            <label htmlFor="secret-value" className="label">
+              Value
+            </label>
+            <input
+              id="secret-value"
+              required
+              type="password"
+              className="field font-mono"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={value}
+              onChange={e => setValue(e.target.value)}
+            />
+          </div>
+          <button type="submit" className="btn-primary h-10" disabled={busy || !cleanName || !value || Boolean(nameProblem)}>
+            {busy ? "Saving..." : replacing ? "Replace" : "Add secret"}
+          </button>
+        </form>
+      )}
       {nameProblem && (
         <p id="secret-name-problem" className="text-sm text-red-800">
           {nameProblem}
@@ -116,9 +119,11 @@ export function SecretsManager({ initial }: { initial: SecretInfo[] }) {
                 <p className="truncate font-mono text-[0.9375rem]">{s.name}</p>
                 <p className="text-sm text-muted">Updated {timeAgo(s.updatedAt, now)}</p>
               </div>
-              <button type="button" className="btn-danger h-8" onClick={() => remove(s)}>
-                Delete
-              </button>
+              {canEdit && (
+                <button type="button" className="btn-danger h-8" onClick={() => remove(s)}>
+                  Delete
+                </button>
+              )}
             </li>
           ))}
         </ul>

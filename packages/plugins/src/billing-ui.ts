@@ -6,8 +6,11 @@ import type { PolicyDecision } from "./usage-policy.ts";
  * Slots are plain functions returning React nodes so they work in server and client components.
  */
 export interface BillingUI {
-  /** Extra section on the account/settings page. */
-  accountSection?: (props: { workspaceId: string }) => ReactNode;
+  /**
+   * Extra section on the account/settings page. `isOwner`: the viewer owns this workspace;
+   * keep billing details and changes to owners.
+   */
+  accountSection?: (props: { workspaceId: string; isOwner: boolean }) => ReactNode;
   /** Small badge in the app header, e.g. remaining usage. */
   headerBadge?: (props: { workspaceId: string }) => ReactNode;
   /** Shown when a UsagePolicy denies an action. Defaults to the plain reason text. */

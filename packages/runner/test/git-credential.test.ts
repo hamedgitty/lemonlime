@@ -47,6 +47,20 @@ const editing: AgentAdapter = {
   }),
 };
 
+/** An agent that commits its own work, as the bundled git skill asks agents to. */
+const committing: AgentAdapter = {
+  kind: "codex",
+  createSession: opts => ({
+    runTurn: async ctx => {
+      writeFileSync(join(opts.cwd, "LAUNCH_CHECK.md"), `${ctx.prompt}\n`);
+      execFileSync("git", ["add", "LAUNCH_CHECK.md"], { cwd: opts.cwd });
+      execFileSync("git", ["-c", "user.name=agent", "-c", "user.email=agent@example.test", "commit", "-qm", "Add launch check note"], { cwd: opts.cwd });
+    },
+    saveState: () => ({}),
+    dispose: async () => {},
+  }),
+};
+
 describe("git credential helper", () => {
   it("hands git a fresh token from the control plane, and nothing when there is none", async () => {
     const secret = "thread-secret-for-credential-tests";
@@ -126,6 +140,37 @@ describe("pushing the thread branch", () => {
     const notice = runner.store.since(0).find(e => e.type === "notice" && e.code === "push_failed");
     expect(notice).toBeDefined();
     expect(git(work, "log", "-1", "--format=%s")).toBe("second");
+  });
+
+  it("also pushes a turn where the agent committed its work itself", async () => {
+    const origin = temp();
+    git(origin, "init", "-q", "--bare", "-b", "main");
+    const seed = temp();
+    git(seed, "init", "-q", "-b", "main");
+    writeFileSync(join(seed, "README.md"), "hi\n");
+    git(seed, "add", "-A");
+    git(seed, "commit", "-qm", "init");
+    git(seed, "push", "-q", origin, "main");
+
+    const runner = new ThreadRunner({
+      thread: thread("push-thread-2"),
+      workdir: join(temp(), "w"),
+      dataDir: null,
+      adapter: committing,
+      session: { autonomy: "full" },
+      repoUrl: origin,
+      pushBranch: true,
+      credentialHelper: credentialHelperCommand(),
+      bundledSkills: false,
+    });
+    await runner.init();
+    cleanups.push(() => runner.close());
+    runner.sendMessage("Cloud launch check");
+    await runner.settled();
+    // Nothing was left uncommitted, but the agent's own commit reaches GitHub.
+    expect(git(origin, "log", "-1", "--format=%s", "agent/push-thread-2")).toBe("Add launch check note");
+    expect(git(origin, "show", "agent/push-thread-2:LAUNCH_CHECK.md")).toBe("Cloud launch check");
+    expect(runner.store.since(0).some(e => e.type === "notice" && e.code === "push_failed")).toBe(false);
   });
 });
 

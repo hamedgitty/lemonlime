@@ -1804,8 +1804,13 @@ export class ThreadRunner {
     if (!this.git) return;
     const changes = await this.git.collectChanges();
     for (const c of changes) this.store.append({ type: "file_diff", path: c.path, change: c.change, diff: c.diff, truncated: c.truncated });
+    // The agent may have committed its work itself (the bundled git skill asks it to), which
+    // leaves nothing uncommitted but moves the branch on: that needs pushing too.
+    const head = await this.git.head();
+    const agentCommitted = head !== null && head !== this.headCommit;
     if (changes.length) this.headCommit = (await this.git.commit(commitSubject(prompt))) ?? this.headCommit;
-    if (this.opts.pushBranch && (changes.length || this.unpushed)) {
+    else if (agentCommitted) this.headCommit = head;
+    if (this.opts.pushBranch && (changes.length || agentCommitted || this.unpushed)) {
       const problem = await this.git.push(this.opts.thread.branch, { force: this.rewound });
       if (!problem) this.rewound = false;
       this.unpushed = problem !== null;

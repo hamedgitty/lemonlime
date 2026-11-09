@@ -22,6 +22,8 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
+# The window opens where it was left, at the size it had.
+tauri-plugin-window-state = "2"
 # Terminals on this computer (the side panel), outside any thread.
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }

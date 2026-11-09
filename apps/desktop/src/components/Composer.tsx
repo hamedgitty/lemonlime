@@ -41,7 +41,8 @@ const MENU_WIDTH = 380;
 export const Composer = forwardRef<
   ComposerHandle,
   {
-    onSend: (text: string) => void;
+    /** Send the message. Return false when it wasn't taken: the text stays in the box. */
+    onSend: (text: string) => boolean;
     onInterrupt?: () => void;
     /** The agent is in the middle of a turn: show the stop button. */
     working?: boolean;
@@ -62,7 +63,7 @@ export const Composer = forwardRef<
     /** Called as the text changes. */
     onTextChange?: (text: string) => void;
     /** ⌥Enter: hand the message over to be sent later (e.g. once subagents finish). */
-    onHold?: (text: string) => void;
+    onHold?: (text: string) => boolean;
   }
 >(function Composer(
   {
@@ -242,11 +243,12 @@ export const Composer = forwardRef<
   };
 
   const canSend = !disabled && !busy && text.trim().length > 0;
-  const submit = (send: (text: string) => void = onSend) => {
+  const submit = (send: (text: string) => boolean = onSend) => {
     if (!canSend) return;
+    // A message that wasn't taken (still uploading, not connected) stays as typed.
+    if (!send(text.trim())) return ref.current?.focus();
     // Sending ends dictation, so a late phrase doesn't start the next message.
     if (dictation.listening) dictation.stop();
-    send(text.trim());
     setText("");
     historyState.current = HISTORY_IDLE;
     setTrigger(null);

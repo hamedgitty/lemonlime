@@ -39,6 +39,7 @@ import { latestSubagents } from "../lib/steps.ts";
 import { editSendPlan, forkNote, forkTitle, rewindLanded, startEdit, type EditDraft } from "../lib/messageActions.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
+import { sendBlocker } from "../lib/composerSend.ts";
 import { useComposerSources } from "../lib/composerData.ts";
 import { uniquePrompts } from "../lib/promptHistory.ts";
 import { COMPUTER_LEVELS, type ComputerLevel } from "../lib/computer.ts";
@@ -470,22 +471,27 @@ function ThreadSessionView({
     if (better) onAutoTitle(better);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userTexts.length, summary.title]);
-  const sendWithFiles = (text: string) => {
-    if (files.uploading) {
-      setActionError("Wait for the attached files to finish uploading.");
-      composerRef.current?.fill(text);
-      return;
+  /** Sends the message with its files; false (the text stays in the composer) when it can't go. */
+  const sendWithFiles = (text: string): boolean => {
+    const blocked = sendBlocker({ uploading: files.uploading });
+    if (blocked) {
+      setActionError(blocked);
+      return false;
     }
-    setActionError(null);
-    saveDraft(summary.id, "");
     const plan = editSendPlan(editing, session.state === "live");
-    setEditing(null);
     if ("rewindTo" in plan) {
       // Go back to the edited message first; the new text goes once the runner has.
       setAfterRewind({ seq: plan.rewindTo, since: session.events.at(-1)?.seq ?? 0, text, files: files.ready });
       session.rewind(plan.rewindTo, false);
-    } else session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" });
+    } else if (!session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" })) {
+      setActionError("Couldn't send that yet: the thread isn't connected. Your message is still in the box.");
+      return false;
+    }
+    setActionError(null);
+    saveDraft(summary.id, "");
+    setEditing(null);
     files.clear();
+    return true;
   };
   // ── Editing a sent message ─────────────────────────────
   const [editing, setEditing] = useState<EditDraft | null>(null);
@@ -576,10 +582,11 @@ function ThreadSessionView({
   }, [workKey]);
   const [held, setHeld] = useState<HeldMessage[]>([]);
   const settled = childrenSettled(work.children);
-  const hold = (text: string) => {
+  const hold = (text: string): boolean => {
     if (settled) return sendWithFiles(text);
     saveDraft(summary.id, "");
     setHeld(h => [...h, { id: crypto.randomUUID(), text }]);
+    return true;
   };
   const sendHeld = (id: string) => {
     const m = held.find(h => h.id === id);

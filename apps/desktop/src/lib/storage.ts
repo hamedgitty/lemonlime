@@ -130,6 +130,22 @@ export function saveEvents(threadId: string, events: readonly ThreadEvent[]): vo
   }
 }
 
+/**
+ * What was said in a thread (your messages and the agent's finished replies), from the
+ * cached history, read without checking each event: quick enough to search every thread.
+ */
+export function loadMessageTexts(threadId: string): { seq: number; from: "you" | "agent"; text: string }[] {
+  const raw = read(eventsKey(threadId));
+  if (!Array.isArray(raw)) return [];
+  const out: { seq: number; from: "you" | "agent"; text: string }[] = [];
+  for (const e of raw as { type?: unknown; text?: unknown; seq?: unknown; partial?: unknown }[]) {
+    if (!e || typeof e.text !== "string" || typeof e.seq !== "number" || !e.text.trim()) continue;
+    if (e.type === "user_message") out.push({ seq: e.seq, from: "you", text: e.text });
+    else if (e.type === "agent_message" && e.partial !== true) out.push({ seq: e.seq, from: "agent", text: e.text });
+  }
+  return out.sort((a, b) => a.seq - b.seq);
+}
+
 export function forgetEvents(threadId: string): void {
   try {
     localStorage.removeItem(eventsKey(threadId));
@@ -162,6 +178,11 @@ export const UiPrefs = z.object({
   pinned: z.array(z.string()).default([]),
   /** Archived threads, by id, with when (ISO). Out of the list; local ones are cleaned up after 21 days. */
   archived: z.record(z.string(), z.string()).default({}),
+  /**
+   * Snoozed threads, by id, with when each comes back (ISO). Out of the list until then, or
+   * until the agent needs you or its turn fails (sidebarGroups.ts `wakeSnoozes`).
+   */
+  snoozed: z.record(z.string(), z.string()).catch({}).default({}),
   /** The archive explanation has been shown once. */
   archivedHint: z.boolean().default(false),
   /** What each cloud thread's agent may do on this computer (missing = off). */
@@ -181,8 +202,6 @@ export const UiPrefs = z.object({
   rightPanel: z.boolean().default(false),
   /** Which side the side panel (terminals, browser) sits on. */
   panelSide: z.enum(["left", "right"]).default("right"),
-  /** Light, dark, or follow the system. */
-  theme: z.enum(["light", "dark", "system"]).default("light"),
   /** Open a thread as soon as it's created. */
   navigateOnCreate: z.boolean().default(true),
   /** What Enter does while the agent is working: queue the message for after the turn, or steer (stop and send now). */

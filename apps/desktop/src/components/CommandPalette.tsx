@@ -14,7 +14,8 @@ import {
   LayoutGrid,
   Maximize2,
   MessageSquare,
-  Moon,
+  MessageSquareText,
+  SlidersHorizontal,
   PanelLeft,
   PanelRight,
   Pin,
@@ -22,8 +23,6 @@ import {
   Search,
   Settings as SettingsIcon,
   SquarePen,
-  Sun,
-  SunMoon,
 } from "lucide-react";
 import { rankPalette, type PaletteItem, type PaletteSection } from "../lib/palette.ts";
 import { IS_MAC, keyCaps, type ShortcutId } from "../lib/shortcuts.ts";
@@ -31,7 +30,13 @@ import { Highlighted } from "./Highlighted.tsx";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 
-const SECTION_LABEL: Record<PaletteSection, string> = { recent: "Recent", threads: "Threads", projects: "Projects", commands: "Commands" };
+const SECTION_LABEL: Record<PaletteSection, string> = {
+  recent: "Recent",
+  threads: "Threads",
+  projects: "Projects",
+  commands: "Commands",
+  messages: "In messages",
+};
 
 const COMMAND_ICONS: Record<string, typeof Command> = {
   "new-thread": SquarePen,
@@ -51,14 +56,14 @@ const COMMAND_ICONS: Record<string, typeof Command> = {
   find: Search,
   "split-right": Columns2,
   "maximise-pane": Maximize2,
-  "theme:light": Sun,
-  "theme:dark": Moon,
-  "theme:system": SunMoon,
   "add-project": FolderPlus,
 };
 
 function iconFor(item: PaletteItem) {
   if (item.section === "threads") return MessageSquare;
+  if (item.section === "messages") return MessageSquareText;
+  if (item.id.startsWith("new-in:")) return SquarePen;
+  if (item.id.startsWith("setting:")) return SlidersHorizontal;
   if (item.section === "projects") return FolderGit2;
   const id = item.id.replace(/^command:/, "");
   return COMMAND_ICONS[id] ?? (id.startsWith("settings:") ? SettingsIcon : id.startsWith("focus-pane-") ? LayoutGrid : Command);
@@ -75,6 +80,7 @@ export function CommandPalette({
   recents,
   onRun,
   keysOf,
+  searchMessages,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -85,6 +91,8 @@ export function CommandPalette({
   onRun: (item: PaletteItem, opts: { split?: boolean }) => void;
   /** The keys a shortcut has now ("" when turned off). */
   keysOf: (id: ShortcutId) => string;
+  /** Messages in threads that match what's typed (the "In messages" group). */
+  searchMessages?: (query: string) => PaletteItem[];
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -99,7 +107,11 @@ export function CommandPalette({
     setActive(0);
   }, [open]);
 
-  const groups = useMemo(() => (open ? rankPalette(items, query, recents) : []), [open, items, query, recents]);
+  const groups = useMemo(() => {
+    if (!open) return [];
+    const found = searchMessages && !query.trimStart().startsWith(">") ? searchMessages(query.trim()) : [];
+    return rankPalette(found.length ? [...items, ...found] : items, query, recents);
+  }, [open, items, query, recents, searchMessages]);
   const flat = useMemo(() => groups.flatMap(g => g.items.map(r => r.item)), [groups]);
   useEffect(() => setActive(0), [query]);
   const current = Math.min(active, Math.max(0, flat.length - 1));
@@ -154,8 +166,8 @@ export function CommandPalette({
               value={query}
               onChange={e => setQuery(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Search threads and projects, or type > for commands"
-              aria-label="Search threads, projects and commands"
+              placeholder="Search threads, messages and settings, or type > for commands"
+              aria-label="Search threads, projects, messages, settings and commands"
               role="combobox"
               aria-autocomplete="list"
               aria-expanded={flat.length > 0}
@@ -188,11 +200,24 @@ export function CommandPalette({
                       className={cx("flex h-9 cursor-default items-center gap-3 rounded-lg px-2.5 text-[14px]", i === current && "bg-cream-deep")}
                     >
                       <Icon aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-                      <span className="min-w-0 shrink truncate">
-                        <Highlighted text={item.label} positions={match.positions} />
-                      </span>
-                      {item.detail && <span className="min-w-0 flex-1 truncate text-[13px] text-ink-faint">{item.detail}</span>}
-                      {!item.detail && <span className="flex-1" />}
+                      {item.section === "messages" ? (
+                        <>
+                          {/* What was said leads; whose thread it was follows, shorter. */}
+                          <span className="min-w-0 flex-1 truncate">
+                            <Highlighted text={item.label} positions={match.positions} />
+                          </span>
+                          {item.detail && <span className="max-w-[38%] min-w-0 shrink-0 truncate text-[13px] text-ink-faint">{item.detail}</span>}
+                        </>
+                      ) : (
+                        <>
+                          <span className="min-w-0 shrink truncate">
+                            <Highlighted text={item.label} positions={match.positions} />
+                          </span>
+                          {item.detail && <span className="min-w-0 flex-1 truncate text-[13px] text-ink-faint">{item.detail}</span>}
+                          {!item.detail && <span className="flex-1" />}
+                        </>
+                      )}
+                      {item.trailing && <span className="shrink-0 text-[13px] text-ink-faint tabular-nums">{item.trailing}</span>}
                       {keys && (
                         <span className="flex shrink-0 gap-1">
                           {keyCaps(keys).map(k => (

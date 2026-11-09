@@ -30,7 +30,9 @@ export function UpdatesPage({ ctx }: { ctx: SettingsCtx }) {
     if (!update) return;
     setState("installing");
     try {
-      await update.install(setProgress);
+      await update.install({ onProgress: setProgress });
+      // Still here: the restart was put off while an agent works. The update waits for it.
+      setState("available");
     } catch {
       setState("error");
     }

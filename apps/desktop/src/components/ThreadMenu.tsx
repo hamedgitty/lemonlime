@@ -1,9 +1,12 @@
 import { Fragment, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
+  AlarmClockOff,
   Archive,
   ArchiveRestore,
   Columns2,
   Copy,
+  CalendarClock,
+  Clock,
   CloudUpload,
   GitBranch,
   FolderOpen,
@@ -18,8 +21,8 @@ import {
   Shrink,
   Trash2,
 } from "lucide-react";
-import { threadMenuGroups, type ThreadMenuEntry, type ThreadMenuId, type ThreadMenuInput } from "../lib/threadMenu.ts";
-import { ContextMenu, Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
+import { snoozePresets, threadMenuGroups, type ThreadMenuEntry, type ThreadMenuId, type ThreadMenuInput } from "../lib/threadMenu.ts";
+import { ContextMenu, Menu, MenuItem, MenuSeparator, SubMenu } from "./primitives.tsx";
 import { toast } from "./Toaster.tsx";
 import { cx } from "./ui.tsx";
 
@@ -29,6 +32,8 @@ export interface ThreadMenuHandlers {
   rename?: () => void;
   pin?: (pin: boolean) => void;
   unread?: (unread: boolean) => void;
+  /** Snooze until a time, ask for one ("custom"), or end the snooze (null). */
+  snooze?: (until: Date | "custom" | null) => void;
   split?: () => void;
   fork?: () => void;
   openFolder?: () => void;
@@ -55,6 +60,7 @@ const HANDLER: Record<Exclude<ThreadMenuId, "copy-name" | "copy-branch">, keyof 
   rename: "rename",
   pin: "pin",
   unread: "unread",
+  snooze: "snooze",
   split: "split",
   fork: "fork",
   "open-folder": "openFolder",
@@ -73,6 +79,8 @@ function icon(e: ThreadMenuEntry, s: ThreadMenuState): ReactNode {
       return s.pinned ? <PinOff /> : <Pin />;
     case "unread":
       return s.unread ? <MailCheck /> : <MailOpen />;
+    case "snooze":
+      return s.snoozed ? <AlarmClockOff /> : <Clock />;
     case "split":
       return <Columns2 />;
     case "fork":
@@ -114,6 +122,7 @@ export function ThreadMenuItems({ thread, state, actions, extra }: ThreadMenuPro
     if (id === "copy-branch") return copy(thread.branch, "branch name");
     if (id === "pin") return actions.pin?.(!state.pinned);
     if (id === "unread") return actions.unread?.(!state.unread);
+    if (id === "snooze") return actions.snooze?.(null);
     if (id === "archive") return actions.archive?.(!state.archived);
     (actions[HANDLER[id]] as (() => void) | undefined)?.();
   };
@@ -130,11 +139,15 @@ export function ThreadMenuItems({ thread, state, actions, extra }: ThreadMenuPro
             </>
           )}
           {gi > 0 && <MenuSeparator />}
-          {g.map(e => (
-            <MenuItem key={e.id} icon={icon(e, state)} disabled={e.disabled} hint={e.hint} danger={e.danger} onSelect={() => run(e.id)}>
-              {e.label}
-            </MenuItem>
-          ))}
+          {g.map(e =>
+            e.id === "snooze" && !state.snoozed && !e.disabled ? (
+              <SnoozeMenu key={e.id} label={e.label} onPick={until => actions.snooze?.(until)} />
+            ) : (
+              <MenuItem key={e.id} icon={icon(e, state)} disabled={e.disabled} hint={e.hint} danger={e.danger} onSelect={() => run(e.id)}>
+                {e.label}
+              </MenuItem>
+            ),
+          )}
         </Fragment>
       ))}
       {at === groups.length && extra && (
@@ -144,6 +157,24 @@ export function ThreadMenuItems({ thread, state, actions, extra }: ThreadMenuPro
         </>
       )}
     </>
+  );
+}
+
+/** "Snooze ›": the quick times, each with when it ends, then a time of your own. */
+function SnoozeMenu({ label, onPick }: { label: string; onPick: (until: Date | "custom") => void }) {
+  const now = new Date();
+  return (
+    <SubMenu icon={<Clock />} label={label}>
+      {snoozePresets(now).map(p => (
+        <MenuItem key={p.id} onSelect={() => onPick(p.until)} hint={p.hint}>
+          {p.label}
+        </MenuItem>
+      ))}
+      <MenuSeparator />
+      <MenuItem icon={<CalendarClock />} onSelect={() => onPick("custom")}>
+        Pick a date and time…
+      </MenuItem>
+    </SubMenu>
   );
 }
 
@@ -171,7 +202,7 @@ export interface AppThreadMenu {
   unread: boolean;
   inSplit?: boolean;
   editor?: boolean;
-  actions: Pick<ThreadMenuHandlers, "pin" | "unread" | "split" | "fork" | "archive">;
+  actions: Pick<ThreadMenuHandlers, "pin" | "unread" | "snooze" | "split" | "fork" | "archive">;
   onRename?: (title: string) => void;
 }
 

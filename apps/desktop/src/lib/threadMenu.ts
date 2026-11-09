@@ -1,4 +1,5 @@
 import type { ThreadEvent } from "@lemonlime/protocol";
+import type { KnownPullRequest } from "./threadCard.ts";
 
 /**
  * The one menu of things you can do to a thread. The same items, in the same order, show
@@ -7,13 +8,28 @@ import type { ThreadEvent } from "@lemonlime/protocol";
  */
 
 export type ThreadMenuId =
-  "rename" | "pin" | "unread" | "split" | "fork" | "copy-name" | "copy-branch" | "open-folder" | "pull-request" | "compact" | "move" | "archive" | "remove";
+  | "rename"
+  | "pin"
+  | "unread"
+  | "snooze"
+  | "split"
+  | "fork"
+  | "copy-name"
+  | "copy-branch"
+  | "open-folder"
+  | "pull-request"
+  | "compact"
+  | "move"
+  | "archive"
+  | "remove";
 
 export interface ThreadMenuInput {
   mode: "local" | "cloud";
   pinned: boolean;
   unread: boolean;
   archived: boolean;
+  /** Snoozed: the item takes it out of snooze instead. */
+  snoozed?: boolean;
   /** Already showing in the split view. */
   inSplit?: boolean;
   /** The actions this place can do (a handler is there for them). Copying is always possible. */
@@ -48,6 +64,7 @@ export function threadMenuGroups(i: ThreadMenuInput): ThreadMenuEntry[][] {
       has("rename") && entry("rename", "Rename"),
       live && has("pin") && entry("pin", i.pinned ? "Unpin" : "Pin to top"),
       live && has("unread") && entry("unread", i.unread ? "Mark as read" : "Mark as unread"),
+      live && has("snooze") && entry("snooze", i.snoozed ? "Unsnooze" : "Snooze"),
     ],
     [live && has("split") && !i.inSplit && entry("split", "Open in split"), has("fork") && entry("fork", "Fork into new thread")],
     [entry("copy-name", "Copy name"), entry("copy-branch", "Copy branch name")],
@@ -65,6 +82,60 @@ export function threadMenuGroups(i: ThreadMenuInput): ThreadMenuEntry[][] {
     ],
   ];
   return groups.map(g => g.filter((e): e is ThreadMenuEntry => e !== false)).filter(g => g.length > 0);
+}
+
+// ── Snooze ─────────────────────────────────────────────────
+
+export interface SnoozePreset {
+  id: "hour" | "evening" | "tomorrow" | "next-week";
+  label: string;
+  until: Date;
+  /** When it ends, beside the label: a time, or for next week its day and time. */
+  hint: string;
+}
+
+const clock = (d: Date) => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+
+const at = (base: Date, days: number, hour: number) => {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  d.setHours(hour, 0, 0, 0);
+  return d;
+};
+
+/**
+ * The snooze menu's quick choices, in local time: in an hour, this evening (18:00, while
+ * that's more than an hour away), tomorrow at 9:00, and next week (Monday at 9:00; left out
+ * on a Sunday, when that's tomorrow).
+ */
+export function snoozePresets(now: Date): SnoozePreset[] {
+  const hour = new Date(now.getTime() + 3_600_000);
+  const out: SnoozePreset[] = [{ id: "hour", label: "In 1 hour", until: hour, hint: clock(hour) }];
+  const evening = at(now, 0, 18);
+  if (evening.getTime() - now.getTime() > 3_600_000) out.push({ id: "evening", label: "This evening", until: evening, hint: clock(evening) });
+  const tomorrow = at(now, 1, 9);
+  out.push({ id: "tomorrow", label: "Tomorrow", until: tomorrow, hint: clock(tomorrow) });
+  // Days to the next Monday (1 to 7, never today).
+  const toMonday = (8 - now.getDay()) % 7 || 7;
+  const monday = at(now, toMonday, 9);
+  if (monday.getTime() !== tomorrow.getTime())
+    out.push({ id: "next-week", label: "Next week", until: monday, hint: `${monday.toLocaleDateString(undefined, { weekday: "short" })} ${clock(monday)}` });
+  return out;
+}
+
+/**
+ * When a snooze ends, said briefly: "18:00", "tomorrow, 9:00", "Mon 10 Nov, 9:00". `short`
+ * fits a sidebar row: the time today, else "Tomorrow" or the day ("Mon", "10 Nov").
+ */
+export function snoozeWhen(until: Date, now: Date, short = false): string {
+  const time = clock(until);
+  const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((day(until) - day(now)) / 86_400_000);
+  if (days <= 0) return time;
+  if (short) return days === 1 ? "Tomorrow" : until.toLocaleDateString(undefined, days < 7 ? { weekday: "short" } : { day: "numeric", month: "short" });
+  if (days === 1) return `tomorrow, ${time}`;
+  const date = until.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+  return `${date}, ${time}`;
 }
 
 // ── Fork into a new thread ─────────────────────────────────
@@ -104,16 +175,25 @@ function quote(s: string): string {
  * too. Kept for this run of the app only.
  */
 const pullRequests = new Map<string, string>();
+const pullRequestInfo = new Map<string, KnownPullRequest>();
 const listeners = new Set<() => void>();
 let snapshot: ReadonlyMap<string, string> = new Map();
 
-export function rememberPullRequest(threadId: string, url: string | null): void {
-  if ((pullRequests.get(threadId) ?? null) === url) return;
+/** A thread's pull request link, and (for the sidebar's hover card) its number and state. */
+export function rememberPullRequest(threadId: string, url: string | null, info?: KnownPullRequest): void {
+  const before = pullRequestInfo.get(threadId);
+  const sameInfo = before?.number === info?.number && before?.state === info?.state && before?.draft === info?.draft;
+  if ((pullRequests.get(threadId) ?? null) === url && sameInfo) return;
   if (url) pullRequests.set(threadId, url);
   else pullRequests.delete(threadId);
+  if (url && info) pullRequestInfo.set(threadId, info);
+  else pullRequestInfo.delete(threadId);
   snapshot = new Map(pullRequests);
   for (const l of listeners) l();
 }
+
+/** What's known of a thread's pull request beyond its link. */
+export const knownPullRequestInfo = (threadId: string): KnownPullRequest | null => pullRequestInfo.get(threadId) ?? null;
 
 export function subscribePullRequests(listener: () => void): () => void {
   listeners.add(listener);

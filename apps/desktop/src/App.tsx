@@ -10,12 +10,16 @@ import { PluginsView } from "./components/PluginsView.tsx";
 import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
 import { OPEN_IN_PANEL_EVENT } from "./components/AgentMessage.tsx";
 import { ShortcutHints } from "./components/ShortcutHints.tsx";
+import { ReleaseNotes } from "./components/ReleaseNotes.tsx";
+import { LiveAnnouncer, announce } from "./components/Announcer.tsx";
+import { announcement } from "./lib/announce.ts";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
-import { OPEN_SETTINGS_EVENT, openAgentsSettings } from "./lib/settingsNav.ts";
+import { OPEN_SETTINGS_EVENT, openAgentsSettings, requestSettingTarget, requestSettingsTab } from "./lib/settingsNav.ts";
 import { forkPrompt, removeThreadText, requestRevealChild } from "./lib/threadMenu.ts";
-import type { GroupProject, ThreadGroup } from "./lib/sidebarGroups.ts";
+import { newlyNeedingYou, nextWake, wakeSnoozes, type GroupProject, type ThreadGroup } from "./lib/sidebarGroups.ts";
+import { SnoozeDialog } from "./components/SnoozeDialog.tsx";
 import { useAgentUsage } from "./lib/agentUsage.ts";
 import { loadMachines } from "./lib/machines.ts";
 import { SidebarUsageCard } from "./components/SidebarUsage.tsx";
@@ -26,15 +30,29 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { NotificationCenter } from "./components/NotificationCenter.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
-import { Toaster, toast } from "./components/Toaster.tsx";
+import { Toaster, connectToastThreads, syncThreadToasts, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
 import { settled, withChildren } from "./lib/children.ts";
 import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
 import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
-import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
+import { AGENT_LABELS, relativeTime, repoName, titleFromPrompt } from "./lib/format.ts";
 import { COMPOSER_SHORTCUTS, keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
-import { appCommands, loadRecents, rememberPick, type PaletteItem } from "./lib/palette.ts";
-import { detectAgents, installAgent, localRunnerStatuses, notify, openFolder, setKeepAwake, threadFolder, type AgentInstall } from "./lib/system.ts";
+import { appCommands, loadRecents, rememberPick, searchMessages, type MessageText, type PaletteItem } from "./lib/palette.ts";
+import { SETTINGS_INDEX, settingAnchor } from "./lib/settingsIndex.ts";
+import {
+  closeThreadNotifications,
+  detectAgents,
+  focusAppWindow,
+  installAgent,
+  localRunnerStatuses,
+  notify,
+  onNotificationClick,
+  openFolder,
+  setKeepAwake,
+  threadFolder,
+  type AgentInstall,
+  type NotifyTarget,
+} from "./lib/system.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -50,14 +68,16 @@ import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
 import { setAccountsRunnerPath, switchThreadsAccount } from "./lib/accounts.ts";
 import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
-import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
+import { RESTART_WHILE_WORKING, checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
+import { isTextField, isTypingKey, isUndoKey, liveUndo, popUndo, pushUndo, takeUndo, undoTakesOver, type UndoEntry } from "./lib/undo.ts";
 import { queueFirstMessage } from "./lib/firstMessage.ts";
 import {
   draftThreadIds,
   forgetEvents,
   loadEvents,
   loadLocalThreads,
+  loadMessageTexts,
   loadSettings,
   loadSplitLayout,
   loadUiPrefs,
@@ -211,13 +231,19 @@ export function App() {
     let off: () => void = () => undefined;
     void (async () => {
       const [{ listen }, { invoke }] = await Promise.all([import("@tauri-apps/api/event"), import("@tauri-apps/api/core")]);
-      off = await listen("confirm-quit", async () => {
+      // A restart into an update asks the same way (see request_restart in lib.rs).
+      off = await listen<{ restart?: boolean } | null>("confirm-quit", async e => {
+        const restart = Boolean(e.payload?.restart);
         if (
           workingRef.current &&
-          !(await confirmAction("An agent on this computer is still working. Quit anyway? It stops now, and what it changed so far stays on its branch."))
+          !(await confirmAction(
+            restart
+              ? RESTART_WHILE_WORKING
+              : "An agent on this computer is still working. Quit anyway? It stops now, and what it changed so far stays on its branch.",
+          ))
         )
           return;
-        await invoke("confirm_quit");
+        await invoke("confirm_quit", { restart });
       });
     })();
     return () => off();
@@ -226,6 +252,19 @@ export function App() {
   // A newer signed version: offer it quietly, never interrupt.
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [installing, setInstalling] = useState(false);
+  const restartToUpdate = async (u: AvailableUpdate) => {
+    // Asked before the download, so a "no" costs nothing; agents keep working either way.
+    if (workingRef.current && !(await confirmAction(RESTART_WHILE_WORKING))) return;
+    setInstalling(true);
+    try {
+      await u.install({ confirmed: true });
+    } catch (err) {
+      console.warn("The update didn't install", err);
+      toast({ title: "The update didn't install", description: "Try again in a little while.", tone: "error" });
+    } finally {
+      setInstalling(false);
+    }
+  };
   useEffect(() => {
     const t = setTimeout(() => void checkForUpdate().then(setUpdate), 10_000);
     const daily = setInterval(() => void checkForUpdate().then(setUpdate), 6 * 60 * 60_000);
@@ -264,24 +303,87 @@ export function App() {
     });
   }, []);
 
+  // ── ⌘Z: undo the sidebar's last archive, pin or mark as unread ──
+  const undoStack = useRef<UndoEntry[]>([]);
+  const undoSeq = useRef(0);
+  const typedSinceAction = useRef(false);
+  // The newest action, said in the sidebar's footer with its Undo.
+  const [undoNotice, setUndoNotice] = useState<UndoEntry | null>(null);
+  const runUndo = useCallback((entry: UndoEntry | null, rest: UndoEntry[]) => {
+    undoStack.current = rest;
+    if (!entry) return;
+    entry.undo();
+    setUndoNotice(n => (n?.id === entry.id ? null : n));
+  }, []);
+  const undoById = useCallback(
+    (id: number) => {
+      const { entry, stack } = takeUndo(undoStack.current, id);
+      runUndo(entry, stack);
+    },
+    [runUndo],
+  );
+  const remember = useCallback(
+    (label: string, undo: () => void, detail?: string) => {
+      const entry: UndoEntry = { id: ++undoSeq.current, label, undo, at: Date.now(), ...(detail ? { detail } : {}) };
+      undoStack.current = pushUndo(undoStack.current, entry, entry.at);
+      typedSinceAction.current = false;
+      // With no sidebar to say it in (folded away, or Settings), a toast does.
+      const p = prefsRef.current;
+      if (p.sidebarCollapsed || placeRef.current.view === "settings")
+        toast({
+          title: label,
+          ...(detail ? { description: detail } : {}),
+          action: { label: "Undo", onClick: () => undoById(entry.id) },
+          ...(detail ? { timeout: 10_000 } : {}),
+        });
+      else setUndoNotice(entry);
+    },
+    [undoById],
+  );
+  useEffect(() => {
+    if (!undoNotice) return;
+    const t = setTimeout(() => setUndoNotice(n => (n?.id === undoNotice.id ? null : n)), undoNotice.detail ? 12_000 : 8_000);
+    return () => clearTimeout(t);
+  }, [undoNotice]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = isTextField(document.activeElement);
+      if (isUndoKey(e)) {
+        const now = Date.now();
+        if (!undoTakesOver({ undoable: liveUndo(undoStack.current, now).length, inTextField: inField, typedSinceAction: typedSinceAction.current })) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const { entry, stack } = popUndo(undoStack.current, now);
+        runUndo(entry, stack);
+        return;
+      }
+      if (inField && isTypingKey(e)) typedSinceAction.current = true;
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [runUndo]);
+
+  /** Pin a thread to the top (or unpin it); ⌘Z puts it back where it was. */
+  const setPinned = useCallback(
+    (t: { id: string; title: string }, pin: boolean) => {
+      const before = prefsRef.current.pinned;
+      const rest = before.filter(x => x !== t.id);
+      onPrefs({ pinned: pin ? [t.id, ...rest] : rest });
+      remember(pin ? `Pinned “${t.title}”` : `Unpinned “${t.title}”`, () => {
+        const now = prefsRef.current.pinned.filter(x => x !== t.id);
+        const at = before.indexOf(t.id);
+        if (at >= 0) now.splice(Math.min(at, now.length), 0, t.id);
+        onPrefs({ pinned: now });
+      });
+    },
+    [onPrefs, remember],
+  );
+
   // What each cloud thread may do on this computer is kept by the app's native side; show
   // what it holds (a level set in an older version has to be granted again there).
   useEffect(() => {
     void loadComputerAccess().then(levels => levels && onPrefs({ computerAccess: levels }));
   }, [onPrefs]);
-
-  // ── Theme ────────────────────────────────────────────────
-  useEffect(() => {
-    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
-    const apply = () => {
-      const dark = prefs.theme === "dark" || (prefs.theme === "system" && Boolean(media?.matches));
-      document.documentElement.dataset.theme = dark ? "dark" : "light";
-    };
-    apply();
-    if (prefs.theme !== "system" || !media) return;
-    media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
-  }, [prefs.theme]);
 
   // ── Agent CLIs on this computer ──────────────────────────
   const [agents, setAgents] = useState<AgentInstall[] | null>(null);
@@ -385,6 +487,8 @@ export function App() {
   const [localStatus, setLocalStatus] = useState<Record<string, ThreadStatus>>({});
   const [localWaiting, setLocalWaiting] = useState<Record<string, number>>({});
   const [localSeq, setLocalSeq] = useState<Record<string, number>>({});
+  // The runners have said once what they're doing.
+  const [runnersPolled, setRunnersPolled] = useState(false);
   const refreshRunners = useCallback(() => {
     void listLocalRunners()
       .then(ids => setRunning(prev => (sameSet(prev, ids) ? prev : new Set(ids))))
@@ -402,6 +506,7 @@ export function App() {
         setLocalSeq(prev => (JSON.stringify(prev) === JSON.stringify(seqs) ? prev : seqs));
         setLocalStatus(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
         setLocalWaiting(prev => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
+        setRunnersPolled(true);
       })
       .catch(() => undefined);
   }, []);
@@ -532,6 +637,25 @@ export function App() {
   const lastStatus = useRef<Record<string, ThreadStatus>>({});
   const placeRef = useRef<Place>(place);
   placeRef.current = place;
+  // The threads on screen (every pane of a split), for callbacks that run later.
+  const visibleIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const notifyPrefs = useRef(prefs.notifications);
+  notifyPrefs.current = prefs.notifications;
+  /**
+   * Tell you about a thread: a system notification while the window is in the background
+   * (clicking it opens the thread), or a toast with "Open thread" while you're here looking
+   * at something else. Nothing for the thread you're looking at, unless asked for.
+   */
+  const alertThread = useCallback((target: NotifyTarget, title: string, body: string, tone: "info" | "error" = "info") => {
+    const here = document.hasFocus();
+    const looking = visibleIdsRef.current.has(target.threadId);
+    if (here && looking && !notifyPrefs.current.whenFocused) return;
+    if (here && !looking) {
+      toast({ title, description: body, tone, key: `alert:${target.threadId}`, threadId: target.threadId });
+      return;
+    }
+    void notify(title, body, target);
+  }, []);
   useEffect(() => {
     const now: Record<string, { status: ThreadStatus; title: string; mode: "local" | "cloud" }> = {};
     for (const m of localThreads) if (localStatus[m.id]) now[m.id] = { status: localStatus[m.id]!, title: m.title, mode: "local" };
@@ -541,9 +665,10 @@ export function App() {
       const before = lastStatus.current[id];
       lastStatus.current[id] = cur.status;
       if (!before || before === cur.status || prefs.archived[id]) continue;
-      const p = placeRef.current;
-      const watching = p.view === "thread" && p.selection.id === id && document.hasFocus();
+      const watching = visibleIdsRef.current.has(id) && document.hasFocus();
       const finished = before === "running" && cur.status === "idle";
+      // A screen reader hears about other threads, whether or not notifications are on.
+      if ((finished || cur.status === "failed") && !visibleIdsRef.current.has(id)) announce(announcement(finished ? "finished" : "failed", cur.title));
       if (finished || cur.status === "failed") {
         const at = new Date().toISOString();
         const kind = finished ? "finished" : "failed";
@@ -560,22 +685,28 @@ export function App() {
         );
       }
       if (!n.enabled) continue;
-      if (watching && !n.whenFocused) continue;
-      if (before === "running" && cur.status === "idle" && n.finished) void notify(cur.title || "Thread finished", "The agent finished its turn.");
-      else if (cur.status === "failed" && n.failed) void notify(cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.");
+      const target = { threadId: id, mode: cur.mode };
+      if (finished && n.finished) alertThread(target, cur.title || "Thread finished", "The agent finished its turn.");
+      else if (cur.status === "failed" && n.failed)
+        alertThread(target, cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.", "error");
     }
-  }, [localThreads, localStatus, cloudThreads, prefs.notifications, prefs.archived]);
+  }, [localThreads, localStatus, cloudThreads, prefs.notifications, prefs.archived, alertThread]);
 
   // An agent on this computer is waiting for an approval in a thread that isn't open.
   const lastWaiting = useRef<Record<string, number>>({});
+  // The first answer from the runners only says how things stand: no news in it.
+  const waitingPrimed = useRef(false);
   useEffect(() => {
     const n = prefs.notifications;
+    const first = !waitingPrimed.current;
+    if (runnersPolled) waitingPrimed.current = true;
     for (const m of localThreads) {
       const now = localWaiting[m.id] ?? 0;
       const before = lastWaiting.current[m.id] ?? 0;
       lastWaiting.current[m.id] = now;
-      const p = placeRef.current;
-      const open = p.view === "thread" && p.selection.id === m.id;
+      if (first) continue;
+      const open = visibleIdsRef.current.has(m.id);
+      if (now > before && !open) announce(announcement("needs-you", m.title));
       if (now > before && !open) {
         const at = new Date().toISOString();
         setInbox(i =>
@@ -590,9 +721,9 @@ export function App() {
         );
       }
       if (now > before && !open && n.enabled && n.needsInput)
-        void notify(m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
+        alertThread({ threadId: m.id, mode: "local" }, m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
     }
-  }, [localWaiting, localThreads, prefs.notifications]);
+  }, [localWaiting, localThreads, prefs.notifications, alertThread, runnersPolled]);
 
   // ── Local thread metadata updates from the session ───────
   const patchLocal = useCallback((id: string, patch: (m: LocalThreadMeta) => LocalThreadMeta | null) => {
@@ -668,29 +799,23 @@ export function App() {
         archived[t.id] = new Date().toISOString();
         // Free what it was using: nothing runs for an archived thread.
         if (t.mode === "local") void stopLocalRunner(t.id).finally(refreshRunners);
-        // The first time, say what archiving does; Undo puts it back either way.
+        // The first time, say what archiving does; Undo (or ⌘Z) puts it back either way.
         const explain = t.mode === "local" && !prefs.archivedHint;
-        toast({
-          title: `Archived “${t.title}”`,
-          ...(explain
-            ? { description: "Its agent stopped. Archived threads on this computer are removed after 21 days; their branch stays in your repository." }
-            : {}),
-          action: {
-            label: "Undo",
-            onClick: () => {
-              const p = prefsRef.current;
-              const back = { ...p.archived };
-              delete back[t.id];
-              onPrefs({ archived: back, ...(wasPinned ? { pinned: [t.id, ...p.pinned.filter(id => id !== t.id)] } : {}) });
-            },
+        remember(
+          `Archived “${t.title}”`,
+          () => {
+            const p = prefsRef.current;
+            const back = { ...p.archived };
+            delete back[t.id];
+            onPrefs({ archived: back, ...(wasPinned ? { pinned: [t.id, ...p.pinned.filter(id => id !== t.id)] } : {}) });
           },
-          ...(explain ? { timeout: 10_000 } : {}),
-        });
+          explain ? "Its agent stopped. Archived threads on this computer are removed after 21 days; their branch stays in your repository." : undefined,
+        );
         if (explain) onPrefs({ archivedHint: true });
       } else delete archived[t.id];
       onPrefs({ archived, pinned: prefs.pinned.filter(id => id !== t.id) });
     },
-    [prefs.archived, prefs.archivedHint, prefs.pinned, onPrefs, refreshRunners],
+    [prefs.archived, prefs.archivedHint, prefs.pinned, onPrefs, refreshRunners, remember],
   );
 
   // Archived threads on this computer are removed after 21 days (worktree and history; the branch stays).
@@ -964,11 +1089,16 @@ export function App() {
 
   // ── Keyboard shortcuts (Settings → Keyboard can change them) ──
   const shortcutState = useRef({ place, summaries: [] as ThreadSummary[], prefs });
+  // The threads in the order the sidebar shows them (folded groups and "Show more" left out), for ⌘1–9.
+  const sidebarRows = useRef<string[]>([]);
+  const onRowOrder = useCallback((ids: string[]) => {
+    sidebarRows.current = ids;
+  }, []);
   // One place that runs each shortcut, for the keys and for the command palette.
   const runShortcut = useCallback(
     (id: ShortcutId) => {
       const { place: here, summaries: list, prefs: pr } = shortcutState.current;
-      const open = list.filter(t => !pr.archived[t.id]);
+      const open = list.filter(t => !pr.archived[t.id] && !pr.snoozed[t.id]);
       const currentId = here.view === "thread" ? here.selection.id : null;
       const at = open.findIndex(t => t.id === currentId);
       const select = (t: ThreadSummary | undefined) => t && go({ view: "thread", selection: { mode: t.mode, id: t.id } });
@@ -1004,11 +1134,13 @@ export function App() {
           return select(open[at < 0 ? 0 : Math.min(open.length - 1, at + 1)]);
         case "last-pinned":
           return select(open.find(t => t.id === pr.pinned[0]));
-        case "pin-thread":
-          if (currentId) onPrefs({ pinned: pr.pinned.includes(currentId) ? pr.pinned.filter(x => x !== currentId) : [currentId, ...pr.pinned] });
+        case "pin-thread": {
+          const t = list.find(x => x.id === currentId);
+          if (t) setPinned(t, !pr.pinned.includes(t.id));
           return;
+        }
         case "archive-thread": {
-          const t = open[at];
+          const t = list.find(x => x.id === currentId && !pr.archived[x.id]);
           if (t) void onArchiveRef.current(t, true);
           return;
         }
@@ -1029,10 +1161,18 @@ export function App() {
         case "focus-pane-4":
         case "focus-pane-5":
         case "focus-pane-6":
-          return focusPaneAt(Number(id.slice(-1)));
+        case "sidebar-thread-7":
+        case "sidebar-thread-8":
+        case "sidebar-thread-9": {
+          const n = Number(id.slice(-1));
+          // Split: the panes. Otherwise: the nth thread as the sidebar lists it.
+          if (layoutRef.current && here.view === "thread" && id.startsWith("focus-pane-")) return focusPaneAt(n);
+          const rowId = sidebarRows.current[n - 1];
+          return select(list.find(t => t.id === rowId));
+        }
       }
     },
-    [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt],
+    [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt, setPinned],
   );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1064,6 +1204,35 @@ export function App() {
   );
 
   shortcutState.current = { place, summaries, prefs };
+
+  // Clicking a notification (or a toast's "Open thread") opens its thread, the window in front.
+  const openTarget = useCallback(
+    (target: { threadId: string; mode?: "local" | "cloud" }) => {
+      const mode = target.mode ?? shortcutState.current.summaries.find(t => t.id === target.threadId)?.mode;
+      if (!mode) return;
+      if (mode === "cloud") void refreshCloud();
+      go({ view: "thread", selection: { mode, id: target.threadId } });
+    },
+    [go, refreshCloud],
+  );
+  useEffect(() => {
+    let off: () => void = () => undefined;
+    let live = true;
+    void onNotificationClick(target => {
+      void focusAppWindow();
+      openTarget(target);
+    })
+      .then(stop => (live ? (off = stop) : stop()))
+      .catch(err => console.warn("Notification clicks aren't reported here", err));
+    return () => {
+      live = false;
+      off();
+    };
+  }, [openTarget]);
+  useEffect(() => {
+    connectToastThreads({ visible: id => visibleIdsRef.current.has(id), open: threadId => openTarget({ threadId }) });
+    return () => connectToastThreads(null);
+  }, [openTarget]);
 
   // ── Sidebar states: waiting, unread, drafts; the dock badge ──
   const [openWaiting, setOpenWaiting] = useState<Record<string, number>>({});
@@ -1112,6 +1281,7 @@ export function App() {
   // Every thread on screen (all the panes of a split) counts as seen.
   const splitShown = layout !== null && place.view === "thread";
   const visibleIds = useMemo(() => (splitShown ? openThreadIds(layout) : new Set(selectedId ? [selectedId] : [])), [splitShown, layout, selectedId]);
+  visibleIdsRef.current = visibleIds;
   const visibleSeqs = JSON.stringify(
     [...visibleIds].flatMap(id => {
       const t = summaries.find(x => x.id === id);
@@ -1121,6 +1291,11 @@ export function App() {
   useEffect(() => {
     if (selectedId) setInbox(i => markThreadRead(i, selectedId));
   }, [selectedId]);
+  // A thread on screen has been seen: its notifications go, and its toasts follow where you are.
+  useEffect(() => {
+    for (const id of visibleIds) void closeThreadNotifications(id);
+    syncThreadToasts();
+  }, [visibleIds]);
   useEffect(() => {
     const p = prefsRef.current;
     let seen = p.seenSeq;
@@ -1133,6 +1308,8 @@ export function App() {
     const glyphs: Record<string, RowGlyph> = {};
     const unread = new Set<string>();
     const waiting: { id: string; waiting: number }[] = [];
+    // The agent asks for an approval or an answer, or its turn failed.
+    const needsYou = new Set<string>();
     for (const t of summaries) {
       const input = {
         status: t.status,
@@ -1148,9 +1325,10 @@ export function App() {
       };
       glyphs[t.id] = rowGlyph(input);
       if (isUnread(input)) unread.add(t.id);
+      if (input.waiting > 0 || t.status === "failed") needsYou.add(t.id);
       waiting.push({ id: t.id, waiting: input.waiting });
     }
-    return { glyphs, unread, waiting: waitingCount(waiting, prefs.archived) };
+    return { glyphs, unread, needsYou, waiting: waitingCount(waiting, prefs.archived) };
   }, [summaries, localWaiting, openWaiting, latestSeq, prefs.seenSeq, prefs.unreadSince, prefs.markedUnread, prefs.archived, drafts, visibleIds]);
   // The dock (macOS) shows how many threads are waiting for you.
   useEffect(() => {
@@ -1162,10 +1340,19 @@ export function App() {
   const onMarkUnread = useCallback(
     (t: ThreadSummary, unread: boolean) => {
       const p = prefsRef.current;
+      const wasMarked = p.markedUnread.includes(t.id);
+      const seenBefore = p.seenSeq[t.id];
       if (unread) onPrefs({ markedUnread: [...p.markedUnread.filter(id => id !== t.id), t.id] });
       else onPrefs({ markedUnread: p.markedUnread.filter(id => id !== t.id), seenSeq: { ...p.seenSeq, [t.id]: latestSeq(t) } });
+      remember(unread ? `Marked “${t.title}” as unread` : `Marked “${t.title}” as read`, () => {
+        const now = prefsRef.current;
+        const seenSeq = { ...now.seenSeq };
+        if (seenBefore === undefined) delete seenSeq[t.id];
+        else seenSeq[t.id] = seenBefore;
+        onPrefs({ markedUnread: wasMarked ? [...now.markedUnread.filter(id => id !== t.id), t.id] : now.markedUnread.filter(id => id !== t.id), seenSeq });
+      });
     },
-    [onPrefs, latestSeq],
+    [onPrefs, latestSeq, remember],
   );
   const onRename = useCallback(
     (t: ThreadSummary, title: string) => {
@@ -1188,14 +1375,59 @@ export function App() {
   const onArchiveRef = useRef(onArchive);
   onArchiveRef.current = onArchive;
 
-  // ── The thread menu (sidebar row, right-click, thread header) ──
-  const setPinned = useCallback(
-    (id: string, pin: boolean) => {
-      const pinned = prefsRef.current.pinned.filter(x => x !== id);
-      onPrefs({ pinned: pin ? [id, ...pinned] : pinned });
+  // ── Snooze: out of the list until a time, or until the agent needs you ──
+  const [snoozeAsk, setSnoozeAsk] = useState<ThreadSummary | null>(null);
+  const onSnooze = useCallback(
+    (t: ThreadSummary, until: Date | "custom" | null) => {
+      if (until === "custom") return setSnoozeAsk(t);
+      const before = prefsRef.current.snoozed[t.id];
+      const next = { ...prefsRef.current.snoozed };
+      if (until) next[t.id] = until.toISOString();
+      else delete next[t.id];
+      onPrefs({ snoozed: next });
+      remember(until ? `Snoozed “${t.title}”` : `“${t.title}” is back`, () => {
+        const now = { ...prefsRef.current.snoozed };
+        if (before) now[t.id] = before;
+        else delete now[t.id];
+        onPrefs({ snoozed: now });
+      });
+    },
+    [onPrefs, remember],
+  );
+  /** End the snoozes that are due, and those of `needsYou`; the threads coming back show as unread. */
+  const wakeThreads = useCallback(
+    (needsYou: readonly string[] = []) => {
+      const p = prefsRef.current;
+      const { snoozed, woke } = wakeSnoozes(p.snoozed, Date.now(), new Set(needsYou));
+      if (!woke.length) return;
+      const unread = woke.filter(id => !visibleIdsRef.current.has(id) && !p.markedUnread.includes(id));
+      onPrefs({ snoozed, ...(unread.length ? { markedUnread: [...p.markedUnread, ...unread] } : {}) });
     },
     [onPrefs],
   );
+  useEffect(() => {
+    wakeThreads();
+    const at = nextWake(prefs.snoozed, Date.now());
+    // Also on coming back to the window: timers wait out a sleeping computer.
+    const onFocus = () => wakeThreads();
+    window.addEventListener("focus", onFocus);
+    const t = at === null ? undefined : setTimeout(() => wakeThreads(), Math.min(at - Date.now() + 250, 2 ** 31 - 1));
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      clearTimeout(t);
+    };
+  }, [prefs.snoozed, wakeThreads]);
+  // A snoozed thread whose agent starts waiting for you, or whose turn fails, comes back early.
+  const needsYouBefore = useRef<ReadonlySet<string> | null>(null);
+  useEffect(() => {
+    const before = needsYouBefore.current;
+    needsYouBefore.current = rowStates.needsYou;
+    if (!before) return;
+    const fresh = newlyNeedingYou(before, rowStates.needsYou).filter(id => prefsRef.current.snoozed[id]);
+    if (fresh.length) wakeThreads(fresh);
+  }, [rowStates.needsYou, wakeThreads]);
+
+  // ── The thread menu (sidebar row, right-click, thread header) ──
   /** Home, with a project chosen and (for a fork) the first message written. */
   const startInProject = useCallback(
     (project: GroupProject | undefined, text = "") => {
@@ -1252,20 +1484,19 @@ export function App() {
         pinned: p.pinned.filter(id => !ids.has(id)),
         ...(path ? { recentProjects: p.recentProjects.filter(x => x !== path) } : {}),
       });
-      toast({
-        title: `Took ${g.label} off the list`,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            const now = prefsRef.current;
-            const back = { ...now.archived };
-            for (const id of ids) delete back[id];
-            onPrefs({ archived: back, ...(path && !now.recentProjects.includes(path) ? { recentProjects: [...now.recentProjects, path] } : {}) });
-          },
-        },
+      const pinnedBefore = p.pinned;
+      remember(`Took ${g.label} off the list`, () => {
+        const now = prefsRef.current;
+        const back = { ...now.archived };
+        for (const id of ids) delete back[id];
+        onPrefs({
+          archived: back,
+          pinned: [...new Set([...pinnedBefore.filter(id => ids.has(id)), ...now.pinned])],
+          ...(path && !now.recentProjects.includes(path) ? { recentProjects: [...now.recentProjects, path] } : {}),
+        });
       });
     },
-    [onPrefs, refreshRunners],
+    [onPrefs, refreshRunners, remember],
   );
   const openChild = useCallback(
     (t: ThreadSummary, childId: string) => {
@@ -1315,27 +1546,60 @@ export function App() {
   const inThread = place.view === "thread";
   const paletteItems = useMemo<PaletteItem[]>(() => {
     if (!paletteOpen) return [];
+    const now = Date.now();
     const threads = summaries.map<PaletteItem>(t => ({
       id: `thread:${t.id}`,
       section: "threads",
       label: t.title || "Untitled thread",
-      detail: `${repoName(t.repo)}${prefs.archived[t.id] ? ", archived" : ""}`,
+      detail: `${repoName(t.repo)}${prefs.archived[t.id] ? ", archived" : prefs.snoozed[t.id] ? ", snoozed" : ""}`,
       keywords: `${t.branch} ${AGENT_LABELS[t.agent.kind]} ${t.mode === "cloud" ? "cloud" : "local"}`,
+      trailing: relativeTime(t.updatedAt, now),
+      // The one you're in goes last: you're more likely looking for another.
+      ...(t.id === sidebarSelected ? { demote: true } : {}),
     }));
-    const projects = prefs.recentProjects.map<PaletteItem>(path => ({
-      id: `project:${path}`,
-      section: "projects",
-      label: repoName(path),
-      detail: path,
-      keywords: "new thread in project",
-    }));
+    // Picking a project starts a thread in it; "New thread in …" finds the same from its name.
+    const cloudRepos = [...new Set(summaries.filter(t => t.mode === "cloud").map(t => t.repo))];
+    const projectsAt: GroupProject[] = [
+      ...prefs.recentProjects.map(path => ({ mode: "local" as const, path })),
+      ...cloudRepos.filter(url => !prefs.recentProjects.some(p => repoName(p) === repoName(url))).map(url => ({ mode: "cloud" as const, url })),
+    ];
+    const projects = projectsAt.flatMap<PaletteItem>(pj => {
+      const where = pj.mode === "local" ? pj.path : pj.url;
+      const key = `${pj.mode}:${where}`;
+      return [
+        ...(pj.mode === "local"
+          ? [{ id: `project:${key}`, section: "projects" as const, label: repoName(where), detail: where, keywords: "new thread in project" }]
+          : []),
+        {
+          id: `new-in:${key}`,
+          section: "projects" as const,
+          label: `New thread in ${repoName(where)}`,
+          detail: pj.mode === "cloud" ? "In the cloud" : where,
+          keywords: "start create project",
+          searchOnly: true,
+        },
+      ];
+    });
+    // Every single setting, reached straight from here (shortcuts are commands already).
+    const pageLabel = new Map(SETTINGS_PAGES.map(pg => [pg.id as string, pg.label]));
+    const settingRows = SETTINGS_INDEX.flatMap<PaletteItem>((e, i) =>
+      e.page === "keyboard" && e.anchor !== "shortcut-hints"
+        ? []
+        : [
+            {
+              id: `setting:${i}`,
+              section: "commands",
+              label: e.title,
+              detail: `${pageLabel.get(e.page) ?? "Settings"} settings`,
+              keywords: `settings ${e.keywords ?? ""} ${e.description ?? ""}`,
+              searchOnly: true,
+            },
+          ],
+    );
     const extras = [
       { id: "plugins", label: "Plugins", keywords: "extensions marketplace install" },
       { id: "add-project", label: "Add a project…", keywords: "folder repository open" },
       ...SETTINGS_PAGES.map(pg => ({ id: `settings:${pg.id}`, label: `Settings: ${pg.label}`, keywords: pg.keywords })),
-      { id: "theme:light", label: "Use the light theme", keywords: "appearance colour" },
-      { id: "theme:dark", label: "Use the dark theme", keywords: "appearance colour night" },
-      { id: "theme:system", label: "Match the system theme", keywords: "appearance colour auto" },
     ];
     // "settings" is the same as Settings: Account; thread commands only make sense in one.
     // Pane commands only while split, and only for panes that are there.
@@ -1345,17 +1609,31 @@ export function App() {
     );
     const skip: ShortcutId[] = [
       "settings",
+      // Which thread these reach depends on the sidebar, so they're keys only.
+      "sidebar-thread-7",
+      "sidebar-thread-8",
+      "sidebar-thread-9",
       ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "split-right", "quick-open", "reopen-tab"] as const)),
       ...paneCommands,
     ];
     // Unarchived threads first, as in the sidebar.
     const sortedThreads = [...threads.filter(t => !t.detail?.endsWith(", archived")), ...threads.filter(t => t.detail?.endsWith(", archived"))];
-    return [...sortedThreads, ...projects, ...appCommands(extras, skip)];
-  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, inThread, layout]);
+    return [...sortedThreads, ...projects, ...appCommands(extras, skip), ...settingRows];
+  }, [paletteOpen, summaries, prefs.recentProjects, prefs.archived, prefs.snoozed, inThread, layout, sidebarSelected]);
+  // What was said in every thread kept on this computer, read once each time the palette opens.
+  const messageIndex = useMemo<MessageText[]>(() => {
+    if (!paletteOpen) return [];
+    // Oldest activity first, so the newest messages are found first (see searchMessages).
+    return [...summaries].reverse().flatMap(t => loadMessageTexts(t.id).map(m => ({ ...m, threadId: t.id, threadTitle: t.title })));
+    // Only on opening: what arrives while it's open can wait for next time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paletteOpen]);
+  const findMessages = useCallback((query: string) => searchMessages(messageIndex, query), [messageIndex]);
 
   const runPaletteItem = (item: PaletteItem, opts: { split?: boolean } = {}) => {
-    setPaletteRecents(r => rememberPick(r, item.id));
     const [kind, ...rest] = item.id.split(":");
+    // A message found once isn't one to come back to from the top of the list.
+    if (kind !== "message") setPaletteRecents(r => rememberPick(r, item.id));
     const value = rest.join(":");
     if (kind === "thread") {
       const t = summaries.find(x => x.id === value);
@@ -1363,14 +1641,28 @@ export function App() {
       else if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
       return;
     }
-    if (kind === "project") {
-      onPrefs({ recentProjects: [value, ...prefs.recentProjects.filter(x => x !== value)] });
-      return go({ view: "home" });
+    if (kind === "message") {
+      const threadId = value.slice(0, value.lastIndexOf(":"));
+      const t = summaries.find(x => x.id === threadId);
+      if (t) go({ view: "thread", selection: { mode: t.mode, id: t.id } });
+      return;
+    }
+    if (kind === "project" || kind === "new-in") {
+      const [mode, ...where] = value.split(":");
+      const at = where.join(":");
+      if (mode === "local") onPrefs({ recentProjects: [at, ...prefs.recentProjects.filter(x => x !== at)] });
+      return startInProject(mode === "local" ? { mode: "local", path: at } : { mode: "cloud", url: at });
+    }
+    if (kind === "setting") {
+      const e = SETTINGS_INDEX[Number(value)];
+      if (!e) return;
+      if (e.tab) requestSettingsTab(e.page, e.tab);
+      requestSettingTarget(e.page, settingAnchor(e));
+      return go({ view: "settings", page: e.page as SettingsPage });
     }
     if (value === "plugins") return go({ view: "plugins" });
     if (value === "add-project") return void addProject();
     if (value.startsWith("settings:")) return go({ view: "settings", page: value.slice("settings:".length) as SettingsPage });
-    if (value.startsWith("theme:")) return onPrefs({ theme: value.slice("theme:".length) as UiPrefs["theme"] });
     runShortcut(value as ShortcutId);
   };
   const palette = (
@@ -1381,6 +1673,7 @@ export function App() {
       recents={paletteRecents}
       onRun={runPaletteItem}
       keysOf={id => keysFor(id, prefs.shortcuts)}
+      searchMessages={findMessages}
     />
   );
 
@@ -1477,8 +1770,9 @@ export function App() {
                 inSplit: layout ? openThreadIds(layout).has(summary.id) : false,
                 editor: Boolean(prefs.editor),
                 actions: {
-                  pin: (pin: boolean) => setPinned(summary.id, pin),
+                  pin: (pin: boolean) => setPinned(summary, pin),
                   unread: (u: boolean) => onMarkUnread(summary, u),
+                  snooze: (until: Date | "custom" | null) => onSnooze(summary, until),
                   split: () => openInSplit({ mode: summary.mode, id: summary.id }),
                   fork: () => onFork(summary),
                   archive: (a: boolean) => void onArchive(summary, a),
@@ -1527,7 +1821,7 @@ export function App() {
             }),
           );
           if (prefs.notifications.enabled && prefs.notifications.needsInput)
-            void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.");
+            alertThread({ threadId: summaryId, mode: entry.mode }, title || "An agent needs you", "It's waiting for your answer before it carries on.");
         }}
         onWaiting={onWaiting}
         suggestNext={prefs.suggestNextPrompt}
@@ -1667,6 +1961,13 @@ export function App() {
         searchOpen={searchOpen}
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
+        onPin={setPinned}
+        onRowOrder={onRowOrder}
+        numberRows={!splitShown}
+        onSnooze={onSnooze}
+        {...(undoNotice
+          ? { undoNotice: { label: undoNotice.label, detail: undoNotice.detail, onUndo: () => undoById(undoNotice.id), onDismiss: () => setUndoNotice(null) } }
+          : {})}
         glyphs={rowStates.glyphs}
         childrenOf={sidebarChildren}
         unread={rowStates.unread}
@@ -1708,8 +2009,10 @@ export function App() {
   return (
     <TipProvider>
       <ShortcutHints enabled={prefs.shortcutHints} overrides={prefs.shortcuts} />
+      <LiveAnnouncer />
       <Toaster>
         {palette}
+        <SnoozeDialog title={snoozeAsk?.title ?? null} onClose={() => setSnoozeAsk(null)} onSnooze={until => snoozeAsk && onSnooze(snoozeAsk, until)} />
         <div className="flex h-full overflow-hidden">
           {sidebar}
           <div className="relative flex min-w-0 flex-1 flex-col">
@@ -1730,12 +2033,8 @@ export function App() {
             {update && (
               <div role="status" className="flex items-center gap-3 border-b border-line bg-lime-soft px-6 py-2 text-[14px]">
                 <p className="min-w-0 flex-1">LemonLime {update.version} is ready.</p>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={installing}
-                  onClick={() => (setInstalling(true), void update.install().catch(() => setInstalling(false)))}
-                >
+                {update.notes && <ReleaseNotes version={update.version} notes={update.notes} />}
+                <Button size="sm" variant="primary" disabled={installing} onClick={() => void restartToUpdate(update)}>
                   {installing ? "Installing…" : "Restart to update"}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setUpdate(null)}>

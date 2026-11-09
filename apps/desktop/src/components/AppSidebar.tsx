@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AlarmClock,
   Archive,
@@ -10,6 +10,7 @@ import {
   CircleCheck,
   CircleMinus,
   CircleX,
+  Clock,
   Hourglass,
   MessageCircleQuestion,
   PencilLine,
@@ -49,12 +50,25 @@ import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/form
 import { NAV_ITEMS, type NavItem, type SidebarChild, type UiPrefs } from "../lib/storage.ts";
 import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.ts";
 import { ContextMenu, Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip, Toggle } from "./primitives.tsx";
-import { GROUP_ROWS, groupThreads, moveGroup, orderGroups, toggleKey, groupRows, type GroupProject, type ThreadGroup } from "../lib/sidebarGroups.ts";
-import { knownPullRequests, subscribePullRequests } from "../lib/threadMenu.ts";
+import {
+  GROUP_ROWS,
+  groupThreads,
+  moveGroup,
+  orderGroups,
+  splitSnoozed,
+  toggleKey,
+  groupRows,
+  type GroupProject,
+  type ThreadGroup,
+} from "../lib/sidebarGroups.ts";
+import { knownPullRequestInfo, knownPullRequests, snoozeWhen, subscribePullRequests } from "../lib/threadMenu.ts";
+import { threadCardLines } from "../lib/threadCard.ts";
+import { ThreadCardTrigger, ThreadHoverCard } from "./ThreadHoverCard.tsx";
 import { useMissingFolders } from "../lib/missingFolders.ts";
 import { RenameField, ThreadMenu, ThreadRightClickMenu, type ThreadMenuProps } from "./ThreadMenu.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
 import { AgentIcon } from "./AgentIcon.tsx";
+import { IS_MAC, rowShortcut, type ShortcutId } from "../lib/shortcuts.ts";
 import { LogoMark, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface AppSidebarProps {
@@ -82,11 +96,21 @@ export interface AppSidebarProps {
   onSettings: (page?: string) => void;
   onBack: (() => void) | null;
   onForward: (() => void) | null;
+  /** The last archive, pin or mark as unread, with its Undo (⌘Z does the same). */
+  undoNotice?: { label: string; detail?: string | undefined; onUndo: () => void; onDismiss: () => void };
   /** Card above the footer, e.g. cloud hours left (from the deployment). */
   usageCard?: ReactNode;
   /** The notification bell, given the footer buttons' class. */
   notifications?: (className: string) => ReactNode;
   onArchive: (t: ThreadSummary, archive: boolean) => void;
+  /** The thread rows in the order shown, as they change (⌘1–9 go to them). */
+  onRowOrder?: (ids: string[]) => void;
+  /** Mark the first nine rows with ⌘1–9 for the hints shown while ⌘ is held (not while split). */
+  numberRows?: boolean;
+  /** Pin a thread to the top, or unpin it. */
+  onPin?: (t: ThreadSummary, pin: boolean) => void;
+  /** Snooze a thread until a time, ask for a time ("custom"), or wake it (null). */
+  onSnooze?: (t: ThreadSummary, until: Date | "custom" | null) => void;
   /** Each thread's status mark (see threadState.ts); missing means none. */
   glyphs?: Record<string, RowGlyph>;
   /** Each thread's latest subagents, nested under it. */
@@ -150,19 +174,31 @@ export function AppSidebar(p: AppSidebarProps) {
   }, [p.threads, query, p.prefs.sort]);
 
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const [snoozedOpen, setSnoozedOpen] = useState(false);
   const archived = useMemo(() => filtered.filter(t => p.prefs.archived[t.id]), [filtered, p.prefs.archived]);
+  // Snoozed threads leave the list until they come back (the app ends snoozes when they're due).
+  const { awake, snoozed } = useMemo(
+    () =>
+      splitSnoozed(
+        filtered.filter(t => !p.prefs.archived[t.id]),
+        p.prefs.snoozed,
+        Date.now(),
+      ),
+    [filtered, p.prefs.archived, p.prefs.snoozed],
+  );
   const machines = useMachines();
   const groups = useMemo(
     () =>
       orderGroups(
-        groupThreads(
-          filtered.filter(t => !p.prefs.archived[t.id]),
-          { organize: p.prefs.organize, pinned: p.prefs.pinned, machineName: id => machines.find(m => m.id === id)?.name },
-        ),
+        groupThreads(awake, { organize: p.prefs.organize, pinned: p.prefs.pinned, machineName: id => machines.find(m => m.id === id)?.name }),
         p.prefs.groupOrder,
       ),
-    [filtered, p.prefs.organize, p.prefs.pinned, p.prefs.archived, p.prefs.groupOrder, machines],
+    [awake, p.prefs.organize, p.prefs.pinned, p.prefs.groupOrder, machines],
   );
+  // The open thread is never out of sight: its snoozed list opens with it.
+  const showSnoozed = snoozedOpen || snoozed.some(t => t.id === p.selectedId);
+  const pin = (t: ThreadSummary, on: boolean) =>
+    p.onPin ? p.onPin(t, on) : p.onPrefs({ pinned: on ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) });
   // One group of anything but a project needs no heading.
   const showHeaders = groups.length > 1 || groups[0]?.kind === "project";
   const movable = groups.filter(g => g.kind !== "pinned").map(g => g.key);
@@ -173,6 +209,22 @@ export function AppSidebar(p: AppSidebarProps) {
   const toggleGroup = (key: string) => p.onPrefs({ collapsedGroups: toggleKey(p.prefs.collapsedGroups, key) });
   const moveTo = (key: string, to: number) => p.onPrefs({ groupOrder: moveGroup(p.prefs.groupOrder, movable, key, to) });
   const headed = showHeaders ? groups : [];
+  // The rows as listed, top to bottom: folded groups and rows behind "Show more" aren't there.
+  const rowOrder = useMemo(
+    () =>
+      threadsOpen
+        ? groups.flatMap(g =>
+            showHeaders && p.prefs.collapsedGroups.includes(g.key)
+              ? []
+              : groupRows(g.threads, { expanded: expanded.has(g.key), selectedId: p.selectedId }).shown.map(t => t.id),
+          )
+        : [],
+    [threadsOpen, groups, showHeaders, p.prefs.collapsedGroups, expanded, p.selectedId],
+  );
+  const rowKey = rowOrder.join(" ");
+  const { onRowOrder } = p;
+  useEffect(() => onRowOrder?.(rowKey ? rowKey.split(" ") : []), [rowKey, onRowOrder]);
+  const rowNumber = useMemo(() => new Map(rowOrder.slice(0, 9).map((id, i) => [id, i + 1])), [rowOrder]);
   const allCollapsed = headed.length > 0 && headed.every(g => p.prefs.collapsedGroups.includes(g.key));
 
   /** The thread list's options, on its ⋯ and on a right-click on its heading. */
@@ -237,6 +289,7 @@ export function AppSidebar(p: AppSidebarProps) {
       ...(p.onOpenFolder && here ? { onOpenFolder: () => p.onOpenFolder!(t) } : {}),
       ...(p.onRemove && t.mode === "local" ? { onRemove: () => p.onRemove!(t) } : {}),
       ...(p.onOpenChild ? { onOpenChild: (childId: string) => p.onOpenChild!(t, childId) } : {}),
+      ...(p.onSnooze && !p.prefs.archived[t.id] ? { onSnooze: (until: Date | "custom" | null) => p.onSnooze!(t, until) } : {}),
     };
   };
 
@@ -250,6 +303,7 @@ export function AppSidebar(p: AppSidebarProps) {
 
   return (
     <nav aria-label="LemonLime" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">
+      <ThreadHoverCard />
       {/* Window controls: room for the traffic lights, then sidebar and history buttons. */}
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center px-2">
         <div data-tauri-drag-region className="flex h-9 items-center gap-0.5 rounded-full border border-line bg-cream/70 pr-1.5 pl-1">
@@ -430,7 +484,7 @@ export function AppSidebar(p: AppSidebarProps) {
                           pinned={p.prefs.pinned.includes(t.id)}
                           onSelect={p.onSelect}
                           agentIcon={p.prefs.agentIcons}
-                          onPin={pin => p.onPrefs({ pinned: pin ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) })}
+                          onPin={on => pin(t, on)}
                           archived={false}
                           onArchive={a => p.onArchive(t, a)}
                           glyph={p.glyphs?.[t.id] ?? null}
@@ -441,6 +495,7 @@ export function AppSidebar(p: AppSidebarProps) {
                           prUrl={pullRequests.get(t.id) ?? null}
                           {...rowActions(t)}
                           inSplit={p.openInSplit?.has(t.id) ?? false}
+                          {...(p.numberRows && rowNumber.has(t.id) ? { shortcut: rowShortcut(rowNumber.get(t.id)!) ?? undefined } : {})}
                           {...(p.onOpenInSplit ? { onOpenInSplit: () => p.onOpenInSplit!(t) } : {})}
                           {...(p.onDragThread ? { onDrag: p.onDragThread } : {})}
                         />
@@ -462,6 +517,43 @@ export function AppSidebar(p: AppSidebarProps) {
               );
             })
           ))}
+        {threadsOpen && snoozed.length > 0 && (
+          <section aria-label="Snoozed" className="mb-2">
+            <button
+              type="button"
+              aria-expanded={showSnoozed}
+              onClick={() => setSnoozedOpen(!showSnoozed)}
+              className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] font-medium text-ink-faint hover:text-ink"
+            >
+              <Clock aria-hidden="true" className="size-3.5" />
+              <span className="flex-1">Snoozed</span>
+              <span className="tabular-nums">{snoozed.length}</span>
+            </button>
+            {showSnoozed && (
+              <ul className="flex flex-col gap-px">
+                {snoozed.map(t => (
+                  <ThreadRow
+                    key={`${t.mode}:${t.id}`}
+                    t={t}
+                    selected={t.id === p.selectedId}
+                    pinned={p.prefs.pinned.includes(t.id)}
+                    onSelect={p.onSelect}
+                    agentIcon={p.prefs.agentIcons}
+                    onPin={on => pin(t, on)}
+                    archived={false}
+                    onArchive={a => p.onArchive(t, a)}
+                    glyph={p.glyphs?.[t.id] ?? null}
+                    unread={p.unread?.has(t.id) ?? false}
+                    editor={p.editor ?? false}
+                    prUrl={pullRequests.get(t.id) ?? null}
+                    snoozedUntil={p.prefs.snoozed[t.id]}
+                    {...rowActions(t)}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
         {threadsOpen && archived.length > 0 && (
           <section aria-label="Archived" className="mb-2">
             <button
@@ -501,6 +593,37 @@ export function AppSidebar(p: AppSidebarProps) {
       </div>
 
       {p.usageCard && <div className="px-2 pb-2">{p.usageCard}</div>}
+
+      {/* Said here, not in a toast: it belongs to the list. It answers a key as often as a click, so it doesn't animate. */}
+      <div role="status" className="px-2 empty:hidden">
+        {p.undoNotice && (
+          <div className="mb-2 flex items-start gap-2 rounded-xl border border-line bg-paper py-2 pr-1.5 pl-3 shadow-panel">
+            <div className="min-w-0 flex-1 py-0.5">
+              <p className="line-clamp-2 text-[13px] font-medium break-words text-ink" title={p.undoNotice.label}>
+                {p.undoNotice.label}
+              </p>
+              {p.undoNotice.detail && <p className="mt-0.5 text-[13px] leading-snug text-pretty text-ink-soft">{p.undoNotice.detail}</p>}
+            </div>
+            <button
+              type="button"
+              onClick={p.undoNotice.onUndo}
+              aria-keyshortcuts={IS_MAC ? "Meta+Z" : "Control+Z"}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-line-strong bg-paper px-2 text-[13px] font-semibold text-ink hover:bg-cream active:scale-[0.97]"
+            >
+              Undo
+              <span className="font-normal text-ink-faint">{IS_MAC ? "⌘Z" : "Ctrl+Z"}</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={p.undoNotice.onDismiss}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-faint hover:bg-ink/5 hover:text-ink"
+            >
+              <X aria-hidden="true" className="size-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="flex h-11 shrink-0 items-center gap-0.5 border-t border-line px-2">
         <Tip
@@ -615,6 +738,9 @@ function ThreadRow({
   onOpenChild,
   editor = false,
   prUrl = null,
+  snoozedUntil,
+  onSnooze,
+  shortcut,
 }: {
   inSplit?: boolean;
   onOpenInSplit?: () => void;
@@ -642,17 +768,23 @@ function ThreadRow({
   editor?: boolean;
   /** Its pull request, when the app has seen one. */
   prUrl?: string | null;
+  /** Snoozed until then (ISO): the row says when it's back instead of when it last moved. */
+  snoozedUntil?: string | undefined;
+  onSnooze?: (until: Date | "custom" | null) => void;
+  /** Its ⌘ number, shown while ⌘ is held. */
+  shortcut?: ShortcutId | undefined;
 }) {
   const [renaming, setRenaming] = useState(false);
   const machines = useMachines();
   const machineName = t.machine ? (machines.find(m => m.id === t.machine)?.name ?? "a removed machine") : null;
   const menu: ThreadMenuProps = {
     thread: { title: t.title, branch: t.branch },
-    state: { mode: t.mode, pinned, unread, archived, inSplit, editor, pullRequest: prUrl ? "view" : null },
+    state: { mode: t.mode, pinned, unread, archived, snoozed: Boolean(snoozedUntil), inSplit, editor, pullRequest: prUrl ? "view" : null },
     actions: {
       ...(onRename ? { rename: () => setRenaming(true) } : {}),
       pin: onPin,
       ...(onMarkUnread ? { unread: onMarkUnread } : {}),
+      ...(onSnooze ? { snooze: onSnooze } : {}),
       ...(onOpenInSplit ? { split: onOpenInSplit } : {}),
       ...(onFork ? { fork: onFork } : {}),
       ...(onOpenFolder ? { openFolder: onOpenFolder } : {}),
@@ -673,55 +805,73 @@ function ThreadRow({
             }}
           />
         ) : (
-          <button
-            type="button"
-            onClick={() => onSelect(t)}
-            onDoubleClick={e => {
-              if (!onRename) return;
-              e.preventDefault();
-              setRenaming(true);
+          <ThreadCardTrigger
+            payload={{
+              title: t.title,
+              lines: threadCardLines(t, { machineName, pullRequest: prUrl ? (knownPullRequestInfo(t.id) ?? {}) : null, snoozedUntil: snoozedUntil ?? null }),
             }}
-            aria-current={selected ? "page" : undefined}
-            aria-keyshortcuts="Shift+F10"
-            // Drag it onto a pane to open it there, or onto a pane's edge to split.
-            draggable={Boolean(onDrag)}
-            onDragStart={e => {
-              if (!onDrag) return;
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
-              e.dataTransfer.setData("text/plain", t.title);
-              onDrag(t);
-            }}
-            onDragEnd={() => onDrag?.(null)}
-            className={cx(
-              "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
-              selected ? "bg-cream-hover" : "hover:bg-cream-hover",
-            )}
-          >
-            {glyph ? (
-              <RowMark glyph={glyph} status={t.status} />
-            ) : agentIcon ? (
-              <AgentBadge kind={t.agent.kind} />
-            ) : t.mode === "cloud" ? (
-              <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-            ) : t.machine ? (
-              <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-            ) : (
-              <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-            )}
-            <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
-            {inSplit && (
-              <span role="img" aria-label="Open in the split view" title="Open in the split view" className="inline-flex shrink-0 group-hover/row:invisible">
-                <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
-              </span>
-            )}
-            {kids.length > 0 && <ProgressGrid kids={kids} />}
-            <span className="shrink-0 text-[12px] text-ink-faint tabular-nums group-hover/row:invisible">{relativeTime(t.updatedAt)}</span>
-            <span className="sr-only">
-              {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
-              {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
-            </span>
-          </button>
+            render={
+              <button
+                type="button"
+                onClick={() => onSelect(t)}
+                onDoubleClick={e => {
+                  if (!onRename) return;
+                  e.preventDefault();
+                  setRenaming(true);
+                }}
+                aria-current={selected ? "page" : undefined}
+                aria-keyshortcuts="Shift+F10"
+                data-shortcut={shortcut}
+                // Drag it onto a pane to open it there, or onto a pane's edge to split.
+                draggable={Boolean(onDrag)}
+                onDragStart={e => {
+                  if (!onDrag) return;
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
+                  e.dataTransfer.setData("text/plain", t.title);
+                  onDrag(t);
+                }}
+                onDragEnd={() => onDrag?.(null)}
+                className={cx(
+                  "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
+                  selected ? "bg-cream-hover" : "hover:bg-cream-hover",
+                )}
+              >
+                {glyph ? (
+                  <RowMark glyph={glyph} status={t.status} />
+                ) : agentIcon ? (
+                  <AgentBadge kind={t.agent.kind} />
+                ) : t.mode === "cloud" ? (
+                  <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                ) : t.machine ? (
+                  <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                ) : (
+                  <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                )}
+                <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
+                {inSplit && (
+                  <span
+                    role="img"
+                    aria-label="Open in the split view"
+                    title="Open in the split view"
+                    className="inline-flex shrink-0 group-hover/row:invisible"
+                  >
+                    <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
+                  </span>
+                )}
+                {kids.length > 0 && <ProgressGrid kids={kids} />}
+                <span className="shrink-0 text-[12px] text-ink-faint tabular-nums group-hover/row:invisible">
+                  {snoozedUntil ? snoozeWhen(new Date(snoozedUntil), new Date(), true) : relativeTime(t.updatedAt)}
+                </span>
+                <span className="sr-only">
+                  {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]},{" "}
+                  {STATUS_LABELS[t.status]}
+                  {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
+                  {snoozedUntil ? `, snoozed until ${snoozeWhen(new Date(snoozedUntil), new Date())}` : ""}
+                </span>
+              </button>
+            }
+          />
         )}
         {showKids && kids.length > 0 && !renaming && (
           <ul aria-label={`Subagents of ${t.title}`} className="mt-px mb-0.5 flex flex-col">

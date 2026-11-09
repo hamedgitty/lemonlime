@@ -1,4 +1,4 @@
-import { NAV_ITEMS, type NavItem, type UiPrefs } from "../../lib/storage.ts";
+import { NAV_ITEMS, type NavItem } from "../../lib/storage.ts";
 import { SegmentedControl } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
 import { Row, Section, ToggleRow } from "./parts.tsx";
@@ -15,20 +15,6 @@ export function AppearancePage({ ctx }: { ctx: SettingsCtx }) {
   const { prefs, onPrefs } = ctx;
   return (
     <>
-      <Section title="Theme">
-        <Row label="Colours">
-          <SegmentedControl<UiPrefs["theme"]>
-            label="Colours"
-            value={prefs.theme}
-            onChange={theme => onPrefs({ theme })}
-            options={[
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
-              { value: "system", label: "Match system" },
-            ]}
-          />
-        </Row>
-      </Section>
       <Section title="Sidebar" description="Drag items into your own order from More → Customize sidebar.">
         {NAV_ITEMS.map(item => (
           <ToggleRow

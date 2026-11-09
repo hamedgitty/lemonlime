@@ -58,7 +58,7 @@ export const SETTINGS_PAGES: { id: SettingsPage; label: string; icon: typeof Use
     keywords: "ssh remote server home server dev box tailscale another computer machine host runner",
   },
   { id: "projects", label: "Projects", icon: FolderGit2, keywords: "projects folders repositories archived restore import export chats markdown json" },
-  { id: "appearance", label: "Appearance", icon: Palette, keywords: "theme dark light system sidebar organize sort agent icons fold collapse turns" },
+  { id: "appearance", label: "Appearance", icon: Palette, keywords: "sidebar organize sort agent icons fold collapse turns" },
   { id: "keyboard", label: "Keyboard", icon: Keyboard, keywords: "shortcuts keys rebind" },
   { id: "updates", label: "Updates", icon: Package, keywords: "version release changelog community github website docs report" },
 ];

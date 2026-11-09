@@ -32,6 +32,7 @@ export function PreviewPanel({
   runnerPath,
   onFindFile,
   findFileKeys,
+  open,
 }: {
   events: ThreadEvent[];
   mode: "local" | "cloud";
@@ -40,6 +41,8 @@ export function PreviewPanel({
   /** Opens the project's file search (from the new-tab page). */
   onFindFile?: () => void;
   findFileKeys?: string[];
+  /** Open this address (a link clicked elsewhere); each new `n` opens it again. */
+  open?: { url: string; n: number } | null;
 }) {
   const previews = useMemo(() => {
     const last = [...events].reverse().find(e => e.type === "preview_update");
@@ -60,6 +63,9 @@ export function PreviewPanel({
     setPage(url);
     setChosen({ kind: "page", url });
   };
+  useEffect(() => {
+    if (open) openPage(open.url);
+  }, [open]);
 
   return (
     <div role="tabpanel" aria-label="Browser" className="flex min-h-0 flex-1 flex-col">

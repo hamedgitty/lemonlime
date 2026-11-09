@@ -22,7 +22,7 @@ import { keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
 import { listWorkdirFiles, searchFiles } from "./composer.ts";
-import { contentTypeFor, resolveWorkdirFile } from "./files.ts";
+import { contentTypeFor, findWorkdirFile, resolveWorkdirFile } from "./files.ts";
 import { handleGitApi } from "./git-api.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 import type { Relay } from "./relay.ts";
@@ -690,6 +690,12 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     });
     res.end(found.data);
     return;
+  }
+  // Whether a path the terminal printed is a file in the thread's folder, for clickable `path:line`.
+  if (path === "/file-exists" && req.method === "GET") {
+    const asked = new URL(req.url ?? "/", "http://runner").searchParams.get("path") ?? "";
+    const found = await findWorkdirFile(runner.workdir, asked);
+    return found ? reply(res, 200, { path: found }) : reply(res, 404, { error: "No such file." });
   }
   if (path === "/commands" && req.method === "GET") return reply(res, 200, { commands: runner.agentCommands });
   if (path.startsWith("/git/")) return handleGitApi(req, res, path, runner.review, { reply, readBody });

@@ -39,6 +39,14 @@ describe("panel tabs", () => {
     expect(newTerminal(s, rand)).toBeNull();
   });
 
+  it("opens a file at a line, moving an open tab to the new line", () => {
+    let s = openFile(emptyPanel(), "a.ts", 12);
+    expect(s.tabs).toEqual([{ kind: "file", id: "file:a.ts", path: "a.ts", line: 12 }]);
+    s = openFile({ ...s, active: "changes" }, "a.ts", 40);
+    expect(s.tabs).toEqual([{ kind: "file", id: "file:a.ts", path: "a.ts", line: 40 }]);
+    expect(s.active).toBe("file:a.ts");
+  });
+
   it("opens a file once, closes to the neighbour, and reopens the last closed tab", () => {
     let s = openFile(openFile(openFile(emptyPanel(), "a.ts"), "b.ts"), "c.ts");
     expect(openFile(s, "a.ts").tabs).toHaveLength(3);

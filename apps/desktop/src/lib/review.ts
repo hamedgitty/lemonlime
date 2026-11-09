@@ -136,6 +136,18 @@ export function quoteLines(path: string, lines: ReviewLine[]): string {
   return `${where}\n${fence}diff\n${body}\n${fence}\n`;
 }
 
+/** The text "Add to chat" puts in the composer for text picked in a terminal. */
+export function quoteTerminal(text: string): string {
+  const body = text
+    .split(/\r?\n/)
+    .map(l => l.trimEnd())
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+  if (!body.trim()) return "";
+  const fence = body.includes("```") ? "````" : "```";
+  return `From the terminal:\n${fence}text\n${body}\n${fence}\n`;
+}
+
 /** A path split so the file name stays whole and the folders can shrink. */
 export function splitPath(path: string): { dir: string; name: string } {
   const i = path.lastIndexOf("/");

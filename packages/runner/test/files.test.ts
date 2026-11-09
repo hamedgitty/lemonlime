@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { branchForThread, signToken, type Thread } from "@lemonlime/protocol";
 import { startServer, ThreadRunner, type AgentAdapter } from "../src/index.ts";
-import { contentTypeFor, relativeParts, resolveWorkdirFile } from "../src/files.ts";
+import { contentTypeFor, findWorkdirFile, relativeParts, resolveWorkdirFile } from "../src/files.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const cleanups: (() => unknown)[] = [];
@@ -124,5 +124,23 @@ describe("reading a file from the working folder", () => {
     expect((await get("../etc/passwd", client)).status).toBe(400);
     expect((await get("escape.txt", client)).status).toBe(403);
     expect((await get(".git/config", client)).status).toBe(403);
+  });
+});
+
+describe("findWorkdirFile", () => {
+  it("finds files the terminal printed, relative or absolute, only inside the folder", async () => {
+    const outside = tempDir("lemonlime-outside-");
+    write(outside, "secret.txt", "top secret");
+    const dir = tempDir("lemonlime-files-");
+    write(dir, "src/app.ts");
+    write(dir, ".git/config");
+    expect(await findWorkdirFile(dir, "src/app.ts")).toBe("src/app.ts");
+    expect(await findWorkdirFile(dir, "./src//app.ts")).toBe("src/app.ts");
+    expect(await findWorkdirFile(dir, join(dir, "src", "app.ts"))).toBe("src/app.ts");
+    expect(await findWorkdirFile(dir, "src")).toBeNull();
+    expect(await findWorkdirFile(dir, "src/missing.ts")).toBeNull();
+    expect(await findWorkdirFile(dir, ".git/config")).toBeNull();
+    expect(await findWorkdirFile(dir, join(outside, "secret.txt"))).toBeNull();
+    expect(await findWorkdirFile(dir, "../secret.txt")).toBeNull();
   });
 });

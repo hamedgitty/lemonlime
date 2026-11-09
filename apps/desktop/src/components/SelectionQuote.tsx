@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { GitFork, TextQuote } from "lucide-react";
 
 /**
@@ -71,17 +71,9 @@ export function SelectionQuote({
     document.getSelection()?.removeAllRanges();
     setAt(null);
   };
-  const item = "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-ink hover:bg-cream-deep";
+  const item = QUOTE_ITEM;
   return (
-    <div
-      data-quote-button
-      data-find-skip
-      role="toolbar"
-      aria-label="Selected text"
-      onMouseDown={e => e.preventDefault()}
-      style={{ top: at.top, left: at.left }}
-      className="absolute z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-line-strong bg-paper p-0.5 shadow-pop"
-    >
+    <QuoteToolbar style={{ top: at.top, left: at.left }} className="-translate-x-1/2">
       <button
         type="button"
         onClick={() => {
@@ -106,6 +98,26 @@ export function SelectionQuote({
           Fork from here
         </button>
       )}
+    </QuoteToolbar>
+  );
+}
+
+/** A button in the small menu by selected text. */
+export const QUOTE_ITEM = "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[13px] font-medium text-ink hover:bg-cream-deep";
+
+/** The small menu shown by selected text (the conversation's, a terminal's). It never takes the selection away. */
+export function QuoteToolbar({ style, className, children }: { style?: CSSProperties; className?: string; children: ReactNode }) {
+  return (
+    <div
+      data-quote-button
+      data-find-skip
+      role="toolbar"
+      aria-label="Selected text"
+      onMouseDown={e => e.preventDefault()}
+      style={style}
+      className={`absolute z-30 flex items-center gap-0.5 rounded-lg border border-line-strong bg-paper p-0.5 shadow-pop ${className ?? ""}`}
+    >
+      {children}
     </div>
   );
 }

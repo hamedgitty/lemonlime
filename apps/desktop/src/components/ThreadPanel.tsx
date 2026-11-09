@@ -10,6 +10,7 @@ import {
   isBuiltIn,
   moveTab,
   newTerminal,
+  openFile,
   PANEL_WIDTH,
   panelBounds,
   snapPanel,
@@ -124,6 +125,13 @@ export function ThreadPanel({
     onState(s => closeTab(s, tab.id));
   };
   const addTerminal = () => onState(s => newTerminal(s) ?? s);
+  // An address to open in the browser tab (from a terminal link, a script's preview); `n` makes each one count.
+  const [browse, setBrowse] = useState<{ url: string; n: number } | null>(null);
+  const openInBrowser = (url: string) => {
+    setBrowse(b => ({ url, n: (b?.n ?? 0) + 1 }));
+    select("browser");
+  };
+  const openFileAt = (path: string, line?: number) => onState(s => openFile(s, path, line));
   const atTerminalLimit = terminalCount(state) >= MAX_TERMINALS;
 
   // How many times the agent changed each file, so an open file reloads after a change.
@@ -316,6 +324,7 @@ export function ThreadPanel({
           connection={session.connection}
           onFindFile={onQuickOpen}
           findFileKeys={shortcuts.quickOpen ? keyCaps(shortcuts.quickOpen) : []}
+          open={browse}
           {...(runnerPath ? { runnerPath } : {})}
         />
       )}
@@ -327,6 +336,7 @@ export function ThreadPanel({
               connection={session.connection}
               path={tab.path}
               version={versions.get(tab.path) ?? 0}
+              line={tab.line}
               onMention={path => onAddToChat(`@${path} `)}
             />
           ) : null;
@@ -345,6 +355,9 @@ export function ThreadPanel({
               active={tab.id === active}
               onName={name => setInfo(tab.id, { name })}
               onTitle={title => setInfo(tab.id, { title })}
+              onAddToChat={onAddToChat}
+              onOpenUrl={openInBrowser}
+              onOpenFile={openFileAt}
             />
           </div>
         );

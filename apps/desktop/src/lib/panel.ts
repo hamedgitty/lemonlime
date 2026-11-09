@@ -12,7 +12,13 @@ export type BuiltInTab = (typeof BUILT_IN_TABS)[number];
 
 export const PanelTab = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("terminal"), id: z.string().min(1).max(60), terminal: z.string().min(1).max(40), n: z.number().int().positive() }),
-  z.object({ kind: z.literal("file"), id: z.string().min(1).max(4200), path: z.string().min(1).max(4096) }),
+  z.object({
+    kind: z.literal("file"),
+    id: z.string().min(1).max(4200),
+    path: z.string().min(1).max(4096),
+    /** The line to show (from a `path:line` link). */
+    line: z.number().int().positive().optional(),
+  }),
 ]);
 export type PanelTab = z.infer<typeof PanelTab>;
 
@@ -61,8 +67,12 @@ export function openTab(s: PanelState, tab: PanelTab): PanelState {
   return { ...s, tabs: [...s.tabs, tab], active: tab.id };
 }
 
-export function openFile(s: PanelState, path: string): PanelState {
-  return openTab(s, { kind: "file", id: fileTabId(path), path });
+/** Open a file's tab, at `line` when given (an open tab moves to that line). */
+export function openFile(s: PanelState, path: string, line?: number): PanelState {
+  const id = fileTabId(path);
+  const tab: PanelTab = { kind: "file", id, path, ...(line ? { line } : {}) };
+  if (line && s.tabs.some(t => t.id === id)) return { ...s, tabs: s.tabs.map(t => (t.id === id ? tab : t)), active: id };
+  return openTab(s, tab);
 }
 
 export const terminalCount = (s: PanelState) => s.tabs.filter(t => t.kind === "terminal").length;

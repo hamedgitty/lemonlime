@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AtSign, RotateCw } from "lucide-react";
 import { runnerHttpBase } from "@lemonlime/client";
 import type { Connection } from "../lib/useThreadSession.ts";
@@ -31,9 +31,12 @@ export function FileView({
   path,
   version,
   onMention,
+  line,
 }: {
   connection: Connection | null;
   path: string;
+  /** Scroll to this line and mark it (from a `path:line` link). */
+  line?: number | undefined;
   /** Changes whenever the agent changes this file. */
   version: number;
   /** Put `@path` into the message being written. */
@@ -117,13 +120,13 @@ export function FileView({
       ) : loaded.state === "error" ? (
         <p className="m-2 rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">{loaded.message}</p>
       ) : (
-        <Body loaded={loaded} path={path} />
+        <Body loaded={loaded} path={path} line={line} />
       )}
     </div>
   );
 }
 
-function Body({ loaded, path }: { loaded: Extract<Loaded, { state: "ready" }>; path: string }) {
+function Body({ loaded, path, line }: { loaded: Extract<Loaded, { state: "ready" }>; path: string; line?: number | undefined }) {
   const name = path.split("/").at(-1) ?? path;
   switch (loaded.kind) {
     case "image":
@@ -149,7 +152,7 @@ function Body({ loaded, path }: { loaded: Extract<Loaded, { state: "ready" }>; p
     case "csv":
       return <CsvTable text={loaded.text ?? ""} />;
     case "text":
-      return <CodeText text={loaded.text ?? ""} path={path} />;
+      return <CodeText text={loaded.text ?? ""} path={path} line={line} />;
     default:
       return (
         <p className="m-2 rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
@@ -159,7 +162,12 @@ function Body({ loaded, path }: { loaded: Extract<Loaded, { state: "ready" }>; p
   }
 }
 
-function CodeText({ text, path }: { text: string; path: string }) {
+/** Code lines are 13px at 1.6 line height, under 8px of padding. */
+const CODE_LINE_PX = 13 * 1.6;
+const CODE_TOP_PX = 8;
+
+function CodeText({ text, path, line }: { text: string; path: string; line?: number | undefined }) {
+  const scroller = useRef<HTMLDivElement>(null);
   const cut = text.length > TEXT_SHOW_MAX_CHARS;
   const shown = cut ? text.slice(0, TEXT_SHOW_MAX_CHARS) : text;
   const highlighted = useHighlighted(shown, shown.length <= HIGHLIGHT_MAX_CHARS ? languageFor(path) : "");
@@ -168,13 +176,26 @@ function CodeText({ text, path }: { text: string; path: string }) {
     for (let i = 0; i < shown.length; i++) if (shown.charCodeAt(i) === 10) n++;
     return Array.from({ length: shown.endsWith("\n") ? n - 1 : n }, (_, i) => i + 1).join("\n");
   }, [shown]);
+  // A link to a line puts it a third of the way down, so what comes before shows too.
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !line) return;
+    el.scrollTop = Math.max(0, CODE_TOP_PX + (line - 1) * CODE_LINE_PX - el.clientHeight / 3);
+  }, [line, shown]);
   return (
-    <div className="scroll-thin min-h-0 flex-1 overflow-auto bg-paper">
-      <div className="flex min-w-max font-mono text-[13px] leading-[1.6]">
+    <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-auto bg-paper">
+      <div className="relative flex min-w-max font-mono text-[13px] leading-[1.6]">
+        {line ? (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 bg-lemon-soft"
+            style={{ top: CODE_TOP_PX + (line - 1) * CODE_LINE_PX, height: CODE_LINE_PX }}
+          />
+        ) : null}
         <pre aria-hidden="true" className="sticky left-0 shrink-0 border-r border-line bg-cream px-2.5 py-2 text-right text-ink-faint tabular-nums select-none">
           {lines}
         </pre>
-        <pre className={cx("flex-1 px-3 py-2 text-ink", highlighted && "md-code")}>
+        <pre className={cx("relative flex-1 px-3 py-2 text-ink", highlighted && "md-code")}>
           <code>{highlighted ?? shown}</code>
         </pre>
       </div>

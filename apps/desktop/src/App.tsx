@@ -11,6 +11,8 @@ import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
 import { OPEN_IN_PANEL_EVENT } from "./components/AgentMessage.tsx";
 import { ShortcutHints } from "./components/ShortcutHints.tsx";
 import { ReleaseNotes } from "./components/ReleaseNotes.tsx";
+import { LiveAnnouncer, announce } from "./components/Announcer.tsx";
+import { announcement } from "./lib/announce.ts";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
@@ -485,6 +487,8 @@ export function App() {
   const [localStatus, setLocalStatus] = useState<Record<string, ThreadStatus>>({});
   const [localWaiting, setLocalWaiting] = useState<Record<string, number>>({});
   const [localSeq, setLocalSeq] = useState<Record<string, number>>({});
+  // The runners have said once what they're doing.
+  const [runnersPolled, setRunnersPolled] = useState(false);
   const refreshRunners = useCallback(() => {
     void listLocalRunners()
       .then(ids => setRunning(prev => (sameSet(prev, ids) ? prev : new Set(ids))))
@@ -502,6 +506,7 @@ export function App() {
         setLocalSeq(prev => (JSON.stringify(prev) === JSON.stringify(seqs) ? prev : seqs));
         setLocalStatus(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
         setLocalWaiting(prev => (JSON.stringify(prev) === JSON.stringify(waiting) ? prev : waiting));
+        setRunnersPolled(true);
       })
       .catch(() => undefined);
   }, []);
@@ -662,6 +667,8 @@ export function App() {
       if (!before || before === cur.status || prefs.archived[id]) continue;
       const watching = visibleIdsRef.current.has(id) && document.hasFocus();
       const finished = before === "running" && cur.status === "idle";
+      // A screen reader hears about other threads, whether or not notifications are on.
+      if ((finished || cur.status === "failed") && !visibleIdsRef.current.has(id)) announce(announcement(finished ? "finished" : "failed", cur.title));
       if (finished || cur.status === "failed") {
         const at = new Date().toISOString();
         const kind = finished ? "finished" : "failed";
@@ -687,13 +694,19 @@ export function App() {
 
   // An agent on this computer is waiting for an approval in a thread that isn't open.
   const lastWaiting = useRef<Record<string, number>>({});
+  // The first answer from the runners only says how things stand: no news in it.
+  const waitingPrimed = useRef(false);
   useEffect(() => {
     const n = prefs.notifications;
+    const first = !waitingPrimed.current;
+    if (runnersPolled) waitingPrimed.current = true;
     for (const m of localThreads) {
       const now = localWaiting[m.id] ?? 0;
       const before = lastWaiting.current[m.id] ?? 0;
       lastWaiting.current[m.id] = now;
+      if (first) continue;
       const open = visibleIdsRef.current.has(m.id);
+      if (now > before && !open) announce(announcement("needs-you", m.title));
       if (now > before && !open) {
         const at = new Date().toISOString();
         setInbox(i =>
@@ -710,7 +723,7 @@ export function App() {
       if (now > before && !open && n.enabled && n.needsInput)
         alertThread({ threadId: m.id, mode: "local" }, m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
     }
-  }, [localWaiting, localThreads, prefs.notifications, alertThread]);
+  }, [localWaiting, localThreads, prefs.notifications, alertThread, runnersPolled]);
 
   // ── Local thread metadata updates from the session ───────
   const patchLocal = useCallback((id: string, patch: (m: LocalThreadMeta) => LocalThreadMeta | null) => {
@@ -1996,6 +2009,7 @@ export function App() {
   return (
     <TipProvider>
       <ShortcutHints enabled={prefs.shortcutHints} overrides={prefs.shortcuts} />
+      <LiveAnnouncer />
       <Toaster>
         {palette}
         <SnoozeDialog title={snoozeAsk?.title ?? null} onClose={() => setSnoozeAsk(null)} onSnooze={until => snoozeAsk && onSnooze(snoozeAsk, until)} />

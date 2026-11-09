@@ -604,6 +604,22 @@ export class ThreadRunner {
     return scriptEnv({ projectRoot: this.projectRoot, worktree: this.opts.workdir, threadId: this.opts.thread.id });
   }
 
+  private listening: { port: number; command: string }[] = [];
+
+  /** The watcher found the ports this thread's programs listen on (see port-watch.ts). */
+  setListeningPorts(ports: { port: number; command: string }[]): void {
+    this.listening = ports.slice(0, 50);
+    this.store.append({ type: "listening_ports", ports: this.listening });
+  }
+
+  /** The user picked a port the runner found: offer it as a preview, named after its program. */
+  offerListeningPort(port: number): boolean {
+    const found = this.listening.find(p => p.port === port);
+    if (!found) return false;
+    if (!this.previewList.some(p => p.port === port)) this.setPreview(port, found.command);
+    return true;
+  }
+
   /** A script with a preview address started: offer its port in the panel's browser (unless it's offered already). */
   offerScriptPreview(url: string, name: string, ownPorts: readonly number[] = []): void {
     let port: number;

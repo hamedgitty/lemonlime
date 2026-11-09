@@ -155,6 +155,9 @@ export type ClientLimitAction = z.infer<typeof ClientLimitAction>;
  */
 export const ClientContinueAfterRestart = z.object({ type: z.literal("continue_after_restart") });
 
+/** Preview a port the runner found listening (one in the latest `listening_ports`). */
+export const ClientOfferPreview = z.object({ type: z.literal("offer_preview"), port: z.number().int().min(1).max(65535) });
+
 export const ClientMessage = z.discriminatedUnion("type", [
   ClientHello,
   ClientSendMessage,
@@ -176,6 +179,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientAnswerQuestion,
   ClientLimitAction,
   ClientContinueAfterRestart,
+  ClientOfferPreview,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

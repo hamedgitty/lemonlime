@@ -455,6 +455,7 @@ export function ThreadPanel({
           onFindFile={onQuickOpen}
           findFileKeys={shortcuts.quickOpen ? keyCaps(shortcuts.quickOpen) : []}
           open={browse}
+          onOfferPort={session.state === "live" ? session.offerPreview : undefined}
           {...(runnerPath ? { runnerPath } : {})}
         />
       )}

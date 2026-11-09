@@ -130,6 +130,11 @@ export class RunnerClient {
     this.post({ type: "rewind", toSeq, restoreFiles });
   }
 
+  /** Preview a port the runner found listening (see ClientOfferPreview). */
+  offerPreview(port: number): void {
+    this.post({ type: "offer_preview", port });
+  }
+
   /** Carry on after the runner restarted mid-turn (see ClientContinueAfterRestart). */
   continueAfterRestart(): void {
     this.post({ type: "continue_after_restart" });

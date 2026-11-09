@@ -20,6 +20,7 @@ import {
   type TerminalServerMessage,
 } from "@lemonlime/protocol";
 import { TerminalPool, type SpawnPty, type TerminalSession } from "./terminal.ts";
+import { PortWatcher } from "./port-watch.ts";
 import { keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
@@ -43,6 +44,8 @@ export interface ServerOptions {
   ownPorts?: number[];
   /** Relay mode: calls for the control plane wait here for it to collect them (see relay.ts). */
   relay?: Relay;
+  /** Look for ports the thread's programs start listening on, while it's busy (see port-watch.ts). */
+  watchPorts?: boolean;
 }
 
 export interface RunningServer {
@@ -182,15 +185,22 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   http.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
     if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
-    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminals));
+    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminals, watcher));
     else if (path === "/tunnel") tunnelWss.handleUpgrade(req, socket, head, ws => handleTunnel(ws, req, runner, opts));
     else socket.destroy();
   });
+
+  let listenPort = 0;
+  const watcher = opts.watchPorts
+    ? new PortWatcher({ ignore: () => [listenPort, ...(opts.ownPorts ?? [])], onChange: ports => runner.setListeningPorts(ports) })
+    : null;
+  const stopWatching = watcher ? runner.onStatus(s => watcher.busy(s === "running")) : () => {};
 
   return new Promise((resolve, reject) => {
     http.once("error", reject);
     http.listen(opts.port, opts.host, () => {
       const port = (http.address() as AddressInfo).port;
+      listenPort = port;
       resolve({
         port,
         close: () =>
@@ -200,6 +210,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
             wss.close();
             terminalWss.close();
             terminals?.closeAll();
+            stopWatching();
+            watcher?.stop();
             http.close(() => done());
           }),
       });
@@ -335,6 +347,9 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
           if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
         });
         break;
+      case "offer_preview":
+        if (!runner.offerListeningPort(msg.port)) send({ type: "error", code: "bad_request", message: "Nothing is listening on that port any more." });
+        break;
       case "continue_after_restart": {
         const r = runner.continueAfterRestart();
         if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
@@ -418,7 +433,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
   ws.on("error", () => ws.terminate());
 }
 
-function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminals: TerminalPool | null): void {
+function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminals: TerminalPool | null, watcher: PortWatcher | null): void {
   let terminal: TerminalSession | null = null;
   let terminalId = DEFAULT_TERMINAL_ID;
   let script: ResolvedScript | null = null;
@@ -499,6 +514,8 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
     switch (msg.type) {
       case "input":
         terminal.write(msg.data);
+        // Typing Enter may start a server: look for new ports for a while.
+        if (msg.data.includes("\r")) watcher?.touch();
         break;
       case "resize":
         terminal.resize(msg.cols, msg.rows);
@@ -512,6 +529,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
           if (script.previewUrl) runner.offerScriptPreview(script.previewUrl, script.name, opts.ownPorts ?? []);
         }
         terminal.start();
+        watcher?.touch();
         break;
       case "close":
         terminals?.close(terminalId);

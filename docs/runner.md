@@ -278,6 +278,13 @@ DNS rebinding), and carries each connection to the sandbox over the runner's `/t
 socket, which takes a client token and only offered ports. HTTP, WebSockets and
 server-sent events all pass through as bytes; there is no public URL.
 
+The runner also finds dev servers on its own. While the agent works, and for a while after
+a terminal is used, it checks every few seconds which TCP ports the processes it started
+listen on (`ps` and `lsof`, on macOS and Linux; never on Windows), looking only at its own
+process tree. Every process it starts carries `LEMONLIME_THREAD_ID`. A `listening_ports`
+event lists what it found, the apps offer "Open localhost:<port>", and
+`{"type":"offer_preview","port":N}` makes one of those ports a preview.
+
 ## Subagents
 
 Agents get three MCP tools from `lemonlime-runner subagents-mcp` (Claude Code through

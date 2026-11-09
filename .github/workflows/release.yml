@@ -24,7 +24,7 @@ jobs:
           - os: macos-latest
             args: --target aarch64-apple-darwin
           # Intel Macs get their own build: the bundled runner can't be cross-built.
-          - os: macos-13
+          - os: macos-15-intel
             args: --target x86_64-apple-darwin
           - os: windows-latest
             args: ""

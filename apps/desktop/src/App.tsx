@@ -28,7 +28,7 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { NotificationCenter } from "./components/NotificationCenter.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
-import { Toaster, toast } from "./components/Toaster.tsx";
+import { Toaster, connectToastThreads, syncThreadToasts, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
 import { settled, withChildren } from "./lib/children.ts";
 import { Button, Spinner, cx, openExternal } from "./components/ui.tsx";
@@ -36,7 +36,20 @@ import { CloudApi, CloudError, isCloudConfigured } from "./lib/cloud.ts";
 import { AGENT_LABELS, repoName, titleFromPrompt } from "./lib/format.ts";
 import { COMPOSER_SHORTCUTS, keysFor, matchShortcut, type ShortcutId } from "./lib/shortcuts.ts";
 import { appCommands, loadRecents, rememberPick, type PaletteItem } from "./lib/palette.ts";
-import { detectAgents, installAgent, localRunnerStatuses, notify, openFolder, setKeepAwake, threadFolder, type AgentInstall } from "./lib/system.ts";
+import {
+  closeThreadNotifications,
+  detectAgents,
+  focusAppWindow,
+  installAgent,
+  localRunnerStatuses,
+  notify,
+  onNotificationClick,
+  openFolder,
+  setKeepAwake,
+  threadFolder,
+  type AgentInstall,
+  type NotifyTarget,
+} from "./lib/system.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -617,6 +630,25 @@ export function App() {
   const lastStatus = useRef<Record<string, ThreadStatus>>({});
   const placeRef = useRef<Place>(place);
   placeRef.current = place;
+  // The threads on screen (every pane of a split), for callbacks that run later.
+  const visibleIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const notifyPrefs = useRef(prefs.notifications);
+  notifyPrefs.current = prefs.notifications;
+  /**
+   * Tell you about a thread: a system notification while the window is in the background
+   * (clicking it opens the thread), or a toast with "Open thread" while you're here looking
+   * at something else. Nothing for the thread you're looking at, unless asked for.
+   */
+  const alertThread = useCallback((target: NotifyTarget, title: string, body: string, tone: "info" | "error" = "info") => {
+    const here = document.hasFocus();
+    const looking = visibleIdsRef.current.has(target.threadId);
+    if (here && looking && !notifyPrefs.current.whenFocused) return;
+    if (here && !looking) {
+      toast({ title, description: body, tone, key: `alert:${target.threadId}`, threadId: target.threadId });
+      return;
+    }
+    void notify(title, body, target);
+  }, []);
   useEffect(() => {
     const now: Record<string, { status: ThreadStatus; title: string; mode: "local" | "cloud" }> = {};
     for (const m of localThreads) if (localStatus[m.id]) now[m.id] = { status: localStatus[m.id]!, title: m.title, mode: "local" };
@@ -626,8 +658,7 @@ export function App() {
       const before = lastStatus.current[id];
       lastStatus.current[id] = cur.status;
       if (!before || before === cur.status || prefs.archived[id]) continue;
-      const p = placeRef.current;
-      const watching = p.view === "thread" && p.selection.id === id && document.hasFocus();
+      const watching = visibleIdsRef.current.has(id) && document.hasFocus();
       const finished = before === "running" && cur.status === "idle";
       if (finished || cur.status === "failed") {
         const at = new Date().toISOString();
@@ -645,11 +676,12 @@ export function App() {
         );
       }
       if (!n.enabled) continue;
-      if (watching && !n.whenFocused) continue;
-      if (before === "running" && cur.status === "idle" && n.finished) void notify(cur.title || "Thread finished", "The agent finished its turn.");
-      else if (cur.status === "failed" && n.failed) void notify(cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.");
+      const target = { threadId: id, mode: cur.mode };
+      if (finished && n.finished) alertThread(target, cur.title || "Thread finished", "The agent finished its turn.");
+      else if (cur.status === "failed" && n.failed)
+        alertThread(target, cur.title || "Thread failed", "Something went wrong. Open the thread to see what happened.", "error");
     }
-  }, [localThreads, localStatus, cloudThreads, prefs.notifications, prefs.archived]);
+  }, [localThreads, localStatus, cloudThreads, prefs.notifications, prefs.archived, alertThread]);
 
   // An agent on this computer is waiting for an approval in a thread that isn't open.
   const lastWaiting = useRef<Record<string, number>>({});
@@ -659,8 +691,7 @@ export function App() {
       const now = localWaiting[m.id] ?? 0;
       const before = lastWaiting.current[m.id] ?? 0;
       lastWaiting.current[m.id] = now;
-      const p = placeRef.current;
-      const open = p.view === "thread" && p.selection.id === m.id;
+      const open = visibleIdsRef.current.has(m.id);
       if (now > before && !open) {
         const at = new Date().toISOString();
         setInbox(i =>
@@ -675,9 +706,9 @@ export function App() {
         );
       }
       if (now > before && !open && n.enabled && n.needsInput)
-        void notify(m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
+        alertThread({ threadId: m.id, mode: "local" }, m.title || "An agent needs you", "It's waiting for your answer before it carries on.");
     }
-  }, [localWaiting, localThreads, prefs.notifications]);
+  }, [localWaiting, localThreads, prefs.notifications, alertThread]);
 
   // ── Local thread metadata updates from the session ───────
   const patchLocal = useCallback((id: string, patch: (m: LocalThreadMeta) => LocalThreadMeta | null) => {
@@ -1146,6 +1177,35 @@ export function App() {
 
   shortcutState.current = { place, summaries, prefs };
 
+  // Clicking a notification (or a toast's "Open thread") opens its thread, the window in front.
+  const openTarget = useCallback(
+    (target: { threadId: string; mode?: "local" | "cloud" }) => {
+      const mode = target.mode ?? shortcutState.current.summaries.find(t => t.id === target.threadId)?.mode;
+      if (!mode) return;
+      if (mode === "cloud") void refreshCloud();
+      go({ view: "thread", selection: { mode, id: target.threadId } });
+    },
+    [go, refreshCloud],
+  );
+  useEffect(() => {
+    let off: () => void = () => undefined;
+    let live = true;
+    void onNotificationClick(target => {
+      void focusAppWindow();
+      openTarget(target);
+    })
+      .then(stop => (live ? (off = stop) : stop()))
+      .catch(err => console.warn("Notification clicks aren't reported here", err));
+    return () => {
+      live = false;
+      off();
+    };
+  }, [openTarget]);
+  useEffect(() => {
+    connectToastThreads({ visible: id => visibleIdsRef.current.has(id), open: threadId => openTarget({ threadId }) });
+    return () => connectToastThreads(null);
+  }, [openTarget]);
+
   // ── Sidebar states: waiting, unread, drafts; the dock badge ──
   const [openWaiting, setOpenWaiting] = useState<Record<string, number>>({});
   const onWaiting = useCallback((id: string, count: number) => setOpenWaiting(w => (w[id] === count ? w : { ...w, [id]: count })), []);
@@ -1193,6 +1253,7 @@ export function App() {
   // Every thread on screen (all the panes of a split) counts as seen.
   const splitShown = layout !== null && place.view === "thread";
   const visibleIds = useMemo(() => (splitShown ? openThreadIds(layout) : new Set(selectedId ? [selectedId] : [])), [splitShown, layout, selectedId]);
+  visibleIdsRef.current = visibleIds;
   const visibleSeqs = JSON.stringify(
     [...visibleIds].flatMap(id => {
       const t = summaries.find(x => x.id === id);
@@ -1202,6 +1263,11 @@ export function App() {
   useEffect(() => {
     if (selectedId) setInbox(i => markThreadRead(i, selectedId));
   }, [selectedId]);
+  // A thread on screen has been seen: its notifications go, and its toasts follow where you are.
+  useEffect(() => {
+    for (const id of visibleIds) void closeThreadNotifications(id);
+    syncThreadToasts();
+  }, [visibleIds]);
   useEffect(() => {
     const p = prefsRef.current;
     let seen = p.seenSeq;
@@ -1300,8 +1366,6 @@ export function App() {
     },
     [onPrefs, remember],
   );
-  const visibleIdsRef = useRef<ReadonlySet<string>>(new Set());
-  visibleIdsRef.current = visibleIds;
   /** End the snoozes that are due, and those of `needsYou`; the threads coming back show as unread. */
   const wakeThreads = useCallback(
     (needsYou: readonly string[] = []) => {
@@ -1663,7 +1727,7 @@ export function App() {
             }),
           );
           if (prefs.notifications.enabled && prefs.notifications.needsInput)
-            void notify(title || "An agent needs you", "It's waiting for your answer before it carries on.");
+            alertThread({ threadId: summaryId, mode: entry.mode }, title || "An agent needs you", "It's waiting for your answer before it carries on.");
         }}
         onWaiting={onWaiting}
         suggestNext={prefs.suggestNextPrompt}

@@ -34,6 +34,8 @@ export interface DiffRequest {
   path?: string;
   oldPath?: string;
   context?: number;
+  /** Leave out changes to spaces and indentation only. */
+  ignoreWhitespace?: boolean;
 }
 
 export function fetchGitDiff(connection: Connection, q: DiffRequest, fetchImpl?: FetchLike): Promise<GitDiffResponse> {
@@ -42,6 +44,7 @@ export function fetchGitDiff(connection: Connection, q: DiffRequest, fetchImpl?:
   if (q.path) params.set("path", q.path);
   if (q.oldPath) params.set("oldPath", q.oldPath);
   if (q.context !== undefined) params.set("context", String(q.context));
+  if (q.ignoreWhitespace) params.set("whitespace", "ignore");
   return call(connection, `/git/diff?${params}`, GitDiffResponse, {}, fetchImpl);
 }
 

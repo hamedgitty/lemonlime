@@ -42,6 +42,8 @@ export interface DiffQuery {
   oldPath?: string;
   /** Lines of context around each change (git's default is 3). */
   context?: number;
+  /** Leave out changes that only touch spaces and indentation (`git diff -w`). */
+  ignoreWhitespace?: boolean;
 }
 
 /** Runs the GitHub CLI; replaceable in tests. Resolves with stdout or rejects like execFile. */
@@ -118,6 +120,7 @@ export class GitReview {
     const caps = { ...DEFAULT_DIFF_CAPS, ...this.o.caps };
     const path = q.path ? [assertSafePath(q.path), ...(q.oldPath ? [assertSafePath(q.oldPath)] : [])] : undefined;
     const context = Math.max(0, Math.min(MAX_CONTEXT, Math.floor(q.context ?? 3)));
+    const ignoreWhitespace = q.ignoreWhitespace === true;
     const mergeBase = await this.mergeBase();
     const commits = await this.commits(mergeBase);
 
@@ -128,12 +131,12 @@ export class GitReview {
       if (!full) throw new Error("That commit isn't in this repository.");
       const parent =
         (await this.ws.git(["rev-parse", "--verify", "-q", "--end-of-options", `${full}^`], { allowFail: true })).trim() || (await this.ws.emptyTreeId());
-      const files = await this.collect([parent, full], {}, { path, context, caps });
+      const files = await this.collect([parent, full], {}, { path, context, caps, ignoreWhitespace });
       return { scope: "commit", commit: full, base: parent, ...files, commits };
     }
 
     const base = q.scope === "uncommitted" ? ((await this.ws.head()) ?? (await this.ws.emptyTreeId())) : mergeBase;
-    const files = await this.withWorkingTreeIndex(env => this.collect([base], env, { path, context, caps }));
+    const files = await this.withWorkingTreeIndex(env => this.collect([base], env, { path, context, caps, ignoreWhitespace }));
     return { scope: q.scope, base, ...files, commits };
   }
 
@@ -263,14 +266,15 @@ export class GitReview {
   private async collect(
     range: string[],
     env: Record<string, string>,
-    o: { path: string[] | undefined; context: number; caps: DiffCaps },
+    o: { path: string[] | undefined; context: number; caps: DiffCaps; ignoreWhitespace?: boolean },
   ): Promise<{ files: ReviewFile[]; moreFiles: number }> {
     const opts = { allowFail: true, env, maxBuffer: 64 * 1024 * 1024 };
     // With a scratch index, compare it (the working tree) with the one tree in `range`.
     const cached = env.GIT_INDEX_FILE ? ["--cached"] : [];
     const tail = [...cached, "--end-of-options", ...range, "--", ...(o.path ?? [])];
     const nameStatus = await this.ws.git(["diff", ...SAFE_DIFF, "--no-color", "-M", "--name-status", "-z", ...tail], opts);
-    const numstat = await this.ws.git(["diff", ...SAFE_DIFF, "--no-color", "-M", "--numstat", "-z", ...tail], opts);
+    const ws = o.ignoreWhitespace ? ["-w"] : [];
+    const numstat = await this.ws.git(["diff", ...SAFE_DIFF, "--no-color", "-M", ...ws, "--numstat", "-z", ...tail], opts);
     const listed = mergeStats(parseNameStatus(nameStatus), parseNumstat(numstat));
     const shown = listed.slice(0, o.caps.maxFiles);
     const moreFiles = listed.length - shown.length;
@@ -282,6 +286,7 @@ export class GitReview {
       "--no-color",
       "-M",
       `-U${o.context}`,
+      ...ws,
       ...cached,
       "--end-of-options",
       ...range,

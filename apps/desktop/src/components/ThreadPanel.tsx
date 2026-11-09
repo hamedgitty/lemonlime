@@ -314,7 +314,13 @@ export function ThreadPanel({
         </button>
       </div>
       {active === "changes" && (
-        <ReviewPanel connection={session.connection} refreshKey={refreshKey} onAddToChat={onAddToChat} fallback={<ChangesList events={session.events} />} />
+        <ReviewPanel
+          connection={session.connection}
+          refreshKey={refreshKey}
+          onAddToChat={onAddToChat}
+          onOpenFile={path => openFileAt(path)}
+          fallback={<ChangesList events={session.events} />}
+        />
       )}
       {active === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
       {active === "browser" && (

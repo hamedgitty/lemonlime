@@ -101,6 +101,17 @@ describe("GitReview diffs", () => {
     expect(wide.files[0]!.hunks[0]!.lines).toHaveLength(11);
   });
 
+  it("leaves out changes that only touch whitespace when asked", async () => {
+    const { dir, review } = await setup();
+    writeFileSync(join(dir, "draft.md"), "# notes\n");
+    writeFileSync(join(dir, "a.txt"), "zero\none\n  two\nTHREE\nfour\nfive\nsix\nseven\neight\nnine\nTEN   \n");
+    const all = await review.diff({ scope: "uncommitted", path: "a.txt" });
+    expect(all.files[0]!.additions).toBe(3);
+    const quiet = await review.diff({ scope: "uncommitted", path: "a.txt", ignoreWhitespace: true });
+    expect(quiet.files[0]!.additions).toBe(1);
+    expect(quiet.files[0]!.hunks.flatMap(h => h.lines).filter(l => l.startsWith("+"))).toEqual(["+zero"]);
+  });
+
   it("caps files and patch sizes", async () => {
     const { dir, review } = await setup({ maxFiles: 2, maxFileBytes: 40, maxTotalBytes: 1_000_000 });
     writeFileSync(join(dir, "big.txt"), Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n"));

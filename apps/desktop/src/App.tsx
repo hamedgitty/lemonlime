@@ -10,6 +10,7 @@ import { PluginsView } from "./components/PluginsView.tsx";
 import { GlobalPanel, type PanelTab } from "./components/GlobalPanel.tsx";
 import { OPEN_IN_PANEL_EVENT } from "./components/AgentMessage.tsx";
 import { ShortcutHints } from "./components/ShortcutHints.tsx";
+import { ReleaseNotes } from "./components/ReleaseNotes.tsx";
 import { AgentScans, ImportChats } from "./components/ImportChats.tsx";
 import { mergeImportedThreads } from "./lib/history.ts";
 import { agentsToAutoUpdate, needsUpdate } from "./lib/models.ts";
@@ -50,7 +51,7 @@ import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
 import { setAccountsRunnerPath, switchThreadsAccount } from "./lib/accounts.ts";
 import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
-import { checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
+import { RESTART_WHILE_WORKING, checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
 import { queueFirstMessage } from "./lib/firstMessage.ts";
 import {
@@ -211,13 +212,19 @@ export function App() {
     let off: () => void = () => undefined;
     void (async () => {
       const [{ listen }, { invoke }] = await Promise.all([import("@tauri-apps/api/event"), import("@tauri-apps/api/core")]);
-      off = await listen("confirm-quit", async () => {
+      // A restart into an update asks the same way (see request_restart in lib.rs).
+      off = await listen<{ restart?: boolean } | null>("confirm-quit", async e => {
+        const restart = Boolean(e.payload?.restart);
         if (
           workingRef.current &&
-          !(await confirmAction("An agent on this computer is still working. Quit anyway? It stops now, and what it changed so far stays on its branch."))
+          !(await confirmAction(
+            restart
+              ? RESTART_WHILE_WORKING
+              : "An agent on this computer is still working. Quit anyway? It stops now, and what it changed so far stays on its branch.",
+          ))
         )
           return;
-        await invoke("confirm_quit");
+        await invoke("confirm_quit", { restart });
       });
     })();
     return () => off();
@@ -226,6 +233,19 @@ export function App() {
   // A newer signed version: offer it quietly, never interrupt.
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [installing, setInstalling] = useState(false);
+  const restartToUpdate = async (u: AvailableUpdate) => {
+    // Asked before the download, so a "no" costs nothing; agents keep working either way.
+    if (workingRef.current && !(await confirmAction(RESTART_WHILE_WORKING))) return;
+    setInstalling(true);
+    try {
+      await u.install({ confirmed: true });
+    } catch (err) {
+      console.warn("The update didn't install", err);
+      toast({ title: "The update didn't install", description: "Try again in a little while.", tone: "error" });
+    } finally {
+      setInstalling(false);
+    }
+  };
   useEffect(() => {
     const t = setTimeout(() => void checkForUpdate().then(setUpdate), 10_000);
     const daily = setInterval(() => void checkForUpdate().then(setUpdate), 6 * 60 * 60_000);
@@ -1730,12 +1750,8 @@ export function App() {
             {update && (
               <div role="status" className="flex items-center gap-3 border-b border-line bg-lime-soft px-6 py-2 text-[14px]">
                 <p className="min-w-0 flex-1">LemonLime {update.version} is ready.</p>
-                <Button
-                  size="sm"
-                  variant="primary"
-                  disabled={installing}
-                  onClick={() => (setInstalling(true), void update.install().catch(() => setInstalling(false)))}
-                >
+                {update.notes && <ReleaseNotes version={update.version} notes={update.notes} />}
+                <Button size="sm" variant="primary" disabled={installing} onClick={() => void restartToUpdate(update)}>
                   {installing ? "Installing…" : "Restart to update"}
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setUpdate(null)}>

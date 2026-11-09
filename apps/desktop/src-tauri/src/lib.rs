@@ -17,16 +17,37 @@ mod system;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::{AppHandle, Emitter, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, RESTART_EXIT_CODE};
 
-/// Set once the person has agreed to quit while agents were working.
+/// Set once the person has agreed to quit (or restart) while agents were working.
 static QUIT_CONFIRMED: AtomicBool = AtomicBool::new(false);
 
-/// The window agreed (or nothing was working): quit for real.
+/// What the window is asked to confirm: quitting, or restarting into an update.
+#[derive(Clone, serde::Serialize)]
+struct QuitRequest {
+    restart: bool,
+}
+
+/// The window agreed (or nothing was working): quit, or restart, for real.
 #[tauri::command]
-fn confirm_quit(app: AppHandle) {
+fn confirm_quit(app: AppHandle, restart: Option<bool>) {
     QUIT_CONFIRMED.store(true, Ordering::SeqCst);
-    app.exit(0);
+    if restart.unwrap_or(false) {
+        app.request_restart();
+    } else {
+        app.exit(0);
+    }
+}
+
+/// Restart into an installed update. A restart can't be held back once it has begun, so
+/// with runners alive the window is asked first, the same way a quit is.
+#[tauri::command]
+fn request_restart(app: AppHandle) {
+    if !QUIT_CONFIRMED.load(Ordering::SeqCst) && app.state::<runner::Runners>().any_alive() {
+        let _ = app.emit("confirm-quit", QuitRequest { restart: true });
+    } else {
+        app.request_restart();
+    }
 }
 
 pub fn run() {
@@ -101,16 +122,18 @@ pub fn run() {
             accounts::account_login_input,
             accounts::account_login_cancel,
             confirm_quit,
+            request_restart,
         ])
         .build(tauri::generate_context!())
         .expect("failed to start LemonLime")
         .run(|app, event| match event {
-            // Quitting with runners alive: let the window decide (it asks if an agent is
+            // Quitting (any way but a restart, which request_restart has already asked
+            // about) with runners alive: let the window decide (it asks if an agent is
             // mid-turn), unless it already said yes.
             RunEvent::ExitRequested { api, code, .. } => {
-                if code.is_none() && !QUIT_CONFIRMED.load(Ordering::SeqCst) && app.state::<runner::Runners>().any_alive() {
+                if code != Some(RESTART_EXIT_CODE) && !QUIT_CONFIRMED.load(Ordering::SeqCst) && app.state::<runner::Runners>().any_alive() {
                     api.prevent_exit();
-                    let _ = app.emit("confirm-quit", ());
+                    let _ = app.emit("confirm-quit", QuitRequest { restart: false });
                 }
             }
             // Never leave runner processes behind when the app quits.

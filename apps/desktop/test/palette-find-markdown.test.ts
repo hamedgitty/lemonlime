@@ -12,7 +12,7 @@ describe("command palette", () => {
     thread("a", "Fix the login page"),
     thread("b", "Add dark mode", "website"),
     { id: "project:/code/site", section: "projects", label: "site", detail: "/code/site" },
-    ...appCommands([{ id: "theme:dark", label: "Use the dark theme", keywords: "night" }]),
+    ...appCommands([{ id: "darkroom", label: "Open the darkroom", keywords: "night photos" }]),
   ];
 
   it("turns every shortcut but its own into a command, with its keys", () => {
@@ -33,12 +33,12 @@ describe("command palette", () => {
     const groups = rankPalette(items, "dark", []);
     const ids = groups.flatMap(g => g.items.map(r => r.item.id));
     expect(ids).toContain("thread:b");
-    expect(ids).toContain("command:theme:dark");
+    expect(ids).toContain("command:darkroom");
     const b = groups.flatMap(g => g.items).find(r => r.item.id === "thread:b")!;
     expect(b.match.positions).toEqual([4, 5, 6, 7]);
     // A keyword match finds it too, without highlighting.
     const night = rankPalette(items, "night", []).flatMap(g => g.items);
-    expect(night.map(r => r.item.id)).toEqual(["command:theme:dark"]);
+    expect(night.map(r => r.item.id)).toEqual(["command:darkroom"]);
     expect(night[0]!.match.positions).toEqual([]);
   });
 
@@ -48,9 +48,9 @@ describe("command palette", () => {
   });
 
   it("shows recent picks first", () => {
-    const idle = rankPalette(items, "", ["thread:b", "gone", "command:theme:dark"]);
+    const idle = rankPalette(items, "", ["thread:b", "gone", "command:darkroom"]);
     expect(idle[0]!.section).toBe("recent");
-    expect(idle[0]!.items.map(r => r.item.id)).toEqual(["thread:b", "command:theme:dark"]);
+    expect(idle[0]!.items.map(r => r.item.id)).toEqual(["thread:b", "command:darkroom"]);
     // Not listed twice.
     expect(idle.find(g => g.section === "threads")!.items.map(r => r.item.id)).toEqual(["thread:a"]);
     // With a query, a recent pick ranks above an equally good match.

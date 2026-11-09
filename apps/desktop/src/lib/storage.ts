@@ -181,8 +181,6 @@ export const UiPrefs = z.object({
   rightPanel: z.boolean().default(false),
   /** Which side the side panel (terminals, browser) sits on. */
   panelSide: z.enum(["left", "right"]).default("right"),
-  /** Light, dark, or follow the system. */
-  theme: z.enum(["light", "dark", "system"]).default("light"),
   /** Open a thread as soon as it's created. */
   navigateOnCreate: z.boolean().default(true),
   /** What Enter does while the agent is working: queue the message for after the turn, or steer (stop and send now). */

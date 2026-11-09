@@ -14,7 +14,6 @@ import {
   LayoutGrid,
   Maximize2,
   MessageSquare,
-  Moon,
   PanelLeft,
   PanelRight,
   Pin,
@@ -22,8 +21,6 @@ import {
   Search,
   Settings as SettingsIcon,
   SquarePen,
-  Sun,
-  SunMoon,
 } from "lucide-react";
 import { rankPalette, type PaletteItem, type PaletteSection } from "../lib/palette.ts";
 import { IS_MAC, keyCaps, type ShortcutId } from "../lib/shortcuts.ts";
@@ -51,9 +48,6 @@ const COMMAND_ICONS: Record<string, typeof Command> = {
   find: Search,
   "split-right": Columns2,
   "maximise-pane": Maximize2,
-  "theme:light": Sun,
-  "theme:dark": Moon,
-  "theme:system": SunMoon,
   "add-project": FolderPlus,
 };
 

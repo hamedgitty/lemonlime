@@ -88,46 +88,6 @@
   }
 }
 
-/* Dark: the rind tones. Same token names, so every component follows. */
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --color-paper: #1b2612;
-  --color-cream: #131c0c;
-  --color-cream-deep: #0e1508;
-  --color-cream-hover: #243119;
-  --color-ink: #e6ecdb;
-  --color-ink-soft: #bcc6ae;
-  --color-ink-faint: #9aa58d;
-  --color-line: #263320;
-  --color-line-strong: #3a4a2e;
-  --color-control: #6f7a62;
-  --color-lemon-soft: #3b3511;
-  --color-lemon-line: #6b5d1a;
-  --color-amber-ink: #f5c96a;
-  --color-status-idle: #5d6650;
-  --color-lime-soft: #22351a;
-  --color-leaf: #a3e635;
-  --color-leaf-deep: #c8f17f;
-  --color-danger: #f2877e;
-  --color-danger-soft: #3d1a16;
-  --color-amber: #f5b14a;
-  --color-diff-add: #1f3517;
-  --color-diff-add-strong: #b6ec74;
-  --color-diff-del: #3d1a16;
-  --color-diff-del-strong: #f6a49c;
-  --color-code-keyword: #b6ec74;
-  --color-code-string: #f5c96a;
-  --color-code-number: #f6a49c;
-  --color-code-tag: #f6a49c;
-  --color-code-function: #f2f6ea;
-  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 16px rgb(0 0 0 / 0.25);
-  --shadow-pop: 0 2px 6px rgb(0 0 0 / 0.35), 0 18px 48px rgb(0 0 0 / 0.5);
-}
-:root[data-theme="dark"] ::selection {
-  background: var(--color-leaf);
-  color: var(--color-rind);
-}
-
 @layer base {
   html,
   body,

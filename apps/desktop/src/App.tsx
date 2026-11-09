@@ -290,19 +290,6 @@ export function App() {
     void loadComputerAccess().then(levels => levels && onPrefs({ computerAccess: levels }));
   }, [onPrefs]);
 
-  // ── Theme ────────────────────────────────────────────────
-  useEffect(() => {
-    const media = window.matchMedia?.("(prefers-color-scheme: dark)");
-    const apply = () => {
-      const dark = prefs.theme === "dark" || (prefs.theme === "system" && Boolean(media?.matches));
-      document.documentElement.dataset.theme = dark ? "dark" : "light";
-    };
-    apply();
-    if (prefs.theme !== "system" || !media) return;
-    media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
-  }, [prefs.theme]);
-
   // ── Agent CLIs on this computer ──────────────────────────
   const [agents, setAgents] = useState<AgentInstall[] | null>(null);
   const refreshAgents = useCallback(() => {
@@ -1353,9 +1340,6 @@ export function App() {
       { id: "plugins", label: "Plugins", keywords: "extensions marketplace install" },
       { id: "add-project", label: "Add a project…", keywords: "folder repository open" },
       ...SETTINGS_PAGES.map(pg => ({ id: `settings:${pg.id}`, label: `Settings: ${pg.label}`, keywords: pg.keywords })),
-      { id: "theme:light", label: "Use the light theme", keywords: "appearance colour" },
-      { id: "theme:dark", label: "Use the dark theme", keywords: "appearance colour night" },
-      { id: "theme:system", label: "Match the system theme", keywords: "appearance colour auto" },
     ];
     // "settings" is the same as Settings: Account; thread commands only make sense in one.
     // Pane commands only while split, and only for panes that are there.
@@ -1390,7 +1374,6 @@ export function App() {
     if (value === "plugins") return go({ view: "plugins" });
     if (value === "add-project") return void addProject();
     if (value.startsWith("settings:")) return go({ view: "settings", page: value.slice("settings:".length) as SettingsPage });
-    if (value.startsWith("theme:")) return onPrefs({ theme: value.slice("theme:".length) as UiPrefs["theme"] });
     runShortcut(value as ShortcutId);
   };
   const palette = (

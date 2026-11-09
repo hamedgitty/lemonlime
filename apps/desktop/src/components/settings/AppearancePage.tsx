@@ -15,20 +15,6 @@ export function AppearancePage({ ctx }: { ctx: SettingsCtx }) {
   const { prefs, onPrefs } = ctx;
   return (
     <>
-      <Section title="Theme">
-        <Row label="Colours">
-          <SegmentedControl<UiPrefs["theme"]>
-            label="Colours"
-            value={prefs.theme}
-            onChange={theme => onPrefs({ theme })}
-            options={[
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
-              { value: "system", label: "Match system" },
-            ]}
-          />
-        </Row>
-      </Section>
       <Section title="Sidebar" description="Drag items into your own order from More → Customize sidebar.">
         {NAV_ITEMS.map(item => (
           <ToggleRow

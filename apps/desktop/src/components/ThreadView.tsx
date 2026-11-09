@@ -41,6 +41,7 @@ import { useThreadSession, type Connection, type SessionState, type SessionTarge
 import { useAttachments } from "../lib/useAttachments.ts";
 import { sendBlocker } from "../lib/composerSend.ts";
 import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
+import { FileLinksContext, type FileLinks } from "../lib/markdown.tsx";
 import { focusFacts, pasteGoesToComposer, typingGoesToComposer } from "../lib/typeAnywhere.ts";
 import { useComposerSources } from "../lib/composerData.ts";
 import { uniquePrompts } from "../lib/promptHistory.ts";
@@ -561,6 +562,18 @@ function ThreadSessionView({
   const setPanel = (update: (s: PanelState) => PanelState) => setPanelState(s => update(s));
   useEffect(() => savePanelState(summary.id, panel), [summary.id, panel]);
   const [quickOpen, setQuickOpen] = useState(false);
+  // File paths in the agent's replies open in the side panel's file view.
+  const fileLinksRoot = entry.mode === "local" ? entry.meta.repoPath : null;
+  const fileLinks = useMemo<FileLinks>(
+    () => ({
+      root: fileLinksRoot,
+      open: ref => {
+        setPanelState(s => openFile(s, ref.path));
+        setPanelOpen(true);
+      },
+    }),
+    [fileLinksRoot],
+  );
   useEffect(() => {
     const open = () => setQuickOpen(true);
     const reopen = () => {
@@ -904,26 +917,29 @@ function ThreadSessionView({
             </div>
           )}
         <div ref={timelineRef} className="relative flex min-h-0 flex-1 flex-col">
-          <Timeline
-            foldFinished={foldFinished}
-            items={timelineItems}
-            working={working}
-            unreadAfterSeq={unreadAt}
-            loadImage={loadImage}
-            empty={
-              loadingHistory ? (
-                <HistorySkeleton />
-              ) : (
-                <EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} machine={machine} />
-              )
-            }
-            onRewind={rewindTo}
-            onEdit={editMessage}
-            onFork={onFork ? fork : undefined}
-            subagents={subagents}
-            onImplementPlan={session.state === "live" ? implementPlan : undefined}
-            limit={limitActions}
-          />
+          <FileLinksContext.Provider value={fileLinks}>
+            <Timeline
+              threadId={summary.id}
+              foldFinished={foldFinished}
+              items={timelineItems}
+              working={working}
+              unreadAfterSeq={unreadAt}
+              loadImage={loadImage}
+              empty={
+                loadingHistory ? (
+                  <HistorySkeleton />
+                ) : (
+                  <EmptyThread state={session.state} mode={summary.mode} branch={summary.branch} cloudStatus={cloudStatus} machine={machine} />
+                )
+              }
+              onRewind={rewindTo}
+              onEdit={editMessage}
+              onFork={onFork ? fork : undefined}
+              subagents={subagents}
+              onImplementPlan={session.state === "live" ? implementPlan : undefined}
+              limit={limitActions}
+            />
+          </FileLinksContext.Provider>
           {find !== null && <FindBar root={timelineRef} version={timelineItems} focusNonce={find} onClose={() => setFind(null)} />}
           <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} onFork={onFork ? fork : undefined} />
         </div>

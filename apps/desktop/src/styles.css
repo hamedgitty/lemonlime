@@ -271,8 +271,43 @@
   .md li + li {
     margin-top: 0.25em;
   }
+  /* A list or quote inside an item or quote, and an item's later paragraphs. */
+  .md li > * + *,
+  .md blockquote > * + *,
+  .md .md-nested > * + * {
+    margin-top: 0.5em;
+  }
+  .md .md-nested {
+    margin-top: 0.25em;
+  }
+  .md ul ul {
+    list-style: circle;
+  }
+  .md li.md-task {
+    list-style: none;
+    margin-left: -1.3em;
+  }
+  .md .md-check {
+    @apply mr-2 size-3.5 translate-y-[2px] accent-leaf;
+  }
   .md blockquote {
     @apply border-l-2 border-line-strong pl-3 text-ink-soft;
+  }
+  /* Right-to-left text puts the quote line on its own side. */
+  .md blockquote[dir="rtl"],
+  .md blockquote:dir(rtl) {
+    @apply border-r-2 border-l-0 pr-3 pl-0;
+  }
+  .md del {
+    @apply text-ink-soft;
+  }
+  /* A file path in inline code: opens the file in the side panel. */
+  .md code.md-file {
+    @apply cursor-pointer text-leaf underline decoration-leaf/40 underline-offset-2 hover:decoration-leaf;
+  }
+  .md pre.md-wrap {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .md hr {
     @apply border-line;

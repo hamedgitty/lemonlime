@@ -657,9 +657,10 @@ function ThreadSessionView({
   const compact = paneControls !== undefined;
   const [renaming, setRenaming] = useState(false);
   const pr = git.pullRequest;
+  const [prLink, prNumber, prState, prDraft] = [pr?.url ?? null, pr?.number, pr?.state, pr?.draft];
   useEffect(
-    () => rememberPullRequest(summary.id, pr?.url ?? null, pr ? { number: pr.number, state: pr.state, draft: pr.draft } : undefined),
-    [summary.id, pr?.url, pr?.number, pr?.state, pr?.draft],
+    () => rememberPullRequest(summary.id, prLink, prLink ? { number: prNumber, state: prState, draft: prDraft } : undefined),
+    [summary.id, prLink, prNumber, prState, prDraft],
   );
   const canPr = git.available && (git.status !== null || entry.mode === "cloud");
   const noRemote = entry.mode === "local" && !git.status?.hasRemote;

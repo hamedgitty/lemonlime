@@ -58,6 +58,7 @@ import {
 import { parseUnifiedDiff } from "../lib/diff.ts";
 import { flashItem } from "../lib/findInThread.ts";
 import { StreamingMarkdown } from "../lib/markdown.tsx";
+import { attachmentLabel } from "../lib/pastedText.ts";
 import { Menu, MenuItem } from "./primitives.tsx";
 import { STATUS_LABELS, clockTime, stringifyValue } from "../lib/format.ts";
 import { DiffBody } from "./DiffView.tsx";
@@ -830,7 +831,7 @@ function UserMessage({
               {listed.map(f => (
                 <li key={f} className="inline-flex h-6 max-w-[220px] items-center gap-1 rounded-md bg-paper/70 px-2 text-[12px] text-ink-soft">
                   <Paperclip aria-hidden="true" className="size-3 shrink-0" />
-                  <span className="truncate">{f}</span>
+                  <span className="truncate">{attachmentLabel(f)}</span>
                 </li>
               ))}
             </ul>

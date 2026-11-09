@@ -24,6 +24,7 @@ import { keysFor } from "../lib/shortcuts.ts";
 import type { AgentInstall } from "../lib/system.ts";
 import { inDesktopShell, inspectRepo, listSkills, pickFolder, type SkillInfo } from "../lib/native.ts";
 import { attachmentProblem } from "../lib/useAttachments.ts";
+import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
 import { PermissionPicker } from "./AgentLoop.tsx";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
 import { showGetStarted, type GetStartedFacts, type GetStartedStep } from "../lib/getStarted.ts";
@@ -297,7 +298,7 @@ export function Home({
                 )}
               >
                 <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
-                <span className="min-w-0 truncate">{f.file.name}</span>
+                <span className="min-w-0 truncate">{attachmentLabel(f.file.name)}</span>
                 {f.problem && <span className="shrink-0 text-[12px]">Too big</span>}
                 <button
                   type="button"
@@ -334,6 +335,15 @@ export function Home({
             autoFocus
             busy={busy}
             onSend={send}
+            onLongPaste={pasted => {
+              addFiles([
+                pastedTextFile(
+                  pasted,
+                  files.map(f => f.file.name),
+                ),
+              ]);
+              return true;
+            }}
             onTextChange={setTyped}
             tools={
               <>

@@ -40,6 +40,8 @@ import { editSendPlan, forkNote, forkTitle, rewindLanded, startEdit, type EditDr
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
 import { sendBlocker } from "../lib/composerSend.ts";
+import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
+import { focusFacts, pasteGoesToComposer, typingGoesToComposer } from "../lib/typeAnywhere.ts";
 import { useComposerSources } from "../lib/composerData.ts";
 import { uniquePrompts } from "../lib/promptHistory.ts";
 import { COMPUTER_LEVELS, type ComputerLevel } from "../lib/computer.ts";
@@ -605,12 +607,7 @@ function ThreadSessionView({
   // Put text into the message being written (e.g. lines picked in a diff), after what's there.
   // Other parts of the app can do the same with a "lemonlime:composer-insert" event ({ text }).
   const composerWrap = useRef<HTMLDivElement>(null);
-  const insertIntoComposer = (text: string) => {
-    const handle = composerRef.current as (ComposerHandle & { insert?: (t: string) => void }) | null;
-    if (handle?.insert) return handle.insert(text);
-    const current = composerWrap.current?.querySelector("textarea")?.value ?? "";
-    handle?.fill(current.trim() ? `${current.trimEnd()}\n\n${text}` : text);
-  };
+  const insertIntoComposer = (text: string) => composerRef.current?.insert(text);
   // Unsent text stays with the thread: the composer keeps it (draftKey), and the sidebar marks it.
   const insertRef = useRef(insertIntoComposer);
   insertRef.current = insertIntoComposer;
@@ -621,6 +618,39 @@ function ThreadSessionView({
     };
     window.addEventListener("lemonlime:composer-insert", onInsert);
     return () => window.removeEventListener("lemonlime:composer-insert", onInsert);
+  }, []);
+
+  // Typing or pasting with nothing else to take it lands in this pane's message box.
+  const addFilesRef = useRef(files.add);
+  addFilesRef.current = files.add;
+  useEffect(() => {
+    const box = () => {
+      const el = composerWrap.current?.querySelector("textarea");
+      return activeRef.current && el && !el.disabled && el.getClientRects().length > 0 ? el : null;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const el = box();
+      if (!el || !typingGoesToComposer(e, focusFacts())) return;
+      // Moving focus now sends this key's character to the box.
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      const el = box();
+      if (!el || !e.clipboardData || !pasteGoesToComposer(focusFacts())) return;
+      const pasted = [...e.clipboardData.files];
+      const text = e.clipboardData.getData("text/plain");
+      if (!pasted.length && !text) return;
+      e.preventDefault();
+      if (pasted.length) addFilesRef.current(pasted);
+      else composerRef.current?.paste(text);
+    };
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("paste", onPaste);
+    };
   }, []);
 
   // The branch as git sees it, refreshed when the agent changes files or a turn ends.
@@ -958,13 +988,13 @@ function ThreadSessionView({
                     )}
                   >
                     <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
-                    <span className="min-w-0 truncate">{a.name}</span>
+                    <span className="min-w-0 truncate">{attachmentLabel(a.name)}</span>
                     <span className="shrink-0 text-[12px] text-ink-faint tabular-nums">
                       {a.state === "uploading" ? `${Math.floor((a.sent / Math.max(1, a.size)) * 100)}%` : a.state === "failed" ? "Failed" : ""}
                     </span>
                     <button
                       type="button"
-                      aria-label={`Remove ${a.name}`}
+                      aria-label={`Remove ${attachmentLabel(a.name)}`}
                       onClick={() => files.remove(a.id)}
                       className="inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-ink/5 hover:text-ink"
                     >
@@ -988,6 +1018,16 @@ function ThreadSessionView({
               ref={composerRef}
               onSend={sendWithFiles}
               onHold={hold}
+              onLongPaste={pasted => {
+                if (!session.connection) return false;
+                files.add([
+                  pastedTextFile(
+                    pasted,
+                    files.items.map(a => a.name),
+                  ),
+                ]);
+                return true;
+              }}
               suggestions={composerSuggestions}
               history={prompts}
               draftKey={summary.id}

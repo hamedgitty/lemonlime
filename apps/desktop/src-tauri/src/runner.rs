@@ -88,6 +88,7 @@ struct StartRequest {
     base_branch: Option<String>,
     runner_path: Option<String>,
     settings: RunnerSettings,
+    start: BranchStart,
 }
 
 /// The user's settings for local threads, passed to the runner as flags.
@@ -177,6 +178,38 @@ pub(crate) fn thread_flags(
     out
 }
 
+/// Where a new thread's branch starts: on an existing branch (maybe a pull request's), or
+/// from another commit (a fork). Passed on every start; the runner keeps what it set up first.
+#[derive(Default)]
+pub(crate) struct BranchStart {
+    branch: Option<String>,
+    start_from: Option<String>,
+    pull_request: Option<u32>,
+}
+
+impl BranchStart {
+    pub(crate) fn from_frontend(branch: Option<String>, start_from: Option<String>, pull_request: Option<u32>) -> Self {
+        // The runner checks these are usable git names; one starting with "-" would read as a flag.
+        let ok = |v: Option<String>| non_empty(v).filter(|v| !v.starts_with('-') && v.len() <= 250);
+        let branch = ok(branch);
+        BranchStart { pull_request: pull_request.filter(|n| *n > 0 && branch.is_some()), start_from: ok(start_from).filter(|_| branch.is_none()), branch }
+    }
+
+    pub(crate) fn flags(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Some(b) = &self.branch {
+            out.extend(["--branch".to_string(), b.clone()]);
+        }
+        if let Some(n) = self.pull_request {
+            out.extend(["--pull-request".to_string(), n.to_string()]);
+        }
+        if let Some(f) = &self.start_from {
+            out.extend(["--start-from".to_string(), f.clone()]);
+        }
+        out
+    }
+}
+
 /// What a skill name may look like, so nothing odd ends up on the runner's command line.
 fn valid_skill_name(name: &str) -> bool {
     !name.is_empty()
@@ -205,9 +238,13 @@ pub async fn start_local_runner(
     retry_max_wait_minutes: Option<f64>,
     disabled_skills: Option<Vec<String>>,
     command_guard: Option<bool>,
+    thread_branch: Option<String>,
+    start_from: Option<String>,
+    pull_request: Option<u32>,
 ) -> Result<RunnerInfo, String> {
     let settings = RunnerSettings::from_frontend(instructions, strip_coauthors, branch_prefix, retry_max_wait_minutes, disabled_skills, command_guard);
-    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, fast: fast.unwrap_or(false), workdir, base_branch, runner_path, settings };
+    let start = BranchStart::from_frontend(thread_branch, start_from, pull_request);
+    let req = StartRequest { thread_id, agent, agent_command, model, reasoning, fast: fast.unwrap_or(false), workdir, base_branch, runner_path, settings, start };
     tauri::async_runtime::spawn_blocking(move || start_blocking(&app, req))
         .await
         .map_err(|e| format!("Could not start the runner: {e}"))?
@@ -363,6 +400,7 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
             cmd.arg("--instructions-file").arg(file);
         }
         cmd.args(thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.fast, req.base_branch, &req.settings));
+        cmd.args(req.start.flags());
         // If this app crashes or is force-quit, the runner stops too instead of living on.
         cmd.arg("--exit-with-parent");
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.

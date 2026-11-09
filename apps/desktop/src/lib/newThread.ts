@@ -22,6 +22,10 @@ export interface NewLocalThread extends FirstMessageExtras {
   machine?: string | undefined;
   baseBranch: string;
   prompt: string | undefined;
+  /** Work on this existing branch (maybe a pull request's) instead of making a new one. */
+  existingBranch?: { name: string; pullRequest?: { number: number; url: string; title: string } | undefined } | undefined;
+  /** Start the new branch from this commit or branch instead of the base (a fork keeps its code). */
+  startFrom?: string | undefined;
 }
 
 export interface NewCloudThread extends FirstMessageExtras {

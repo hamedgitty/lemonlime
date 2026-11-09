@@ -1,6 +1,8 @@
 export { EventStore } from "./event-store.ts";
 export { GitWorkspace, commitSubject, type FileChange } from "./git.ts";
-export { GitReview, DEFAULT_DIFF_CAPS, type DiffCaps, type DiffQuery, type GhRunner } from "./git-review.ts";
+export { GitReview, DEFAULT_DIFF_CAPS, draftPullRequest, type DiffCaps, type DiffQuery, type GhRunner } from "./git-review.ts";
+export { forkRemoteUrl, listBranches, lookupPullRequest, parsePullRequestLookup, preparePullRequestBranch, type PullRequestCheckout } from "./git-start.ts";
+export { PullRequestWatcher, watchOff, watchStep, MAX_COMMENT_WAKES, NO_CHECKS_AFTER_MS, type WatchMemory, type WatchSnapshot } from "./pr-watch.ts";
 export {
   ThreadRunner,
   BusyError,
@@ -20,6 +22,7 @@ export { ActivityMonitor, type ActivityMonitorOptions, type BackgroundActivity }
 export {
   capBytes,
   cleanup,
+  gitCommand,
   historyCommand,
   INSTRUCTIONS_MAX_BYTES,
   lemonlimeHome,

@@ -22,7 +22,8 @@ import { keeper } from "./keeper.ts";
 import { keysFromKeeper, keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { runApprovalMcp } from "./approval-mcp.ts";
 import { runSubagentsMcp } from "./subagents-mcp.ts";
-import { GitWorkspace } from "./git.ts";
+import { assertSafeRef, GitWorkspace } from "./git.ts";
+import { listBranches, lookupPullRequest } from "./git-start.ts";
 import { secretsFromEnv } from "./redact.ts";
 import { credentialHelperCommand, gitCredential } from "./git-credential.ts";
 import type { AgentCredential } from "./login.ts";
@@ -61,6 +62,12 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                         saved on this computer, as JSON (they are only read)
        lemonlime-runner history import <id>...
                         Make local threads from conversations a scan listed, as JSON
+       lemonlime-runner git branches --repo <path>
+                        The repository's branches, newest first, as JSON
+       lemonlime-runner git pull-request --repo <path> --ref <link or #123>
+                        Find a pull request of the repository with gh, as JSON
+       lemonlime-runner git remove-worktree --thread <id> --source-repo <path>
+                        Remove a local thread's worktree but keep its history and branch
        lemonlime-runner accounts list|add|remove|default|rename|on-limit|login ...
                         The agent accounts kept on this computer (see accounts --help)
 
@@ -76,6 +83,13 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            its checked-out branch and uncommitted work are never touched
                            (worktree default: ~/.lemonlime/worktrees/<repo>/<thread>)
   --base <branch>          Branch the agent branch starts from (default: main)
+  --start-from <ref>       With --source-repo: start the thread's new branch from this
+                           commit or branch instead of --base (e.g. forking a thread)
+  --branch <name>          With --source-repo: work on this existing branch (local, or
+                           origin's) instead of making a new one. Refused when it's
+                           checked out in another folder
+  --pull-request <n>       With --source-repo and --branch: work on pull request <n>'s
+                           branch (from a fork too), so the agent can push to it
   --port <n>               Port to listen on (default: 7420)
   --host <addr>            Interface to bind (default: 127.0.0.1)
   --data-dir <path>        Where history is stored (default: <workdir>/.lemonlime, or
@@ -162,11 +176,16 @@ export function readInstructions(file: string | undefined, env: NodeJS.ProcessEn
  * so changing the prefix later never moves an existing thread to a new branch. Threads
  * from before branch names were saved used the default prefix.
  */
-export function threadBranch(dataDir: string, id: ThreadId, prefix: string | undefined): string {
+export function threadBranch(dataDir: string, id: ThreadId, prefix: string | undefined, named?: string): string {
   const file = join(dataDir, "branch");
   if (existsSync(file)) {
     const saved = readFileSync(file, "utf8").trim();
     if (saved) return saved;
+  }
+  if (named) {
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(file, `${named}\n`);
+    return named;
   }
   const existing = existsSync(join(dataDir, "state.json")) || existsSync(join(dataDir, "events.jsonl"));
   if (existing || prefix === undefined || prefix === DEFAULT_BRANCH_PREFIX) return branchForThread(id);
@@ -252,6 +271,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (argv[0] === "keeper") return keeper(argv.slice(1));
   if (argv[0] === "history") return historyCommand(argv.slice(1));
   if (argv[0] === "accounts") return accountsCommand(argv.slice(1), lemonlimeHome());
+  if (argv[0] === "git") return gitCommand(argv.slice(1));
   if (argv[0] === "approval-mcp") return runApprovalMcp();
   if (argv[0] === "subagents-mcp") return runSubagentsMcp();
   if (argv[0] === "preview") return previewCommand(argv.slice(1));
@@ -288,6 +308,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       "source-repo": { type: "string" },
       repo: { type: "string" },
       base: { type: "string", default: "main" },
+      "start-from": { type: "string" },
+      branch: { type: "string" },
+      "pull-request": { type: "string" },
       port: { type: "string", default: process.env.LEMONLIME_RUNNER_PORT ?? "7420" },
       host: { type: "string", default: "127.0.0.1" },
       "data-dir": { type: "string" },
@@ -384,6 +407,13 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
 
   const branchPrefix = values["branch-prefix"];
   if (branchPrefix !== undefined && !isSafeBranchPrefix(branchPrefix)) fail("--branch-prefix must be a safe git branch prefix, e.g. agent/ or ai-");
+  const named = values.branch;
+  if (named !== undefined && (!sourceRepo || !isSafeRefName(named))) fail("--branch needs --source-repo and a usable branch name");
+  if (values["start-from"] !== undefined && (!sourceRepo || named || !isSafeRefName(values["start-from"])))
+    fail("--start-from needs --source-repo, a usable commit or branch, and no --branch");
+  const pullRequest = values["pull-request"] === undefined ? undefined : Number(values["pull-request"]);
+  if (pullRequest !== undefined && (!named || !Number.isInteger(pullRequest) || pullRequest < 1))
+    fail("--pull-request needs --branch and a pull request number");
   const retryMinutes = Number(values["retry-max-wait"] ?? process.env.LEMONLIME_RETRY_MAX_WAIT ?? 0);
   if (!Number.isFinite(retryMinutes) || retryMinutes < 0) fail("--retry-max-wait must be a number of minutes (0 turns it off)");
   delete process.env.LEMONLIME_RETRY_MAX_WAIT;
@@ -420,7 +450,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
       ...(values.fast ? { fast: true } : {}),
     },
     repo: { url: values.repo ?? sourceRepo ?? workdir, baseBranch: values.base! },
-    branch: values["no-git"] ? branchForThread(id, branchPrefix) : threadBranch(dataDir, id, branchPrefix),
+    branch: values["no-git"] ? branchForThread(id, branchPrefix) : threadBranch(dataDir, id, branchPrefix, named),
     mode: inSandbox ? "cloud" : "local",
     status: "provisioning",
     sandboxSize: "small",
@@ -462,6 +492,15 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     git: !values["no-git"],
     ...(values.repo ? { repoUrl: values.repo } : {}),
     ...(sourceRepo ? { sourceRepo } : {}),
+    ...(named || values["start-from"]
+      ? {
+          start: {
+            ...(values["start-from"] ? { from: values["start-from"] } : {}),
+            ...(named ? { existing: true } : {}),
+            ...(pullRequest ? { pullRequest } : {}),
+          },
+        }
+      : {}),
     checkAgentVersion: true,
     bundledSkills: !values["no-bundled-skills"],
     redact: redactions,
@@ -677,6 +716,47 @@ export async function cleanup(argv: string[]): Promise<void> {
   rmSync(workdir, { recursive: true, force: true });
   rmSync(dataDir, { recursive: true, force: true });
   process.stdout.write(JSON.stringify({ event: "cleaned", workdir, dataDir }) + "\n");
+}
+
+const GIT_USAGE =
+  "usage: lemonlime-runner git branches --repo <path> | git pull-request --repo <path> --ref <link or #n> | git remove-worktree --thread <id> --source-repo <path>";
+
+/** Branch and ref names from outside: what git allows, never an option. */
+function isSafeRefName(ref: string): boolean {
+  try {
+    assertSafeRef(ref);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `lemonlime-runner git branches|pull-request|remove-worktree`: what the app needs before a
+ * thread's runner is up (picking a branch or a pull request) or after it's gone. One JSON line.
+ */
+export async function gitCommand(argv: string[], write: (text: string) => void = t => void process.stdout.write(t)): Promise<void> {
+  const [sub, ...rest] = argv;
+  const { values } = parseArgs({
+    args: rest,
+    options: { repo: { type: "string" }, ref: { type: "string" }, thread: { type: "string" }, "source-repo": { type: "string" } },
+    strict: true,
+  });
+  if (sub === "branches" && values.repo) return write(JSON.stringify(await listBranches(resolve(values.repo))) + "\n");
+  if (sub === "pull-request" && values.repo && values.ref) return write(JSON.stringify(await lookupPullRequest(resolve(values.repo), values.ref)) + "\n");
+  if (sub === "remove-worktree" && values["source-repo"]) {
+    const id = ThreadId.safeParse(values.thread);
+    if (!id.success) throw new Error(GIT_USAGE);
+    const sourceRepo = resolve(values["source-repo"]);
+    const workdir = worktreePathFor(lemonlimeHome(), sourceRepo, id.data);
+    const ws = new GitWorkspace(workdir);
+    if (existsSync(workdir) && (await ws.git(["status", "--porcelain=v1", "--untracked-files=no"], { allowFail: true })).trim())
+      throw new Error("This thread has changes that aren't committed, so its folder was kept.");
+    if (existsSync(sourceRepo)) await ws.removeWorktree(sourceRepo);
+    rmSync(workdir, { recursive: true, force: true });
+    return write(JSON.stringify({ event: "removed", workdir }) + "\n");
+  }
+  throw new Error(GIT_USAGE);
 }
 
 const HISTORY_USAGE = "usage: lemonlime-runner history scan [--since-days <n>] [--limit <n>] | history import <id>...";

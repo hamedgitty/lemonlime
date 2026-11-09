@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { CreatePullRequestBody, DiffScope } from "@lemonlime/protocol";
+import { CreatePullRequestBody, DiffScope, WatchPullRequestBody } from "@lemonlime/protocol";
 import { ReviewError, type GitReview } from "./git-review.ts";
 
 interface Helpers {
@@ -15,6 +15,10 @@ interface Helpers {
  * - `POST /git/push`: push the branch to origin (never forced)
  * - `POST /git/pull-request` {title?, body?, draft?}: push, then open one with `gh`, or
  *   answer with the compare page to open in the browser
+ * - `GET /git/pull-request/draft`: a title and description written from the thread's commits
+ * - `POST /git/pull-request/watch` {on}: wake the agent when the pull request's checks fail,
+ *   it gets comments or it has merge conflicts
+ * - `POST /git/update-from-base`: merge the base branch in when it merges cleanly
  */
 export async function handleGitApi(req: IncomingMessage, res: ServerResponse, path: string, review: GitReview | null, h: Helpers): Promise<void> {
   if (!review) return h.reply(res, 404, { error: "This thread has no git branch." });
@@ -38,19 +42,22 @@ export async function handleGitApi(req: IncomingMessage, res: ServerResponse, pa
       );
     }
     if (path === "/git/pull-request" && req.method === "GET") return h.reply(res, 200, await review.pullRequest());
+    if (path === "/git/pull-request/draft" && req.method === "GET") return h.reply(res, 200, await review.draft());
+    if (path === "/git/update-from-base" && req.method === "POST") return h.reply(res, 200, await review.updateFromBase());
+    if (path === "/git/pull-request/watch" && req.method === "POST") {
+      const body = WatchPullRequestBody.safeParse(await readJson(req, h));
+      if (!body.success) return h.reply(res, 400, { error: "bad request" });
+      if (!review.watcher) return h.reply(res, 404, { error: "not_found" });
+      if (body.data.on && !(await review.ghUsable()))
+        return h.reply(res, 409, { error: "Watching a pull request needs the GitHub CLI (gh), signed in, where the agent runs." });
+      return h.reply(res, 200, review.watcher.set(body.data.on));
+    }
     if (path === "/git/push" && req.method === "POST") {
       const problem = await review.push();
       return problem ? h.reply(res, 409, { error: problem }) : h.reply(res, 200, { ok: true });
     }
     if (path === "/git/pull-request" && req.method === "POST") {
-      const raw = await h.readBody(req, 128 * 1024);
-      let parsed: unknown = {};
-      try {
-        parsed = raw && raw.length ? JSON.parse(raw.toString()) : {};
-      } catch {
-        return h.reply(res, 400, { error: "bad json" });
-      }
-      const body = CreatePullRequestBody.safeParse(parsed);
+      const body = CreatePullRequestBody.safeParse(await readJson(req, h));
       if (!body.success) return h.reply(res, 400, { error: "bad request" });
       return h.reply(res, 200, await review.createPullRequest(body.data));
     }
@@ -59,5 +66,15 @@ export async function handleGitApi(req: IncomingMessage, res: ServerResponse, pa
     if (err instanceof ReviewError) return h.reply(res, err.status, { error: err.message });
     const message = err instanceof Error ? err.message : String(err);
     return h.reply(res, /^Not a usable|^Pick a commit|isn't in this repository/.test(message) ? 400 : 500, { error: message });
+  }
+}
+
+/** The request's JSON body ({} when empty); undefined when it isn't JSON, so the schema refuses it. */
+async function readJson(req: IncomingMessage, h: Helpers): Promise<unknown> {
+  const raw = await h.readBody(req, 128 * 1024);
+  try {
+    return raw && raw.length ? JSON.parse(raw.toString()) : {};
+  } catch {
+    return undefined;
   }
 }

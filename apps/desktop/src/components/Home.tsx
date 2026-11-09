@@ -8,6 +8,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  GitPullRequest,
   Laptop,
   ListChecks,
   Paperclip,
@@ -16,13 +17,23 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { AGENT_CAPABILITIES, SANDBOX_RESOURCES, type AgentKind, type PermissionMode, type PolicyDenied, type SandboxSize } from "@lemonlime/protocol";
+import {
+  AGENT_CAPABILITIES,
+  SANDBOX_RESOURCES,
+  type AgentKind,
+  type PermissionMode,
+  type PolicyDenied,
+  type PullRequestLookup,
+  type SandboxSize,
+} from "@lemonlime/protocol";
+import { existingBranchProblem, pullRequestIn } from "../lib/branches.ts";
 import { splitCommand } from "../lib/command.ts";
 import { repoName } from "../lib/format.ts";
 import { effortLevels, pickerAgents } from "../lib/models.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import type { AgentInstall } from "../lib/system.ts";
-import { inDesktopShell, inspectRepo, listSkills, pickFolder, type SkillInfo } from "../lib/native.ts";
+import { inDesktopShell, inspectRepo, listSkills, lookupPullRequest, pickFolder, type SkillInfo } from "../lib/native.ts";
+import { StartBranch, useBranches, type StartMode } from "./StartBranch.tsx";
 import { attachmentProblem } from "../lib/useAttachments.ts";
 import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
 import { PermissionPicker } from "./AgentLoop.tsx";
@@ -53,6 +64,8 @@ export interface HomeDraft {
   text: string;
   nonce: number;
   project?: { mode: "local"; path: string } | { mode: "cloud"; url: string };
+  /** A fork from the thread menu: the new thread starts with this branch's code. */
+  startFrom?: string;
 }
 
 export interface HomeProps {
@@ -73,6 +86,8 @@ export interface HomeProps {
   /** What the Get started checklist needs to know (everything but the projects and dismissal, which are prefs). */
   getStarted?: Omit<GetStartedFacts, "projects" | "dismissed">;
   onOpenSettings?: (page: string) => void;
+  /** Path to lemonlime-runner (Settings), for listing branches and finding pull requests. */
+  runnerPath?: string;
 }
 
 /**
@@ -92,6 +107,7 @@ export function Home({
   getStarted,
   onOpenSettings,
   dashboardUrl,
+  runnerPath,
 }: HomeProps) {
   const composer = useRef<ComposerHandle>(null);
   const shell = inDesktopShell();
@@ -108,6 +124,7 @@ export function Home({
   const [remotePath, setRemotePath] = useState(() => machine?.recentPaths[0] ?? "");
   useEffect(() => {
     if (draft && (draft.text || !draft.project)) composer.current?.fill(draft.text);
+    if (draft) setForkFrom(draft.startFrom ?? null);
     if (draft?.project?.mode === "local") {
       setPicked("local");
       void pickProject(draft.project.path);
@@ -142,6 +159,10 @@ export function Home({
   const [repoPath, setRepoPath] = useState(prefs.recentProjects[0] ?? "");
   const [repoUrl, setRepoUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
+  // Make a new branch from baseBranch, or work on baseBranch itself.
+  const [startMode, setStartMode] = useState<StartMode>("new");
+  // A fork from the thread menu starts with the earlier thread's code.
+  const [forkFrom, setForkFrom] = useState<string | null>(null);
   const [sandboxSize, setSandboxSize] = useState<SandboxSize>("small");
   const [projectOpen, setProjectOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -161,11 +182,36 @@ export function Home({
   const loadSkills = () => {
     if (skills === null) void listSkills().then(setSkills, () => setSkills([]));
   };
+  const canPickBranch = place === "local" && !machine && shell;
+  const { branches, failed: branchesFailed } = useBranches(canPickBranch ? repoPath : "", runnerPath);
+  // A pull request link (or #123) in the message or the branch field: the thread can work on its branch.
+  const prSource = canPickBranch && repoPath ? (pullRequestIn(baseBranch) ?? pullRequestIn(typed)) : null;
+  const [pr, setPr] = useState<{ ref: string; lookup?: PullRequestLookup; error?: string } | null>(null);
+  const [prDismissed, setPrDismissed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!prSource || prSource === prDismissed) return setPr(null);
+    if (pr?.ref === prSource) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      setPr({ ref: prSource });
+      lookupPullRequest(repoPath, prSource, runnerPath)
+        .then(lookup => !cancelled && setPr({ ref: prSource, lookup }))
+        .catch(err => !cancelled && setPr({ ref: prSource, error: err instanceof Error ? err.message : String(err) }));
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+    // `pr` is read only to skip a lookup already done.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prSource, prDismissed, repoPath, runnerPath]);
+  const prChosen = pr?.lookup ?? null;
   const hinted = prefs.projectHint && place === "local" && !machine ? otherProjectMentioned(typed, prefs.recentProjects, repoPath) : null;
   const projectHint = hinted && hinted !== hintDismissed ? hinted : null;
 
   const pickProject = async (path: string) => {
     setError(null);
+    if (path !== repoPath) setForkFrom(null);
     setRepoPath(path);
     onPrefs({ recentProjects: [path, ...prefs.recentProjects.filter(p => p !== path)].slice(0, 8) });
     try {
@@ -204,11 +250,17 @@ export function Home({
       return stop("Choose the project folder the agent should work in.", true);
     }
     if (place === "cloud" && !repoUrl.trim()) return stop("Enter the repository the cloud agent should clone.", true);
-    if (!baseBranch.trim()) return stop("Enter the branch the agent should start from.");
-    void create(prompt, words, remote);
+    if (pr && !prChosen) return stop(pr.error ?? "Still looking up the pull request. Send again in a moment.");
+    if (!prChosen && !baseBranch.trim()) return stop("Enter the branch the agent should start from.");
+    const existing = canPickBranch && !prChosen && !forkFrom && startMode === "existing";
+    if (existing) {
+      const problem = existingBranchProblem(branches, baseBranch, repoPath);
+      if (problem) return stop(problem, true);
+    }
+    void create(prompt, words, remote, existing);
     return true;
   };
-  const create = async (prompt: string, words: string[], remote: string) => {
+  const create = async (prompt: string, words: string[], remote: string, existing: boolean) => {
     const sending = files.filter(f => !f.problem).map(f => f.file);
     const common = {
       title: "",
@@ -217,7 +269,7 @@ export function Home({
       model: agent === "acp" ? undefined : (model ?? undefined),
       reasoning: reasoning ?? undefined,
       fast: fast || undefined,
-      baseBranch: baseBranch.trim(),
+      baseBranch: prChosen ? prChosen.baseBranch : baseBranch.trim(),
       prompt,
       ...(sending.length ? { attachments: sending } : {}),
       ...(permission !== usualPermission ? { permission } : {}),
@@ -228,9 +280,20 @@ export function Home({
         await onCreate({ mode: "local", ...common, repoPath: remote, machine: machine.id });
         saveMachines(rememberPath(machines, machine.id, remote));
       } else {
-        await onCreate(place === "local" ? { mode: "local", ...common, repoPath } : { mode: "cloud", ...common, repoUrl: repoUrl.trim(), sandboxSize });
+        const start = prChosen
+          ? { existingBranch: { name: prChosen.localBranch, pullRequest: { number: prChosen.number, url: prChosen.url, title: prChosen.title } } }
+          : existing
+            ? { existingBranch: { name: baseBranch.trim() } }
+            : forkFrom
+              ? { startFrom: forkFrom }
+              : {};
+        await onCreate(
+          place === "local" ? { mode: "local", ...common, repoPath, ...start } : { mode: "cloud", ...common, repoUrl: repoUrl.trim(), sandboxSize },
+        );
       }
       setFiles([]);
+      setForkFrom(null);
+      setStartMode("new");
       setPermissionPick(null);
     } catch (err) {
       if (err instanceof DeniedError) setDenial(err.denial);
@@ -419,7 +482,17 @@ export function Home({
             trigger={
               <PickerButton icon={place === "local" ? <FolderPlus /> : <GitBranch />} tone={projectChosen ? "plain" : "muted"}>
                 {projectLabel}
-                {projectChosen && <span className="ml-1 font-normal text-ink-faint">from {baseBranch}</span>}
+                {projectChosen && (
+                  <span className="ml-1 font-normal text-ink-faint">
+                    {prChosen
+                      ? `on ${prChosen.localBranch}`
+                      : forkFrom
+                        ? `from ${forkFrom}`
+                        : canPickBranch && startMode === "existing"
+                          ? `on ${baseBranch}`
+                          : `from ${baseBranch}`}
+                  </span>
+                )}
               </PickerButton>
             }
             className="w-[360px]"
@@ -501,7 +574,21 @@ export function Home({
                   {shell ? "Choose a folder…" : "Choosing folders needs the desktop app"}
                 </button>
                 <div className="border-t border-line px-2.5 pt-2.5 pb-2">
-                  <BranchField value={baseBranch} onChange={setBaseBranch} />
+                  {canPickBranch ? (
+                    <StartBranch
+                      repoPath={repoPath}
+                      branches={branches}
+                      failed={branchesFailed}
+                      value={baseBranch}
+                      onChange={setBaseBranch}
+                      mode={startMode}
+                      onMode={setStartMode}
+                      forkFrom={forkFrom}
+                      onStartFresh={() => setForkFrom(null)}
+                    />
+                  ) : (
+                    <BranchField value={baseBranch} onChange={setBaseBranch} />
+                  )}
                 </div>
               </div>
             ) : (
@@ -583,6 +670,49 @@ export function Home({
             onChange={mode => setPermissionPick(mode === usualPermission ? null : mode)}
           />
         </div>
+
+        {pr && (
+          <div
+            role="status"
+            className={cx(
+              "mt-2.5 flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-[14px]",
+              pr.error ? "border-line bg-cream-deep" : "border-line-strong bg-paper",
+            )}
+          >
+            <GitPullRequest aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-soft" />
+            <div className="min-w-0 flex-1 space-y-0.5">
+              {pr.lookup ? (
+                <>
+                  <p className="font-medium text-pretty">
+                    #{pr.lookup.number} {pr.lookup.title}
+                  </p>
+                  <p className="text-[13px] text-pretty text-ink-soft">
+                    {pr.lookup.state === "open" ? (pr.lookup.draft ? "Draft pull request" : "Open pull request") : `This pull request is ${pr.lookup.state}`}{" "}
+                    into <span className="font-mono text-[12px]">{pr.lookup.baseBranch}</span>, from{" "}
+                    <span className="font-mono text-[12px]">
+                      {pr.lookup.fromFork && pr.lookup.headRepo ? `${pr.lookup.headRepo.split("/")[0]}:` : ""}
+                      {pr.lookup.headBranch}
+                    </span>
+                    . The thread works on its branch{pr.lookup.pushProblem ? "." : " and can push fixes to it."}
+                  </p>
+                  {pr.lookup.pushProblem && <p className="text-[13px] text-pretty text-ink">{pr.lookup.pushProblem}</p>}
+                </>
+              ) : pr.error ? (
+                <p className="text-[13px] text-pretty text-ink-soft">{pr.error}</p>
+              ) : (
+                <p className="text-[13px] text-ink-soft">Looking up the pull request…</p>
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label={pr.lookup ? "Don't work on this pull request" : "Dismiss"}
+              onClick={() => setPrDismissed(pr.ref)}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-faint hover:bg-cream-hover hover:text-ink"
+            >
+              <X aria-hidden="true" className="size-4" />
+            </button>
+          </div>
+        )}
 
         {projectHint && (
           <div role="status" className="mt-2.5 flex items-center gap-2 rounded-lg border border-line bg-cream-deep px-3 py-2 text-[14px]">

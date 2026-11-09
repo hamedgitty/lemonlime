@@ -52,6 +52,8 @@ import { EventStore } from "./event-store.ts";
 import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 import { commitSubject, GitWorkspace } from "./git.ts";
 import { GitReview } from "./git-review.ts";
+import { lookupPullRequest, preparePullRequestBranch, type PullRequestCheckout } from "./git-start.ts";
+import { PullRequestWatcher } from "./pr-watch.ts";
 import { type AgentCredential, LoginSession, type LoginUpdate } from "./login.ts";
 import { createRedactor } from "./redact.ts";
 import { installSkills } from "./skills.ts";
@@ -76,6 +78,12 @@ export interface ThreadRunnerOptions {
    * so the thread never switches the user's branch or touches their uncommitted work.
    */
   sourceRepo?: string;
+  /**
+   * How a new thread's branch starts (with `sourceRepo`): from `from` (a fork starts from the
+   * thread it came from), on a branch that's already there (`existing`), or on a pull
+   * request's branch (`pullRequest`, its number; the thread's branch is its local name).
+   */
+  start?: { from?: string; existing?: boolean; pullRequest?: number };
   /** Tell the user when the agent has printed nothing for this long. Default 15 minutes. */
   quietNoticeMs?: number;
   /** Stop a turn that runs longer than this. Default 4 hours. */
@@ -395,26 +403,70 @@ export class ThreadRunner {
   }
 
   private reviewer: GitReview | null | undefined;
+  /** The pull request this thread was started on, once its branch is set up. */
+  private pullRequestCheckout: PullRequestCheckout | null = null;
   /** The thread's branch for review: real diffs, push and pull requests. Null without git. */
   get review(): GitReview | null {
     if (this.reviewer !== undefined) return this.reviewer;
+    const firstMessage = () => {
+      const first = this.store.since(0).find(e => e.type === "user_message");
+      return first && first.type === "user_message" ? first.text : "";
+    };
+    const pr = this.pullRequestCheckout;
     try {
       this.reviewer = this.git
         ? new GitReview(this.git, {
             branch: this.opts.thread.branch,
             baseBranch: this.opts.thread.repo.baseBranch,
             threadId: this.opts.thread.id,
-            title: () => {
-              if (this.opts.thread.title) return this.opts.thread.title;
-              const first = this.store.since(0).find(e => e.type === "user_message");
-              return first && first.type === "user_message" ? commitSubject(first.text) : "";
+            title: () => this.opts.thread.title || (firstMessage() ? commitSubject(firstMessage()) : ""),
+            firstMessage,
+            ...(pr ? { pushTarget: pr.pushTarget, pullRequestNumber: pr.number, ...(pr.pushProblem ? { pushProblem: pr.pushProblem } : {}) } : {}),
+            ownFolder: Boolean(this.opts.sourceRepo || this.opts.repoUrl),
+            busy: () => (this.status === "running" || this.current ? "The agent is working. Wait for it to finish, then try again." : null),
+            onHeadMoved: () => {
+              void this.git?.head().then(h => (this.headCommit = h ?? this.headCommit));
+              if (this.opts.pushBranch) this.unpushed = true;
             },
           })
         : null;
     } catch {
       this.reviewer = null;
     }
+    const review = this.reviewer;
+    if (review && !review.watcher) {
+      review.watcher = new PullRequestWatcher({
+        file: this.opts.dataDir ? join(this.opts.dataDir, "pr-watch.json") : null,
+        snapshot: () => review.watchSnapshot(),
+        baseBranch: this.opts.thread.repo.baseBranch,
+        wake: (text, id) => {
+          if (!this.closing && this.initialised) this.sendMessage(text, id);
+        },
+        notice: message => this.store.append({ type: "notice", code: "pr_watch", message }),
+      });
+    }
     return this.reviewer;
+  }
+
+  /** Set up a pull request's branch the first time (saved, so a restart doesn't look it up again). */
+  private async preparePullRequest(source: string, number: number): Promise<void> {
+    const file = this.opts.dataDir ? join(this.opts.dataDir, "pull-request.json") : null;
+    if (file && existsSync(file)) {
+      try {
+        this.pullRequestCheckout = JSON.parse(readFileSync(file, "utf8")) as PullRequestCheckout;
+        return;
+      } catch {
+        /* look it up again */
+      }
+    }
+    const lookup = await lookupPullRequest(source, `#${number}`);
+    if (lookup.localBranch !== this.opts.thread.branch) throw new Error(`Pull request #${number} is on ${lookup.localBranch}, not ${this.opts.thread.branch}.`);
+    this.pullRequestCheckout = await preparePullRequestBranch(source, lookup);
+    if (file) {
+      mkdirSync(this.opts.dataDir!, { recursive: true });
+      writeFileSync(file, JSON.stringify(this.pullRequestCheckout));
+    }
+    if (this.pullRequestCheckout.pushProblem) this.store.append({ type: "notice", code: "pr_push_blocked", message: this.pullRequestCheckout.pushProblem });
   }
 
   get thread(): Thread {
@@ -451,7 +503,13 @@ export class ThreadRunner {
     this.setAccount(typeof saved?.account === "string" ? saved.account : ranBefore ? DEFAULT_ACCOUNT_ID : null);
     if (this.git) {
       if (this.opts.sourceRepo) {
-        await this.git.ensureWorktree(this.opts.sourceRepo, this.opts.thread.branch, this.opts.thread.repo.baseBranch);
+        const start = this.opts.start ?? {};
+        if (start.pullRequest) await this.preparePullRequest(this.opts.sourceRepo, start.pullRequest);
+        const made = await this.git.ensureWorktree(this.opts.sourceRepo, this.opts.thread.branch, this.opts.thread.repo.baseBranch, {
+          ...(start.from ? { from: start.from } : {}),
+          ...(start.existing || start.pullRequest ? { existing: true } : {}),
+        });
+        for (const message of made.warnings) this.store.append({ type: "notice", code: "submodules_not_filled", message });
       } else {
         await this.git.ensureRepo(this.opts.repoUrl);
         await this.git.ensureBranch(this.opts.thread.branch, this.opts.thread.repo.baseBranch);
@@ -490,6 +548,8 @@ export class ThreadRunner {
     }
     this.session = this.newSession();
     this.initialised = true;
+    // A pull request watch that was on before a restart carries on.
+    void this.review;
     const open = new Set<string>();
     const asked = new Set<string>();
     for (const e of this.store.since(0)) {
@@ -1334,6 +1394,7 @@ export class ThreadRunner {
 
   async close(): Promise<void> {
     this.closing = true;
+    this.reviewer?.watcher?.stop();
     await this.side.closeAll();
     await this.subagents.close();
     if (this.limitTimer) clearTimeout(this.limitTimer);

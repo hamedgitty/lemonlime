@@ -11,11 +11,14 @@ import {
   type GitDiffResponse,
   type GitPullRequestResponse,
   type GitStatusResponse,
+  type UpdateFromBaseResponse,
+  type PullRequestDraft,
   type PullRequestInfo,
   type ReviewFile,
   type ReviewFileStatus,
 } from "@lemonlime/protocol";
-import { assertSafePath, assertSafeRef, SAFE_DIFF, type GitWorkspace } from "./git.ts";
+import { assertSafePath, assertSafeRef, commitSubject, SAFE_DIFF, type GitWorkspace, type PushTarget } from "./git.ts";
+import type { PullRequestWatcher, WatchSnapshot } from "./pr-watch.ts";
 
 const run = promisify(execFile);
 
@@ -32,6 +35,8 @@ export const DEFAULT_DIFF_CAPS: DiffCaps = { maxFiles: 400, maxFileBytes: 256 * 
 const MAX_COMMITS = 200;
 const MAX_CONTEXT = 100_000;
 const GH_TIMEOUT_MS = 60_000;
+/** How often status fetches the base branch, so "behind" stays current without hammering the remote. */
+const BASE_FETCH_EVERY_MS = 5 * 60_000;
 
 export interface DiffQuery {
   scope: DiffScope;
@@ -67,6 +72,9 @@ const defaultGh: GhRunner = async (args, cwd) => {
 /** The thread's branch as a reviewer sees it: real git diffs, push and pull requests. */
 export class GitReview {
   private ghState: { at: number; value: GitStatusResponse["gh"] } | null = null;
+  private fetchedBaseAt = 0;
+  /** Watches the pull request and wakes the agent (set by the thread). */
+  watcher: PullRequestWatcher | null = null;
 
   constructor(
     private readonly ws: GitWorkspace,
@@ -78,10 +86,61 @@ export class GitReview {
       threadId: string;
       gh?: GhRunner;
       caps?: Partial<DiffCaps>;
+      /** The thread's first message, for the pull request's description. */
+      firstMessage?: () => string;
+      /** Where the branch is pushed, when not origin under the same name (a fork's pull request). */
+      pushTarget?: PushTarget;
+      /** The thread works on this pull request (it was started from it). */
+      pullRequestNumber?: number;
+      /** Why the branch can't be pushed, when it can't (a fork that doesn't allow edits). */
+      pushProblem?: string;
+      /** Why the branch can't be changed right now (the agent is working), or null. */
+      busy?: () => string | null;
+      /** The branch moved without a turn (a merge from the base branch). */
+      onHeadMoved?: () => void;
+      /** The folder is the thread's own (a worktree or a clone), so the runner may merge into it. */
+      ownFolder?: boolean;
+      /** Fetch the base branch now and then for "behind" (default true; tests turn it off). */
+      fetchBase?: boolean;
     },
   ) {
     assertSafeRef(o.branch, "branch name");
     assertSafeRef(o.baseBranch, "base branch");
+  }
+
+  /** The remote and branch the thread's branch is pushed to. */
+  private get target(): PushTarget {
+    return this.o.pushTarget ?? { remote: "origin", branch: this.o.branch };
+  }
+
+  /**
+   * The base branch to compare with and merge from: origin's copy when it has everything
+   * the local one has (it's then the newer one), else the local branch, else origin's.
+   */
+  async baseTip(): Promise<{ ref: string; name: string } | null> {
+    const b = this.o.baseBranch;
+    const has = async (ref: string) => (await this.ws.git(["rev-parse", "--verify", "-q", `${ref}^{commit}`], { allowFail: true })).trim().length > 0;
+    const local = (await has(`refs/heads/${b}`)) ? { ref: `refs/heads/${b}`, name: b } : null;
+    const remote = (await has(`refs/remotes/origin/${b}`)) ? { ref: `refs/remotes/origin/${b}`, name: `origin/${b}` } : null;
+    if (local && remote) return (await this.isAncestor(local.ref, remote.ref)) ? remote : local;
+    return local ?? remote;
+  }
+
+  private async isAncestor(a: string, b: string): Promise<boolean> {
+    try {
+      await this.ws.git(["merge-base", "--is-ancestor", "--end-of-options", a, b]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Bring the base branch's latest into view now and then; never waits for the network. */
+  private fetchBaseSometimes(hasRemote: boolean): void {
+    if (!hasRemote || this.o.fetchBase === false || Date.now() - this.fetchedBaseAt < BASE_FETCH_EVERY_MS) return;
+    this.fetchedBaseAt = Date.now();
+    const b = this.o.baseBranch;
+    void this.ws.fetch("origin", [`+refs/heads/${b}:refs/remotes/origin/${b}`], { timeout: 60_000 }).catch(() => null);
   }
 
   private get gh(): GhRunner {
@@ -91,7 +150,7 @@ export class GitReview {
   /** Where the branch left the base branch, or HEAD when there's no base to compare with. */
   async mergeBase(): Promise<string> {
     if (!(await this.ws.hasCommits())) return this.ws.emptyTreeId();
-    const base = await this.ws.resolveBase(this.o.baseBranch);
+    const base = (await this.baseTip())?.ref ?? (await this.ws.resolveBase(this.o.baseBranch));
     if (base === "HEAD") return (await this.ws.head()) ?? "HEAD";
     return (await this.ws.git(["merge-base", "--end-of-options", "HEAD", base], { allowFail: true })).trim() || ((await this.ws.head()) ?? "HEAD");
   }
@@ -150,12 +209,17 @@ export class GitReview {
     const ownRange = head && (await this.ws.isCommit(mergeBase)) ? `${mergeBase}..HEAD` : "HEAD";
     const commits = head ? Number((await this.ws.git(["rev-list", "--count", "--end-of-options", ownRange, "--"], { allowFail: true })).trim() || 0) : 0;
     const remoteUrl = (await this.ws.git(["remote", "get-url", "--", "origin"], { allowFail: true })).trim();
-    const tracking = `refs/remotes/origin/${this.o.branch}`;
+    const tracking = `refs/remotes/${this.target.remote}/${this.target.branch}`;
     const pushed = Boolean((await this.ws.git(["rev-parse", "--verify", "-q", "--end-of-options", tracking], { allowFail: true })).trim());
     const unpushed =
       head && pushed
         ? Number((await this.ws.git(["rev-list", "--count", "--end-of-options", `${tracking}..HEAD`, "--"], { allowFail: true })).trim() || 0)
         : commits;
+    const tip = head ? await this.baseTip() : null;
+    const behind = tip
+      ? Number((await this.ws.git(["rev-list", "--count", "--end-of-options", `HEAD..${tip.ref}`, "--"], { allowFail: true })).trim() || 0)
+      : 0;
+    this.fetchBaseSometimes(Boolean(remoteUrl));
     return {
       branch: this.o.branch,
       baseBranch: this.o.baseBranch,
@@ -163,6 +227,7 @@ export class GitReview {
       committedFiles,
       commits,
       unpushed,
+      behind,
       hasRemote: Boolean(remoteUrl),
       pushed,
       compareUrl: remoteUrl ? compareUrlFor(remoteUrl, this.o.baseBranch, this.o.branch) : null,
@@ -170,17 +235,87 @@ export class GitReview {
     };
   }
 
-  /** Push the thread's branch to origin. Null on success, else what git said. */
-  push(): Promise<string | null> {
-    return this.ws.push(this.o.branch);
+  /** Push the thread's branch to origin (or the pull request's fork). Null on success, else what git said. */
+  async push(): Promise<string | null> {
+    if (this.o.pushProblem) return this.o.pushProblem;
+    return this.ws.push(this.o.branch, this.o.pushTarget ? { target: this.o.pushTarget } : {});
+  }
+
+  /**
+   * Merge the base branch's new commits into the thread's branch, in the thread's own folder.
+   * On conflicts nothing changes: the merge is undone and the conflicting files are listed,
+   * so the agent can be asked to do it.
+   */
+  async updateFromBase(): Promise<UpdateFromBaseResponse> {
+    if (!this.o.ownFolder) throw new ReviewError(409, "This thread works in your own folder, so LemonLime won't merge into it. Run git merge yourself.");
+    const busy = this.o.busy?.();
+    if (busy) throw new ReviewError(409, busy);
+    const b = this.o.baseBranch;
+    const remoteUrl = (await this.ws.git(["remote", "get-url", "--", "origin"], { allowFail: true })).trim();
+    if (remoteUrl) {
+      await this.ws.fetch("origin", [`+refs/heads/${b}:refs/remotes/origin/${b}`], { timeout: 120_000 });
+      this.fetchedBaseAt = Date.now();
+    }
+    const tip = await this.baseTip();
+    if (!tip) throw new ReviewError(409, `There's no ${b} branch to update from.`);
+    const tracked = await this.ws.git(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=no"], { allowFail: true });
+    if (countPorcelain(tracked) > 0)
+      throw new ReviewError(409, `Some changes aren't committed yet. Commit them (or ask the agent to) before updating from ${b}.`);
+    const r = await this.ws.mergeFrom(tip.ref, `Merge ${tip.name} into ${this.o.branch}`);
+    if (r.result === "merged") this.o.onHeadMoved?.();
+    return { result: r.result, conflicts: r.result === "conflicts" ? r.conflicts : [], base: tip.name };
+  }
+
+  /** A title and description for the pull request, from the thread's first message and its commits. */
+  async draft(): Promise<PullRequestDraft> {
+    const commits = await this.commits();
+    const files = (await this.status()).committedFiles;
+    return draftPullRequest({
+      title: this.o.title(),
+      firstMessage: this.o.firstMessage?.() ?? "",
+      commits: commits.map(c => c.subject).reverse(),
+      files,
+      branch: this.o.branch,
+    });
   }
 
   /** The branch's pull request, when `gh` is here and signed in. */
   async pullRequest(): Promise<GitPullRequestResponse> {
     const remoteUrl = (await this.ws.git(["remote", "get-url", "--", "origin"], { allowFail: true })).trim();
     const compareUrl = remoteUrl ? compareUrlFor(remoteUrl, this.o.baseBranch, this.o.branch) : null;
-    if (!remoteUrl || (await this.ghReady(remoteUrl)) !== "ready") return { pullRequest: null, compareUrl };
-    return { pullRequest: await this.viewPullRequest(), compareUrl };
+    const extra = { ...(this.watcher ? { watch: this.watcher.state } : {}), ...(this.o.pushProblem ? { pushProblem: this.o.pushProblem } : {}) };
+    if (!remoteUrl || (await this.ghReady(remoteUrl)) !== "ready") return { pullRequest: null, compareUrl, ...extra };
+    return { pullRequest: await this.viewPullRequest(), compareUrl, ...extra };
+  }
+
+  /** Whether `gh` can answer for this repository right now. */
+  async ghUsable(): Promise<boolean> {
+    const remoteUrl = (await this.ws.git(["remote", "get-url", "--", "origin"], { allowFail: true })).trim();
+    return Boolean(remoteUrl) && (await this.ghReady(remoteUrl)) === "ready";
+  }
+
+  /** What the pull request watch needs to see: state, checks, mergeability and comments. Null without one. */
+  async watchSnapshot(): Promise<WatchSnapshot | null> {
+    if (!(await this.ghUsable())) return null;
+    const which = this.o.pullRequestNumber ? String(this.o.pullRequestNumber) : this.o.branch;
+    let view: unknown;
+    try {
+      view = JSON.parse(
+        await this.gh(["pr", "view", "--json", "number,url,state,mergeable,headRefOid,statusCheckRollup,comments,reviews", "--", which], this.ws.dir),
+      );
+    } catch {
+      return null;
+    }
+    const number = (view as { number?: unknown }).number;
+    let inline: unknown = [];
+    if (typeof number === "number") {
+      try {
+        inline = JSON.parse(await this.gh(["api", `repos/{owner}/{repo}/pulls/${number}/comments?per_page=100&sort=created&direction=desc`], this.ws.dir));
+      } catch {
+        inline = [];
+      }
+    }
+    return parseWatchSnapshot(view, inline);
   }
 
   /**
@@ -196,8 +331,9 @@ export class GitReview {
     if ((await this.ghReady(remoteUrl)) !== "ready") return { pullRequest: null, compareUrl };
     const existing = await this.viewPullRequest();
     if (existing && existing.state === "open") return { pullRequest: existing, compareUrl };
-    const title = (body.title || this.o.title() || `Changes from LemonLime thread ${this.o.threadId}`).slice(0, 200);
-    const text = body.body ?? `Opened from LemonLime thread \`${this.o.threadId}\`. The agent's work is on \`${this.o.branch}\`.`;
+    const drafted = body.title && body.body !== undefined ? null : await this.draft();
+    const title = (body.title || drafted?.title || `Changes from LemonLime thread ${this.o.threadId}`).slice(0, 200);
+    const text = body.body ?? drafted?.body ?? "";
     try {
       await this.gh(
         ["pr", "create", "--head", this.o.branch, "--base", this.o.baseBranch, "--title", title, "--body", text, ...(body.draft ? ["--draft"] : [])],
@@ -212,7 +348,8 @@ export class GitReview {
 
   private async viewPullRequest(): Promise<PullRequestInfo | null> {
     try {
-      const out = await this.gh(["pr", "view", "--json", "url,number,state,isDraft,statusCheckRollup", "--", this.o.branch], this.ws.dir);
+      const which = this.o.pullRequestNumber ? String(this.o.pullRequestNumber) : this.o.branch;
+      const out = await this.gh(["pr", "view", "--json", "url,number,state,isDraft,statusCheckRollup", "--", which], this.ws.dir);
       return parseGhPullRequest(JSON.parse(out));
     } catch {
       return null;
@@ -447,6 +584,109 @@ function remoteHost(remote: string): string | null {
     }
   }
   return scp?.[1] ?? null;
+}
+
+const SUMMARY_CHARS = 600;
+const DRAFT_COMMITS = 30;
+
+/**
+ * A pull request's title and description, written without a model: the title from the
+ * thread (or its first commit), a short summary from the first message, and the commit list.
+ */
+export function draftPullRequest(o: { title: string; firstMessage: string; commits: string[]; files: number; branch: string }): PullRequestDraft {
+  const commits = o.commits.filter(
+    (c, i, all) => c.trim() && !/^Merge (branch |remote-tracking branch |origin\/|refs\/)?\S+ into /.test(c) && c !== all[i - 1],
+  );
+  const title = (o.title.trim() || (o.firstMessage.trim() ? commitSubject(o.firstMessage) : "") || commits[0] || "Changes from LemonLime").slice(0, 200);
+  const summary = summarise(o.firstMessage);
+  const list = commits.slice(0, DRAFT_COMMITS).map(c => `- ${c}`);
+  if (commits.length > DRAFT_COMMITS) list.push(`- …and ${commits.length - DRAFT_COMMITS} more`);
+  const counts = `${o.files} ${o.files === 1 ? "file" : "files"} changed in ${commits.length} ${commits.length === 1 ? "commit" : "commits"}.`;
+  const parts = [
+    summary ? `## Summary\n\n${summary}` : "",
+    list.length ? `## Changes\n\n${list.join("\n")}\n\n${counts}` : "",
+    `Made with LemonLime on \`${o.branch}\`.`,
+  ];
+  return { title, body: parts.filter(Boolean).join("\n\n") };
+}
+
+/** The first paragraph of a message, on one line, cut at a sentence end when it's long. */
+function summarise(text: string): string {
+  const para = (text.trim().split(/\n\s*\n/)[0] ?? "").replace(/\s+/g, " ").trim();
+  if (para.length <= SUMMARY_CHARS) return para;
+  const cut = para.slice(0, SUMMARY_CHARS);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return end > SUMMARY_CHARS / 2 ? cut.slice(0, end + 1) : `${cut.trimEnd()}…`;
+}
+
+/** `gh pr view` (state, mergeable, checks, comments, reviews) and the inline review comments → a watch snapshot. */
+export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapshot | null {
+  if (!view || typeof view !== "object") return null;
+  const v = view as {
+    number?: unknown;
+    state?: unknown;
+    mergeable?: unknown;
+    headRefOid?: unknown;
+    statusCheckRollup?: unknown;
+    comments?: unknown;
+    reviews?: unknown;
+  };
+  if (typeof v.number !== "number") return null;
+  const state = String(v.state ?? "").toUpperCase() === "MERGED" ? "merged" : String(v.state ?? "").toUpperCase() === "CLOSED" ? "closed" : "open";
+  const rollup = Array.isArray(v.statusCheckRollup) ? v.statusCheckRollup : [];
+  const comments: WatchSnapshot["comments"] = [];
+  const login = (a: unknown) => String((a as { login?: unknown } | null)?.login ?? "someone");
+  for (const c of Array.isArray(v.comments) ? v.comments : []) {
+    const x = c as { id?: unknown; author?: unknown; body?: unknown; createdAt?: unknown };
+    if (x.id === undefined) continue;
+    comments.push({ id: `c:${String(x.id)}`, author: login(x.author), body: String(x.body ?? ""), at: String(x.createdAt ?? "") });
+  }
+  for (const r of Array.isArray(v.reviews) ? v.reviews : []) {
+    const x = r as { id?: unknown; author?: unknown; body?: unknown; state?: unknown; submittedAt?: unknown };
+    // A plain approval with nothing written isn't something to act on.
+    if (x.id === undefined || (!String(x.body ?? "").trim() && String(x.state ?? "").toUpperCase() !== "CHANGES_REQUESTED")) continue;
+    const asked = String(x.state ?? "").toUpperCase() === "CHANGES_REQUESTED";
+    comments.push({
+      id: `r:${String(x.id)}`,
+      author: login(x.author),
+      body: String(x.body ?? "").trim() || (asked ? "(asked for changes)" : ""),
+      at: String(x.submittedAt ?? ""),
+    });
+  }
+  for (const c of Array.isArray(inline) ? inline : []) {
+    const x = c as { id?: unknown; user?: unknown; body?: unknown; path?: unknown; line?: unknown; created_at?: unknown };
+    if (x.id === undefined) continue;
+    const where = typeof x.path === "string" ? `${x.path}${typeof x.line === "number" ? `:${x.line}` : ""}` : undefined;
+    comments.push({
+      id: `i:${String(x.id)}`,
+      author: login(x.user),
+      body: String(x.body ?? ""),
+      at: String(x.created_at ?? ""),
+      ...(where ? { path: where } : {}),
+    });
+  }
+  return {
+    number: v.number,
+    state,
+    headSha: String(v.headRefOid ?? ""),
+    checks: rollupChecks(rollup),
+    failing: failingChecks(rollup),
+    conflicting: String(v.mergeable ?? "").toUpperCase() === "CONFLICTING",
+    comments,
+  };
+}
+
+/** Names of the failed checks in a `statusCheckRollup`. */
+export function failingChecks(rollup: unknown[]): string[] {
+  const out: string[] = [];
+  for (const item of rollup) {
+    const c = (item ?? {}) as { name?: string; context?: string; conclusion?: string; state?: string };
+    const conclusion = (c.conclusion ?? "").toUpperCase();
+    const state = (c.state ?? "").toUpperCase();
+    if (["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"].includes(conclusion) || state === "FAILURE" || state === "ERROR")
+      out.push(c.name || c.context || "a check");
+  }
+  return [...new Set(out)].sort();
 }
 
 /** `gh pr view --json url,number,state,isDraft,statusCheckRollup` → what the app shows. */

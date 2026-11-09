@@ -60,6 +60,7 @@ import {
   listLocalRunners,
   loadAccessToken,
   pickFolder,
+  removeThreadWorktree,
   saveAccessToken,
   setRunnerDefaults,
   stopLocalRunner,
@@ -855,7 +856,12 @@ export function App() {
         repoPath: input.repoPath,
         ...(input.machine ? { machine: input.machine } : {}),
         baseBranch: input.baseBranch,
-        branch: branchForThread(id, isSafeBranchPrefix(settings.branchPrefix) ? settings.branchPrefix : undefined),
+        branch: input.existingBranch?.name ?? branchForThread(id, isSafeBranchPrefix(settings.branchPrefix) ? settings.branchPrefix : undefined),
+        ...(input.existingBranch
+          ? { existingBranch: true, ...(input.existingBranch.pullRequest ? { pullRequest: input.existingBranch.pullRequest } : {}) }
+          : input.startFrom
+            ? { startFrom: input.startFrom }
+            : {}),
         status: "idle",
         lastSeq: 0,
         ...(input.prompt ? { pendingPrompt: input.prompt } : {}),
@@ -897,12 +903,24 @@ export function App() {
   };
 
   // ── Forking a thread: a new one on the same project, starting from a note of the conversation ──
-  const forkThread = async (entry: ThreadEntry, note: string, title: string) => {
+  const forkThread = async (entry: ThreadEntry, note: string, title: string, o?: { startFrom: string | null }) => {
     const a = entry.mode === "local" ? entry.meta.agent : entry.thread.agent;
     const agent = { agent: a.kind, agentCommand: a.command, model: a.model, reasoning: a.reasoning, fast: a.fast, title, prompt: note };
     if (entry.mode === "local") {
       const m = entry.meta;
-      await createThread({ mode: "local", ...agent, repoPath: m.repoPath, ...(m.machine ? { machine: m.machine } : {}), baseBranch: m.baseBranch }, true);
+      // A fork keeps the code it came from (the branch, or its commit at that message) unless asked to start fresh.
+      const startFrom = o ? o.startFrom : m.branch;
+      await createThread(
+        {
+          mode: "local",
+          ...agent,
+          repoPath: m.repoPath,
+          ...(m.machine ? { machine: m.machine } : {}),
+          baseBranch: m.baseBranch,
+          ...(startFrom ? { startFrom } : {}),
+        },
+        true,
+      );
     } else {
       const t = entry.thread;
       await createThread({ mode: "cloud", ...agent, repoUrl: t.repo.url, baseBranch: t.repo.baseBranch, sandboxSize: t.sandboxSize }, true);
@@ -1430,8 +1448,8 @@ export function App() {
   // ── The thread menu (sidebar row, right-click, thread header) ──
   /** Home, with a project chosen and (for a fork) the first message written. */
   const startInProject = useCallback(
-    (project: GroupProject | undefined, text = "") => {
-      setDraft({ text, nonce: Date.now(), ...(project ? { project } : {}) });
+    (project: GroupProject | undefined, text = "", startFrom?: string) => {
+      setDraft({ text, nonce: Date.now(), ...(project ? { project } : {}), ...(startFrom ? { startFrom } : {}) });
       go({ view: "home" });
     },
     [go],
@@ -1439,7 +1457,8 @@ export function App() {
   const onFork = useCallback(
     (t: ThreadSummary) => {
       const project: GroupProject | undefined = t.mode === "cloud" ? { mode: "cloud", url: t.repo } : t.machine ? undefined : { mode: "local", path: t.repo };
-      startInProject(project, forkPrompt(t, loadEvents(t.id)));
+      // A local fork starts with the thread's code; Home offers starting fresh instead.
+      startInProject(project, forkPrompt(t, loadEvents(t.id)), project?.mode === "local" ? t.branch : undefined);
     },
     [startInProject],
   );
@@ -1832,6 +1851,27 @@ export function App() {
         {...(prefs.renameVagueTitles && summary ? { onAutoTitle: (title: string) => onRename(summary, title) } : {})}
         onSwitchOthers={onSwitchOthers}
         {...(entry.mode === "local" || cloudApi ? { onFork: forkThread } : {})}
+        {...(entry.mode === "local" && !entry.meta.machine && summary && inDesktopShell()
+          ? {
+              onTidyMerged: async () => {
+                const m = entry.meta;
+                try {
+                  await stopLocalRunner(m.id);
+                  await removeThreadWorktree(m.id, m.repoPath, settings.runnerPath);
+                } catch (err) {
+                  toast({
+                    title: "Couldn't remove the thread's worktree",
+                    description: err instanceof Error ? err.message : String(err),
+                    tone: "error",
+                    timeout: 8000,
+                  });
+                  void refreshRunners();
+                  return;
+                }
+                await onArchive(summary, true);
+              },
+            }
+          : {})}
         computerLevel={prefs.computerAccess[entry.mode === "cloud" ? entry.thread.id : ""] ?? "off"}
         onComputerLevel={level => {
           if (entry.mode !== "cloud") return;
@@ -1862,6 +1902,7 @@ export function App() {
             onCreate={input => createInPane(pane.id, input)}
             onConnectCloud={() => go({ view: "settings", page: "account" })}
             acpAgents={settings.acpAgents}
+            runnerPath={settings.runnerPath}
             {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
           />
         </div>
@@ -2115,6 +2156,7 @@ export function App() {
                   onPrefs={onPrefs}
                   onCreate={async input => void (await createThread(input))}
                   onConnectCloud={() => go({ view: "settings", page: "account" })}
+                  runnerPath={settings.runnerPath}
                   draft={draft}
                   acpAgents={settings.acpAgents}
                   agents={agents}

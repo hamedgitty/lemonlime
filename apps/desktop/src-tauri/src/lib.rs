@@ -3,6 +3,7 @@
 
 mod accounts;
 mod computer;
+mod git_tools;
 mod history;
 mod host_terminal;
 mod paths;
@@ -54,6 +55,9 @@ pub fn run() {
             ssh::start_ssh_runner,
             ssh::remove_ssh_thread,
             repo::inspect_repo,
+            git_tools::list_branches,
+            git_tools::lookup_pull_request,
+            git_tools::remove_thread_worktree,
             secrets::secret_get,
             secrets::secret_set,
             computer::computer_access_levels,

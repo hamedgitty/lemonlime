@@ -59,6 +59,7 @@ import { parseUnifiedDiff } from "../lib/diff.ts";
 import { flashItem } from "../lib/findInThread.ts";
 import { StreamingMarkdown } from "../lib/markdown.tsx";
 import { attachmentLabel } from "../lib/pastedText.ts";
+import { loadScrollPlace, saveScrollPlace, type ScrollPlace } from "../lib/scrollMemory.ts";
 import { Menu, MenuItem } from "./primitives.tsx";
 import { STATUS_LABELS, clockTime, stringifyValue } from "../lib/format.ts";
 import { DiffBody } from "./DiffView.tsx";
@@ -105,8 +106,11 @@ export function Timeline({
   unreadAfterSeq,
   loadImage,
   subagents = NO_SUBAGENTS,
+  threadId,
 }: {
   items: TimelineItem[];
+  /** The thread shown, so its reading place is kept for when it's opened again. */
+  threadId?: string | undefined;
   /** The last seq the user had seen when they opened the thread: a "New" divider goes after it. */
   unreadAfterSeq?: number | null | undefined;
   /** Fetches images sent with messages, while the runner can be reached. */
@@ -152,24 +156,123 @@ export function Timeline({
   };
   useEffect(() => () => void (quietTimer.current && clearTimeout(quietTimer.current)), []);
 
+  // ── Following new output ──
+  // While the reader is at the bottom, new output and rows that grow (highlighted code,
+  // images) keep the view at the bottom. Scrolling up in any way (wheel, keys, the
+  // scrollbar) stops that at once; scrolling back down to the bottom starts it again.
+  // Scrolls the timeline makes itself are told apart by where they land.
+  const ownTop = useRef<number | null>(null);
+  /** The "Latest" button's smooth scroll, which passes through many places on its way down. */
+  const gliding = useRef(false);
+  const toBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    ownTop.current = el.scrollTop;
+  };
+  const lastTop = useRef(0);
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    stick.current = atBottom;
+    const top = el.scrollTop;
+    const atBottom = el.scrollHeight - top - el.clientHeight < 80;
+    const own = ownTop.current !== null && Math.abs(top - ownTop.current) < 2;
+    if (gliding.current && atBottom) gliding.current = false;
+    if (!own && !gliding.current) {
+      if (atBottom) stick.current = true;
+      else if (top < lastTop.current - 1) stick.current = false;
+      if (!atBottom) restore.current = null;
+    }
+    lastTop.current = top;
     setShowJump(!atBottom);
+    notePlace();
+  };
+  const readerScrollsUp = () => {
+    const el = scrollRef.current;
+    // Nothing to scroll yet: keep following.
+    if (!el || el.scrollHeight <= el.clientHeight + 1) return;
+    stick.current = false;
+    gliding.current = false;
+    restore.current = null;
+  };
+  const onWheel = (e: React.WheelEvent) => {
+    showScrollbar();
+    if (e.deltaY < 0) readerScrollsUp();
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    showScrollbar();
+    const typing = e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.matches("input, textarea, select"));
+    if (!typing && (["ArrowUp", "PageUp", "Home"].includes(e.key) || (e.key === " " && e.shiftKey))) readerScrollsUp();
   };
 
   // Keep following new output while the user is at the bottom.
   useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    if (restore.current && tryRestore()) return;
+    // The row it was left at is gone (the thread went back past it): read from the bottom.
+    if (items.length > 0) restore.current = null;
+    if (stick.current) toBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, working]);
 
+  // Rows grow after they're drawn (code highlighting, images loading): stay at the bottom.
+  const contentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    const content = contentRef.current;
+    if (!content) return;
+    const ro = new ResizeObserver(() => {
+      if (stick.current && !gliding.current) toBottom();
+    });
+    ro.observe(content);
+    return () => ro.disconnect();
   }, []);
+
+  // ── Coming back to a thread ──
+  // Starts where the reader left it (unless there's something new to show), else at the bottom.
+  const restore = useRef<ScrollPlace | null>(threadId && !(unreadAfterSeq != null && unreadAfterSeq >= 0) ? loadScrollPlace(threadId) : null);
+  const tryRestore = () => {
+    const el = scrollRef.current;
+    const want = restore.current;
+    if (!el || !want) return false;
+    const node = el.querySelector<HTMLElement>(`[data-timeline-key="${CSS.escape(want.key)}"]`);
+    if (!node) return false;
+    stick.current = false;
+    const place = (n: HTMLElement) => {
+      el.scrollTop += n.getBoundingClientRect().top - el.getBoundingClientRect().top - want.offset;
+      ownTop.current = el.scrollTop;
+      lastTop.current = el.scrollTop;
+    };
+    place(node);
+    // Rows drawn lazily take their real height once in view; settle on the next frame.
+    requestAnimationFrame(() => {
+      if (restore.current !== want) return;
+      restore.current = null;
+      place(node);
+      placeRef.current = want;
+      setShowJump(el.scrollHeight - el.scrollTop - el.clientHeight >= 80);
+    });
+    return true;
+  };
+
+  // Where the reader is, kept as they scroll and saved when the thread closes.
+  const placeRef = useRef<ScrollPlace | null>(null);
+  const placeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const notePlace = () => {
+    if (!threadId || placeTimer.current) return;
+    placeTimer.current = setTimeout(() => {
+      placeTimer.current = null;
+      const el = scrollRef.current;
+      if (!el || restore.current) return;
+      placeRef.current = stick.current ? null : topRow(el);
+    }, 150);
+  };
+  useEffect(
+    () => () => {
+      if (placeTimer.current) clearTimeout(placeTimer.current);
+      // Still waiting to go back to the old place: keep it as it was.
+      if (threadId && !restore.current) saveScrollPlace(threadId, placeRef.current);
+    },
+    [threadId],
+  );
 
   // Opening a thread with something new in it starts at the "New" divider, once.
   const shownUnread = useRef(false);
@@ -179,7 +282,10 @@ export function Timeline({
     const el = scrollRef.current;
     const node = el?.querySelector("[data-unread-divider]");
     if (!el || !node) return;
+    restore.current = null;
     el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - 48;
+    ownTop.current = el.scrollTop;
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     onScroll();
   }, [divider]);
 
@@ -205,6 +311,8 @@ export function Timeline({
     const el = scrollRef.current;
     if (!el) return;
     stick.current = true;
+    gliding.current = true;
+    restore.current = null;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
 
@@ -214,16 +322,16 @@ export function Timeline({
         <div
           ref={scrollRef}
           onScroll={onScroll}
-          onWheel={showScrollbar}
+          onWheel={onWheel}
           onTouchMove={showScrollbar}
-          onKeyDown={showScrollbar}
+          onKeyDown={onKeyDown}
           className="scroll-quiet relative h-full overflow-y-auto"
           role="log"
           aria-live="polite"
           aria-relevant="additions"
           aria-label="Thread timeline"
         >
-          <div className="mx-auto flex max-w-[860px] flex-col px-6 pt-6 pb-10">
+          <div ref={contentRef} className="mx-auto flex max-w-[860px] flex-col px-6 pt-6 pb-10">
             {items.length === 0 ? empty : <Rows rows={shown} actions={actions} divider={divider} lazy />}
             {working && (
               <div className="mt-4">
@@ -246,6 +354,16 @@ export function Timeline({
       </div>
     </ImageLoaderContext.Provider>
   );
+}
+
+/** The row at the top of the view and how far below the top its edge sits. */
+function topRow(el: HTMLElement): ScrollPlace | null {
+  const top = el.getBoundingClientRect().top;
+  for (const node of el.querySelectorAll<HTMLElement>("[data-timeline-key]")) {
+    const r = node.getBoundingClientRect();
+    if (r.bottom > top) return { key: node.dataset.timelineKey!, offset: Math.round(r.top - top) };
+  }
+  return null;
 }
 
 /** Rows that are one line high, so lazily drawn ones reserve that much room. */

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { continueList, endList, indentLines, insideCodeFence, wrapSelection, type TextChange } from "../src/lib/composerMarkdown.ts";
 import { changedRange } from "../src/lib/textareaEdit.ts";
+import { rememberPlace, SCROLL_MEMORY_LIMIT } from "../src/lib/scrollMemory.ts";
 
 /** Text with a `|` for the caret (or two for a selection), as the helpers see it. */
 const at = (marked: string): [string, number, number] => {
@@ -90,5 +91,22 @@ describe("undoable edits", () => {
     expect(changedRange("abc", "")).toEqual({ start: 0, end: 3, insert: "" });
     expect(changedRange("same", "same")).toEqual({ start: 4, end: 4, insert: "" });
     expect(changedRange("aaa", "aa")).toEqual({ start: 2, end: 3, insert: "" });
+  });
+});
+
+describe("scroll places", () => {
+  it("keeps the newest place per thread, up to the limit", () => {
+    let list = rememberPlace([], "a", { key: "k1", offset: 0 });
+    list = rememberPlace(list, "b", { key: "k2", offset: -40 });
+    list = rememberPlace(list, "a", { key: "k3", offset: 12 });
+    expect(list).toEqual([
+      ["b", { key: "k2", offset: -40 }],
+      ["a", { key: "k3", offset: 12 }],
+    ]);
+    // Back at the bottom: forgotten.
+    expect(rememberPlace(list, "a", null)).toEqual([["b", { key: "k2", offset: -40 }]]);
+    const many = Array.from({ length: 105 }, (_, i) => i).reduce((l, i) => rememberPlace(l, `t${i}`, { key: "k", offset: 0 }), list);
+    expect(many).toHaveLength(SCROLL_MEMORY_LIMIT);
+    expect(many[0]![0]).toBe("t5");
   });
 });

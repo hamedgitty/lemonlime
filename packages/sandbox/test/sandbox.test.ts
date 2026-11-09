@@ -74,6 +74,15 @@ describe("createSandboxProvider", () => {
     expect(createSandboxProvider({}).name).toBe("docker");
     expect(createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "Docker" })).toBeInstanceOf(DockerProvider);
     expect(createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "daytona", DAYTONA_API_KEY: "k" })).toBeInstanceOf(DaytonaProvider);
+    const archiveAfter = (value: string) =>
+      (
+        createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "daytona", DAYTONA_API_KEY: "k", DAYTONA_AUTO_ARCHIVE_MINUTES: value }) as unknown as {
+          opts: { autoArchiveMinutes?: number };
+        }
+      ).opts.autoArchiveMinutes;
+    expect(archiveAfter("60")).toBe(60);
+    // Daytona reads 0 as "never", so it and other odd values fall back to the default.
+    for (const odd of ["0", "-5", "1.5", "soon", ""]) expect(archiveAfter(odd)).toBeUndefined();
     expect(createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "e2b", E2B_API_KEY: "k" })).toBeInstanceOf(E2BProvider);
   });
 

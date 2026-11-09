@@ -16,6 +16,12 @@ export type { E2BProviderOptions } from "./e2b.ts";
  * Build the provider named in config. Throws on missing settings so misconfiguration fails fast.
  * Pass the environment explicitly (`process.env` on Node, the `env` binding on Workers).
  */
+/** A positive whole number of minutes, or undefined for the provider's default. */
+function wholeMinutes(value: string | undefined): number | undefined {
+  const n = Number(value);
+  return value && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 export function createSandboxProvider(env: Record<string, string | undefined>): SandboxProvider {
   const name = (env.LEMONLIME_SANDBOX_PROVIDER ?? "docker").toLowerCase();
   const image = env.LEMONLIME_SANDBOX_IMAGE ?? "lemonlime/sandbox:latest";
@@ -41,6 +47,7 @@ export function createSandboxProvider(env: Record<string, string | undefined>): 
         snapshot: env.DAYTONA_SNAPSHOT || undefined,
         snapshots: { small: env.DAYTONA_SNAPSHOT_SMALL || undefined, large: env.DAYTONA_SNAPSHOT_LARGE || undefined },
         agentUser: env.DAYTONA_AGENT_USER || undefined,
+        autoArchiveMinutes: wholeMinutes(env.DAYTONA_AUTO_ARCHIVE_MINUTES),
       });
     case "e2b":
       return new E2BProvider({

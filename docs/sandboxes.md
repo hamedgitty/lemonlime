@@ -55,7 +55,11 @@ started, or the runner could not be launched), that sandbox is deleted again.
 
 Settings: `DAYTONA_API_KEY` (required), `DAYTONA_API_URL` (default
 `https://app.daytona.io/api`), and optionally `DAYTONA_SNAPSHOT_SMALL`,
-`DAYTONA_SNAPSHOT_LARGE` or `DAYTONA_SNAPSHOT`.
+`DAYTONA_SNAPSHOT_LARGE` or `DAYTONA_SNAPSHOT`, and `DAYTONA_AUTO_ARCHIVE_MINUTES`.
+
+- A paused sandbox still pays Daytona for its disk until it is archived. By default
+  that happens after a day; `DAYTONA_AUTO_ARCHIVE_MINUTES` makes it sooner (or later).
+  Archived sandboxes cost nothing to keep but take longer to resume.
 
 - Without `DAYTONA_SNAPSHOT`, each sandbox is built from
   `LEMONLIME_SANDBOX_IMAGE` with the CPU, memory and disk of its size. The image
@@ -71,7 +75,7 @@ Requests, all with `Authorization: Bearer <DAYTONA_API_KEY>`:
 
 | Step | Request |
 | --- | --- |
-| create | `POST /sandbox` with `env`, `labels`, `public: true`, `autoStopInterval` (60 min safety net), `autoArchiveInterval` (24 h), and either `buildInfo.dockerfileContent: "FROM <image>"` + `cpu`/`memory`/`disk` or `snapshot` |
+| create | `POST /sandbox` with `env`, `labels`, `public: true`, `autoStopInterval` (60 min safety net), `autoArchiveInterval` (24 h, or `DAYTONA_AUTO_ARCHIVE_MINUTES`), and either `buildInfo.dockerfileContent: "FROM <image>"` + `cpu`/`memory`/`disk` or `snapshot` |
 | wait | `GET /sandbox/{id}` every second until `started` (2 minute limit; `error` or `build_failed` fail at once) |
 | runner | `POST <toolbox>/process/session` `{ sessionId: "lemonlime-runner" }`, then `POST <toolbox>/process/session/lemonlime-runner/exec` `{ command, runAsync: true }` |
 | runner URL | `GET /sandbox/{id}/ports/{port}/preview-url` |

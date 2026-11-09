@@ -20,6 +20,7 @@ import { machineName, startThreadRunner } from "./threadRunner.ts";
 import { deliverFirstMessage, forgetFirstMessage, peekFirstMessage } from "./firstMessage.ts";
 import { newAttachmentId } from "./useAttachments.ts";
 import { sendRoute } from "./composerSend.ts";
+import { shrinkImage } from "./imageShrink.ts";
 
 export type SessionState =
   /** Starting the local runner or asking the control plane where to connect. */
@@ -336,13 +337,18 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         void deliverFirstMessage(first, text ?? "", {
           ready: () => live,
           setPermission: permission => sendTo.setOptions({ permission }),
-          upload: (file, id) =>
-            uploadAttachment({
-              base: runnerHttpBase(conn.url),
-              token: conn.token,
-              file: Object.assign(file.slice(0, file.size, file.type), { name: file.name }),
-              id,
-            }).then(() => undefined),
+          upload: (picked, id) =>
+            shrinkImage(picked)
+              .catch(() => picked)
+              .then(file =>
+                uploadAttachment({
+                  base: runnerHttpBase(conn.url),
+                  token: conn.token,
+                  file: Object.assign(file.slice(0, file.size, file.type), { name: file.name }),
+                  id,
+                }),
+              )
+              .then(() => undefined),
           send: (msg, ids) => {
             if (t.mode === "local") callbacksRef.current.onPromptSent?.(threadId);
             sendTo.send(msg, clientMsgId, ids);

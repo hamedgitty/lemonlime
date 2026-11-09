@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Widths for the app's side columns: the main sidebar, the side panel and the list column
@@ -15,6 +15,8 @@ export interface SideBounds {
 export const SIDEBAR: SideBounds = { min: 240, max: 440, default: 288 };
 export const SIDE_PANEL: SideBounds = { min: 300, max: 760, default: 420 };
 export const LIST_COLUMN: SideBounds = { min: 220, max: 480, default: 300 };
+/** A panel docked to the top or bottom: its height. */
+export const PANEL_HEIGHT: SideBounds = { min: 160, max: 900, default: 320 };
 
 /** How far past the minimum a drag has to go before the column folds away. */
 export const FOLD_PAST = 64;
@@ -36,6 +38,12 @@ export const KEYS = {
   sidePanel: "lemonlime:side-panel-width",
   listColumn: "lemonlime:list-width",
   listFolded: "lemonlime:list-folded",
+  fileTree: "lemonlime:file-tree-width",
+  sidePanelHeight: "lemonlime:side-panel-height",
+  threadPanelHeight: "lemonlime:thread-panel-height",
+  threadPanelPlace: "lemonlime:thread-panel-place",
+  fileTreeHidden: "lemonlime:file-tree-hidden",
+  fileTreeLeft: "lemonlime:file-tree-left",
 } as const;
 
 function readNumber(key: string): number | undefined {
@@ -93,4 +101,37 @@ export function useFolded(key: string): [boolean, (folded: boolean) => void] {
     [key],
   );
   return [folded, set];
+}
+
+/** Where a panel sits beside the page. */
+export const PANEL_PLACES = ["left", "right", "top", "bottom"] as const;
+export type PanelPlace = (typeof PANEL_PLACES)[number];
+export const isVertical = (p: PanelPlace) => p === "top" || p === "bottom";
+
+export function loadPlace(key: string, fallback: PanelPlace): PanelPlace {
+  try {
+    const v = localStorage.getItem(key);
+    return (PANEL_PLACES as readonly string[]).includes(v ?? "") ? (v as PanelPlace) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** A remembered panel place, kept the same in every pane that uses `key`. */
+export function usePlace(key: string, fallback: PanelPlace): [PanelPlace, (p: PanelPlace) => void] {
+  const [place, setPlace] = useState(() => loadPlace(key, fallback));
+  useEffect(() => {
+    const sync = () => setPlace(loadPlace(key, fallback));
+    window.addEventListener(`lemonlime:place:${key}`, sync);
+    return () => window.removeEventListener(`lemonlime:place:${key}`, sync);
+  }, [key, fallback]);
+  const set = useCallback(
+    (p: PanelPlace) => {
+      store(key, p);
+      setPlace(p);
+      window.dispatchEvent(new Event(`lemonlime:place:${key}`));
+    },
+    [key],
+  );
+  return [place, set];
 }

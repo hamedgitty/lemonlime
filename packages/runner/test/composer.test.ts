@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { branchForThread, signToken, type Thread } from "@lemonlime/protocol";
 import { startServer, ThreadRunner, type AgentAdapter } from "../src/index.ts";
 import { parseClaudeLine } from "../src/agents/claude-code.ts";
-import { commandFiles, commandsFromAcp, commandsFromNames, listCommands, listWorkdirFiles, readFront, searchFiles } from "../src/composer.ts";
+import { commandFiles, commandsFromAcp, commandsFromNames, folderEntries, listCommands, listWorkdirFiles, readFront, searchFiles } from "../src/composer.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -64,6 +64,27 @@ describe("listing files for the composer", () => {
     expect(none.truncated).toBe(true);
     expect(none.total).toBe(5);
     expect(searchFiles(files, "zzz", 10).files).toEqual([]);
+  });
+
+  it("lists one folder for the file tree: folders first, then files, by name", () => {
+    const files = ["README.md", "src/b.ts", "src/a/x.ts", "src/a/y/z.ts", "docs/guide.md", "file10.txt", "file2.txt"];
+    expect(folderEntries(files, "", 100)).toEqual({
+      dir: "",
+      entries: [
+        { name: "docs", dir: true },
+        { name: "src", dir: true },
+        { name: "file2.txt", dir: false },
+        { name: "file10.txt", dir: false },
+        { name: "README.md", dir: false },
+      ],
+      truncated: false,
+    });
+    expect(folderEntries(files, "src/", 100).entries).toEqual([
+      { name: "a", dir: true },
+      { name: "b.ts", dir: false },
+    ]);
+    expect(folderEntries(files, "src", 1)).toMatchObject({ dir: "src", truncated: true });
+    expect(folderEntries(files, "nope", 10).entries).toEqual([]);
   });
 });
 
@@ -149,6 +170,10 @@ describe("runner endpoints", () => {
     const files = (await (await fetch(`${base}/files?q=butt&limit=1`, { headers: auth })).json()) as { files: string[]; truncated: boolean };
     expect(files.files).toEqual(["src/components/Button.tsx"]);
     expect(files.truncated).toBe(true);
+
+    expect((await fetch(`${base}/folder`)).status).toBe(401);
+    const top = (await (await fetch(`${base}/folder?dir=src`, { headers: auth })).json()) as { entries: { name: string; dir: boolean }[] };
+    expect(top.entries).toContainEqual({ name: "components", dir: true });
 
     const commands = (await (await fetch(`${base}/commands`, { headers: auth })).json()) as { commands: { name: string }[] };
     expect(commands.commands.map(c => c.name)).toEqual(expect.arrayContaining(["compact", "review"]));

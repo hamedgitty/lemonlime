@@ -16,7 +16,8 @@ export function SideResizer({
   onWidth,
   onFold,
 }: {
-  edge: "left" | "right";
+  /** Top and bottom edges resize the height. */
+  edge: "left" | "right" | "top" | "bottom";
   width: number;
   bounds: SideBounds;
   label: string;
@@ -25,13 +26,18 @@ export function SideResizer({
 }) {
   const drag = useRef<{ x: number; w: number } | null>(null);
   // The column may be shown narrower than its saved width (a small window caps it), so start from what's on screen.
-  const shown = (el: HTMLElement) => Math.round(el.parentElement?.getBoundingClientRect().width || width);
-  // Dragging toward the outside of the column makes it wider.
-  const outward = (dx: number) => (edge === "right" ? dx : -dx);
-  const move = (clientX: number, save: boolean) => {
+  const vertical = edge === "top" || edge === "bottom";
+  const shown = (el: HTMLElement) => {
+    const r = el.parentElement?.getBoundingClientRect();
+    return Math.round((vertical ? r?.height : r?.width) || width);
+  };
+  // Dragging toward the outside of the column makes it bigger.
+  const outward = (d: number) => (edge === "right" || edge === "bottom" ? d : -d);
+  const at = (e: { clientX: number; clientY: number }) => (vertical ? e.clientY : e.clientX);
+  const move = (pos: number, save: boolean) => {
     const d = drag.current;
     if (!d) return;
-    const w = dragWidth(d.w, outward(clientX - d.x), bounds, Boolean(onFold));
+    const w = dragWidth(d.w, outward(pos - d.x), bounds, Boolean(onFold));
     if (w === null) {
       drag.current = null;
       onFold?.();
@@ -40,7 +46,7 @@ export function SideResizer({
   return (
     <div
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={vertical ? "horizontal" : "vertical"}
       aria-label={label}
       aria-valuenow={width}
       aria-valuemin={bounds.min}
@@ -51,11 +57,11 @@ export function SideResizer({
         if (e.button !== 0) return;
         e.preventDefault();
         e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { x: e.clientX, w: shown(e.currentTarget) };
+        drag.current = { x: at(e), w: shown(e.currentTarget) };
       }}
-      onPointerMove={e => move(e.clientX, false)}
+      onPointerMove={e => move(at(e), false)}
       onPointerUp={e => {
-        move(e.clientX, true);
+        move(at(e), true);
         drag.current = null;
       }}
       onPointerCancel={() => (drag.current = null)}
@@ -63,16 +69,17 @@ export function SideResizer({
       onKeyDown={e => {
         const step = e.shiftKey ? KEY_STEP_BIG : KEY_STEP;
         const now = shown(e.currentTarget);
-        if (e.key === "ArrowLeft") onWidth(now + outward(-step), true);
-        else if (e.key === "ArrowRight") onWidth(now + outward(step), true);
+        if (e.key === (vertical ? "ArrowUp" : "ArrowLeft")) onWidth(now + outward(-step), true);
+        else if (e.key === (vertical ? "ArrowDown" : "ArrowRight")) onWidth(now + outward(step), true);
         else if (e.key === "Home") onWidth(bounds.min, true);
         else if (e.key === "End") onWidth(bounds.max, true);
         else return;
         e.preventDefault();
       }}
       className={cx(
-        "absolute inset-y-0 z-20 w-[6px] cursor-col-resize touch-none outline-none hover:bg-line-strong/60 focus-visible:bg-leaf/40 active:bg-line-strong",
-        edge === "right" ? "-right-[3px]" : "-left-[3px]",
+        "absolute z-20 touch-none outline-none hover:bg-line-strong/60 focus-visible:bg-leaf/40 active:bg-line-strong",
+        vertical ? "inset-x-0 h-[6px] cursor-row-resize" : "inset-y-0 w-[6px] cursor-col-resize",
+        { right: "-right-[3px]", left: "-left-[3px]", top: "-top-[3px]", bottom: "-bottom-[3px]" }[edge],
       )}
     />
   );

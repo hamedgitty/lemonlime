@@ -7,7 +7,7 @@ import { DEFAULT_TERMINAL_ID, MAX_TERMINALS } from "@lemonlime/protocol";
  * computer, with the last few closed tabs so ⌘⇧T can bring one back.
  */
 
-export const BUILT_IN_TABS = ["changes", "browser", "side"] as const;
+export const BUILT_IN_TABS = ["changes", "files", "browser", "side"] as const;
 export type BuiltInTab = (typeof BUILT_IN_TABS)[number];
 
 export const PanelTab = z.discriminatedUnion("kind", [

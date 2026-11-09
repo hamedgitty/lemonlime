@@ -3,6 +3,7 @@ import {
   Bug,
   Database,
   FileDiff,
+  FolderOpen,
   FileSearch,
   FileText,
   FlaskConical,
@@ -54,11 +55,16 @@ import { SideChatPanel } from "./SideChatPanel.tsx";
 import { closeTerminal, TerminalPanel } from "./TerminalPanel.tsx";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
+import { PanelPlaceMenu } from "./PanelPlaceMenu.tsx";
+import { SideResizer } from "./SideResizer.tsx";
+import { KEYS, PANEL_HEIGHT, isVertical, useSideWidth, type PanelPlace } from "../lib/sideWidth.ts";
+import { FilesPanel, emptyFiles, type FilesState } from "./FilesPanel.tsx";
 
 type Session = ReturnType<typeof useThreadSession>;
 
 const BUILT_IN: Record<BuiltInTab, { label: string; icon: typeof FileDiff }> = {
   changes: { label: "Changes", icon: FileDiff },
+  files: { label: "Files", icon: FolderOpen },
   browser: { label: "Browser", icon: Globe },
   side: { label: "Side chat", icon: MessagesSquare },
 };
@@ -100,6 +106,8 @@ export function ThreadPanel({
   mode,
   runnerPath,
   onClose,
+  place = "right",
+  onPlace,
   refreshKey,
   onAddToChat,
   onQuickOpen,
@@ -120,6 +128,9 @@ export function ThreadPanel({
   mode: "local" | "cloud";
   runnerPath: string;
   onClose: () => void;
+  /** Which side of the conversation the panel sits on (ignored while it lies over it). */
+  place?: PanelPlace;
+  onPlace?: (p: PanelPlace) => void;
   refreshKey: string;
   onAddToChat: (text: string) => void;
   onQuickOpen: () => void;
@@ -137,6 +148,11 @@ export function ThreadPanel({
   const aside = useRef<HTMLElement>(null);
   const tablist = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(() => loadPanelWidth());
+  const [files, setFiles] = useState<FilesState>(emptyFiles);
+  const [height, setHeight] = useSideWidth(KEYS.threadPanelHeight, PANEL_HEIGHT);
+  const [full, setFull] = useState(false);
+  const docked = !overlay && !full;
+  const vertical = docked && isVertical(place);
   // The room beside the sidebar, for the conversation and this panel together.
   const [available, setAvailable] = useState(() => window.innerWidth);
   useLayoutEffect(() => {
@@ -296,14 +312,50 @@ export function ThreadPanel({
     <aside
       ref={aside}
       aria-label="Thread panel"
-      style={{ width: shownWidth }}
+      style={full ? undefined : vertical ? { height, maxHeight: "75%" } : { width: shownWidth }}
       className={cx(
-        "shrink-0 flex-col border-l border-line bg-cream",
+        "shrink-0 flex-col bg-cream",
         hidden ? "hidden" : "flex",
-        overlay ? "absolute top-10 right-0 bottom-0 z-20 shadow-pop" : "relative",
+        overlay
+          ? "absolute top-10 right-0 bottom-0 z-20 border-l border-line shadow-pop"
+          : full
+            ? "absolute inset-0 z-30"
+            : cx(
+                "relative",
+                {
+                  right: "border-l border-line",
+                  left: "order-first border-r border-line",
+                  top: "order-first border-b border-line",
+                  bottom: "border-t border-line",
+                }[place],
+              ),
       )}
     >
-      {!overlay && <PanelResizer width={shownWidth} available={available} onWidth={setWidth} />}
+      {docked &&
+        (place === "right" ? (
+          <PanelResizer width={shownWidth} available={available} onWidth={setWidth} />
+        ) : vertical ? (
+          <SideResizer
+            edge={place === "top" ? "bottom" : "top"}
+            width={height}
+            bounds={PANEL_HEIGHT}
+            label="Resize the panel"
+            onWidth={setHeight}
+            onFold={onClose}
+          />
+        ) : (
+          <SideResizer
+            edge="right"
+            width={shownWidth}
+            bounds={{ ...panelBounds(available), default: PANEL_WIDTH.default }}
+            label="Resize the panel"
+            onWidth={(w, save) => {
+              setWidth(w);
+              if (save) savePanelWidth(w);
+            }}
+            onFold={onClose}
+          />
+        ))}
       <div className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line pr-2 pl-3">
         <div
           ref={tablist}
@@ -428,6 +480,7 @@ export function ThreadPanel({
             Reopen closed tab
           </MenuItem>
         </Menu>
+        {!overlay && onPlace && <PanelPlaceMenu place={place} onPlace={onPlace} full={full} onFull={setFull} />}
         <button
           type="button"
           aria-label="Close panel"
@@ -444,6 +497,18 @@ export function ThreadPanel({
           onAddToChat={onAddToChat}
           onOpenFile={path => openFileAt(path)}
           fallback={<ChangesList events={session.events} />}
+        />
+      )}
+      {active === "files" && (
+        <FilesPanel
+          connection={session.connection}
+          state={files}
+          onState={setFiles}
+          refreshKey={refreshKey}
+          versions={versions}
+          onMention={path => onAddToChat(`@${path} `)}
+          onQuickOpen={onQuickOpen}
+          quickOpenKeys={shortcuts.quickOpen ? keyCaps(shortcuts.quickOpen).join("") : ""}
         />
       )}
       {active === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}

@@ -164,5 +164,5 @@ export const SHORTCUT_TARGETS: { id: ShortcutId; selector: string; text?: string
   { id: "toggle-sidebar", selector: 'button[aria-label="Hide sidebar"], button[aria-label="Show sidebar"]' },
   { id: "back", selector: 'button[aria-label="Back"]' },
   { id: "forward", selector: 'button[aria-label="Forward"]' },
-  { id: "right-panel", selector: 'button[aria-label="Side panel"]' },
+  { id: "right-panel", selector: 'button[aria-label="Browser"]' },
 ];

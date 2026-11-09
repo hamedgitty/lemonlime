@@ -56,6 +56,7 @@ import {
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, PageTabs, Toggle } from "./primitives.tsx";
 import { HideListButton, ListColumn } from "./ListColumn.tsx";
 import { Button, IconButton, RetryCard, Skeleton, SkeletonRows, SkeletonText, Spinner, TextInput, cx, openExternal, rowFill } from "./ui.tsx";
+import { PageTools } from "./PanelButtons.tsx";
 
 export interface PluginsViewProps {
   /** Start a new thread with this prompt (used by the "Create a plugin with an agent" example). */
@@ -182,6 +183,7 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
           </h1>
           <div className="flex-1" />
           <NewPluginButton disabled={!shell} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
+          <PageTools />
         </div>
         <div className="flex items-center gap-3">
           <PageTabs

@@ -70,7 +70,9 @@ import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
 import { ForkDialog } from "./GitDialogs.tsx";
 import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { saveDraft } from "../lib/storage.ts";
-import { loadPanelState, openFile, openScript, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
+import { activeTab, loadPanelState, newTerminal, openFile, openScript, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
+import { PanelButtons } from "./PanelButtons.tsx";
+import { KEYS, isVertical, usePlace } from "../lib/sideWidth.ts";
 import { fetchProjectScripts, scriptForShortcut, setFocusedScripts, type Script } from "../lib/runScripts.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import { betterTitle } from "../lib/threadTitle.ts";
@@ -354,6 +356,7 @@ function ThreadSessionView({
   }, []);
   const errorText = online ? (actionError ?? session.error) : null;
   const [panelOpen, setPanelOpen] = useState(false);
+  const [panelPlace, setPanelPlace] = usePlace(KEYS.threadPanelPlace, "right");
   // The side-panel shortcut (handled by the app) toggles it.
   useEffect(() => {
     const toggle = () => activeRef.current && setPanelOpen(o => !o);
@@ -846,11 +849,35 @@ function ThreadSessionView({
       }
     />
   );
+  // The terminal and browser buttons: open the panel on that tab (a new terminal if none is
+  // open), or hide the panel when it already shows it.
+  const shownTab = panelOpen ? activeTab(panel) : null;
+  const terminalShown = Boolean(shownTab && panel.tabs.some(t => t.id === shownTab && t.kind === "terminal"));
+  const showTerminal = () => {
+    if (terminalShown) return setPanelOpen(false);
+    setPanelState(s => {
+      const term = s.tabs.find(t => t.kind === "terminal");
+      return term ? { ...s, active: term.id } : (newTerminal(s) ?? s);
+    });
+    setPanelOpen(true);
+  };
+  const showBuiltIn = (tab: "browser" | "files") => {
+    if (shownTab === tab) return setPanelOpen(false);
+    setPanelState(s => ({ ...s, active: tab }));
+    setPanelOpen(true);
+  };
+  const panelButtons = (
+    <PanelButtons
+      terminal={{ on: terminalShown, onClick: showTerminal }}
+      browser={{ on: shownTab === "browser", onClick: () => showBuiltIn("browser") }}
+      files={{ on: shownTab === "files", onClick: () => showBuiltIn("files") }}
+    />
+  );
   const panelToggle = (
-    <Tip label={panelOpen ? "Hide panel" : "Show changes and terminal"} side="bottom">
+    <Tip label={panelOpen ? "Hide panel" : "Show panel"} side="bottom">
       <button
         type="button"
-        aria-label={panelOpen ? "Hide panel" : "Show changes and terminal"}
+        aria-label={panelOpen ? "Hide panel" : "Show panel"}
         aria-pressed={panelOpen}
         onClick={() => setPanelOpen(o => !o)}
         className={cx(
@@ -865,8 +892,8 @@ function ThreadSessionView({
   );
 
   return (
-    <div className="relative flex min-w-0 flex-1">
-      <section className="flex min-w-0 flex-1 flex-col" aria-label={`Thread ${summary.title}`}>
+    <div className={cx("relative flex min-w-0 flex-1", panelOpen && panelShown && !narrow && isVertical(panelPlace) && "flex-col")}>
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={`Thread ${summary.title}`}>
         {paneControls ? (
           <PaneHeader
             active={active}
@@ -934,7 +961,6 @@ function ThreadSessionView({
               {runAction.icon}
               <span className="@max-[640px]/head:sr-only">{runAction.label}</span>
             </Button>
-            {optionsMenu}
             {outdated && (
               <Tip label={outdated.command ? `${outdated.message} Click to copy the command.` : outdated.message} side="bottom">
                 <button
@@ -952,7 +978,10 @@ function ThreadSessionView({
                 </button>
               </Tip>
             )}
+            {/* In a tight header these step aside; the panel's own tabs still reach them. */}
+            <div className="contents @max-[560px]/head:hidden">{panelButtons}</div>
             {panelToggle}
+            {optionsMenu}
           </header>
         )}
 
@@ -1230,6 +1259,8 @@ function ThreadSessionView({
           mode={onThisComputer ? "local" : "cloud"}
           runnerPath={runnerPath}
           onClose={() => setPanelOpen(false)}
+          place={panelPlace}
+          onPlace={setPanelPlace}
           refreshKey={gitRefresh}
           onQuickOpen={() => setQuickOpen(true)}
           shortcuts={{ quickOpen: keysFor("quick-open", shortcuts), reopen: keysFor("reopen-tab", shortcuts) }}

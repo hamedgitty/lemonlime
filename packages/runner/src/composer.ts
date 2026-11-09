@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { promisify } from "node:util";
-import { fuzzyFilter, type AgentCommand, type AgentCommandSource, type AgentKind, type FilesResponse } from "@lemonlime/protocol";
+import { fuzzyFilter, type AgentCommand, type AgentCommandSource, type AgentKind, type FilesResponse, type FolderResponse } from "@lemonlime/protocol";
 import { listSkills, skillsDirFor } from "./skills.ts";
 
 const run = promisify(execFile);
@@ -81,6 +81,27 @@ export function searchFiles(files: readonly string[], query: string, limit: numb
 }
 
 const depth = (p: string) => p.split("/").length;
+
+/**
+ * What one folder holds, from the working directory's file list (so ignored files stay out):
+ * its sub-folders, then its files, each by name. `dir` is relative, "" for the top.
+ */
+export function folderEntries(files: readonly string[], dir: string, limit: number): FolderResponse {
+  const prefix = dir.replace(/^\/+|\/+$/g, "");
+  const start = prefix ? `${prefix}/` : "";
+  const dirs = new Set<string>();
+  const names = new Set<string>();
+  for (const f of files) {
+    if (!f.startsWith(start)) continue;
+    const rest = f.slice(start.length);
+    const slash = rest.indexOf("/");
+    if (slash === -1) names.add(rest);
+    else dirs.add(rest.slice(0, slash));
+  }
+  const byName = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  const entries = [...[...dirs].sort(byName).map(name => ({ name, dir: true })), ...[...names].sort(byName).map(name => ({ name, dir: false }))];
+  return { dir: prefix, entries: entries.slice(0, limit), truncated: entries.length > limit };
+}
 
 /**
  * Slash commands for the thread: what the agent reported, then command files and skills it

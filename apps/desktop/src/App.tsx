@@ -31,7 +31,8 @@ import { NotificationCenter } from "./components/NotificationCenter.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
 import { SideResizer } from "./components/SideResizer.tsx";
-import { KEYS, SIDEBAR, useSideWidth } from "./lib/sideWidth.ts";
+import { PageTools, PageToolsProvider, PanelButtons } from "./components/PanelButtons.tsx";
+import { KEYS, SIDEBAR, isVertical, useSideWidth } from "./lib/sideWidth.ts";
 import { Toaster, connectToastThreads, syncThreadToasts, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
 import { settled, withChildren } from "./lib/children.ts";
@@ -461,6 +462,32 @@ export function App() {
       return !open;
     });
   }, []);
+
+  // The terminal and browser buttons at the top right of a page: open the side panel on that
+  // kind of tab (reusing one that's open), or hide the panel when it already shows one.
+  const panelShows = (kind: "terminal" | "browser") => {
+    if (!panelOpen) return false;
+    const t = panelTabs.find(x => x.id === panelActive) ?? panelTabs[0];
+    return kind === "terminal" ? t?.kind === "terminal" : t?.kind === "browser" || t?.kind === "new";
+  };
+  const showPanelTab = (kind: "terminal" | "browser") => {
+    if (panelShows(kind)) return setPanelOpen(false);
+    const found = panelTabs.find(t => (kind === "terminal" ? t.kind === "terminal" : t.kind === "browser" || t.kind === "new"));
+    if (found) setPanelActive(found.id);
+    else {
+      const id = crypto.randomUUID();
+      setPanelTabs(tabs => [...tabs, kind === "terminal" ? { id, kind: "terminal", title: "Terminal" } : { id, kind: "new", title: "New tab" }]);
+      setPanelActive(id);
+    }
+    setPanelOpen(true);
+  };
+  const pageTools =
+    place.view === "thread" || place.view === "settings" ? null : (
+      <PanelButtons
+        terminal={inDesktopShell() ? { on: panelShows("terminal"), onClick: () => showPanelTab("terminal") } : null}
+        browser={{ on: panelShows("browser"), onClick: () => showPanelTab("browser") }}
+      />
+    );
 
   const cloudConfigured = isCloudConfigured(settings);
   const cloudApi = useMemo(
@@ -2008,11 +2035,6 @@ export function App() {
         onNew={() => go({ view: "home" })}
         onAutomations={() => go({ view: "automations" })}
         onSkills={() => go({ view: "skills" })}
-        onPanel={() => {
-          if (place.view === "thread") window.dispatchEvent(new Event("lemonlime:toggle-panel"));
-          else togglePanel();
-        }}
-        panelOpen={panelOpen && place.view !== "thread"}
         onPlugins={() => go({ view: "plugins" })}
         onNewProject={() => void addProject()}
         agentUpdates={agentUpdates}
@@ -2141,75 +2163,87 @@ export function App() {
                 )}
               </div>
             )}
-            <div className="relative flex min-h-0 flex-1">
-              <GlobalPanel
-                tabs={panelTabs}
-                active={panelActive}
-                onTabs={setPanelTabs}
-                onActive={setPanelActive}
-                side={prefs.panelSide}
-                onSide={panelSide => onPrefs({ panelSide })}
-                onClose={() => {
-                  setPanelOpen(false);
-                  setLinkPanel(false);
-                }}
-                hidden={!panelOpen || (place.view === "thread" && !linkPanel) || place.view === "settings"}
-              />
-              {place.view === "automations" ? (
-                <AutomationsView
-                  cloudApi={cloudApi}
-                  onConnectCloud={() => go({ view: "settings", page: "account" })}
-                  onOpenThread={id => {
-                    void refreshCloud();
-                    go({ view: "thread", selection: { mode: "cloud", id } });
+            <PageToolsProvider value={pageTools}>
+              <div
+                className={cx(
+                  "relative flex min-h-0 flex-1",
+                  isVertical(prefs.panelSide) && panelOpen && place.view !== "thread" && place.view !== "settings" && "flex-col",
+                )}
+              >
+                <GlobalPanel
+                  tabs={panelTabs}
+                  active={panelActive}
+                  onTabs={setPanelTabs}
+                  onActive={setPanelActive}
+                  side={prefs.panelSide}
+                  onSide={panelSide => onPrefs({ panelSide })}
+                  onClose={() => {
+                    setPanelOpen(false);
+                    setLinkPanel(false);
                   }}
-                  scans={<AgentScans runnerPath={settings.runnerPath} />}
+                  hidden={!panelOpen || (place.view === "thread" && !linkPanel) || place.view === "settings"}
                 />
-              ) : place.view === "skills" ? (
-                <SkillsView onPrompt={promptInComposer} />
-              ) : place.view === "plugins" ? (
-                <PluginsView onPrompt={promptInComposer} />
-              ) : place.view === "settings" ? (
-                <SettingsView
-                  page={place.page}
-                  ctx={settingsCtx}
-                  importTab={<section className="mb-8 rounded-xl border border-line bg-paper p-5">{importChats()}</section>}
-                />
-              ) : place.view === "thread" && (layout || selectedEntry) ? (
-                <SplitView
-                  layout={layout ?? singlePane(threadPane(selection!), SOLO_PANE)}
-                  renderPane={renderPane}
-                  onFocusPane={id => layout && commitLayout(focusPane(layout, id))}
-                  onResize={(start, d, delta, total) => setLayout(resizeSplit(start, d.splitId, d.index, delta, total))}
-                  onEven={id => setLayout(l => l && evenSplit(l, id))}
-                  dragging={dragThread !== null}
-                  onDrop={dropThread}
-                  dimInactive={prefs.dimInactivePanes}
-                />
-              ) : (
-                <Home
-                  cloudAvailable={cloudConfigured}
-                  threadCount={summaries.length}
-                  prefs={prefs}
-                  onPrefs={onPrefs}
-                  onCreate={async input => void (await createThread(input))}
-                  onConnectCloud={() => go({ view: "settings", page: "account" })}
-                  runnerPath={settings.runnerPath}
-                  draft={draft}
-                  acpAgents={settings.acpAgents}
-                  agents={agents}
-                  onOpenSettings={page => go({ view: "settings", page: page as SettingsPage })}
-                  getStarted={{
-                    agentReady,
-                    threads: summaries.length,
-                    cloudThreads: cloudThreads.length,
-                    cloudConnected: cloudConfigured,
-                    githubLinked: cloudConfigured ? githubLinked : null,
-                  }}
-                  {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
-                />
-              )}
-            </div>
+                {place.view === "automations" ? (
+                  <AutomationsView
+                    cloudApi={cloudApi}
+                    onConnectCloud={() => go({ view: "settings", page: "account" })}
+                    onOpenThread={id => {
+                      void refreshCloud();
+                      go({ view: "thread", selection: { mode: "cloud", id } });
+                    }}
+                    scans={<AgentScans runnerPath={settings.runnerPath} />}
+                  />
+                ) : place.view === "skills" ? (
+                  <SkillsView onPrompt={promptInComposer} />
+                ) : place.view === "plugins" ? (
+                  <PluginsView onPrompt={promptInComposer} />
+                ) : place.view === "settings" ? (
+                  <SettingsView
+                    page={place.page}
+                    ctx={settingsCtx}
+                    importTab={<section className="mb-8 rounded-xl border border-line bg-paper p-5">{importChats()}</section>}
+                  />
+                ) : place.view === "thread" && (layout || selectedEntry) ? (
+                  <SplitView
+                    layout={layout ?? singlePane(threadPane(selection!), SOLO_PANE)}
+                    renderPane={renderPane}
+                    onFocusPane={id => layout && commitLayout(focusPane(layout, id))}
+                    onResize={(start, d, delta, total) => setLayout(resizeSplit(start, d.splitId, d.index, delta, total))}
+                    onEven={id => setLayout(l => l && evenSplit(l, id))}
+                    dragging={dragThread !== null}
+                    onDrop={dropThread}
+                    dimInactive={prefs.dimInactivePanes}
+                  />
+                ) : (
+                  <div className="relative flex min-h-0 min-w-0 flex-1">
+                    <div className="absolute top-2.5 right-3 z-10">
+                      <PageTools />
+                    </div>
+                    <Home
+                      cloudAvailable={cloudConfigured}
+                      threadCount={summaries.length}
+                      prefs={prefs}
+                      onPrefs={onPrefs}
+                      onCreate={async input => void (await createThread(input))}
+                      onConnectCloud={() => go({ view: "settings", page: "account" })}
+                      runnerPath={settings.runnerPath}
+                      draft={draft}
+                      acpAgents={settings.acpAgents}
+                      agents={agents}
+                      onOpenSettings={page => go({ view: "settings", page: page as SettingsPage })}
+                      getStarted={{
+                        agentReady,
+                        threads: summaries.length,
+                        cloudThreads: cloudThreads.length,
+                        cloudConnected: cloudConfigured,
+                        githubLinked: cloudConfigured ? githubLinked : null,
+                      }}
+                      {...(cloudConfigured && settings.controlPlaneUrl ? { dashboardUrl: settings.controlPlaneUrl } : {})}
+                    />
+                  </div>
+                )}
+              </div>
+            </PageToolsProvider>
           </div>
         </div>
       </Toaster>

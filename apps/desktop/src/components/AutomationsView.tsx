@@ -7,6 +7,7 @@ import { CopyButton } from "../lib/markdown.tsx";
 import { confirmAction } from "../lib/native.ts";
 import { PageTabs } from "./primitives.tsx";
 import { Button, SegmentedControl, SkeletonRows, TextInput, cx } from "./ui.tsx";
+import { PageTools } from "./PanelButtons.tsx";
 
 const PRESETS = [
   { label: "Weekdays 9:00", cron: "0 9 * * 1-5" },
@@ -165,7 +166,7 @@ export function AutomationsView({
 
   if (!cloudApi && (tab === "overview" || tab === "review")) {
     return (
-      <main className="flex flex-1 flex-col">
+      <main className="flex min-h-0 flex-1 flex-col">
         <Header tab={tab} onTab={setTab} toReview={0} hasScans={Boolean(scans)} onNew={null} />
         <div className="flex flex-1 items-center justify-center p-10">
           <div className="max-w-md text-center">
@@ -193,7 +194,7 @@ export function AutomationsView({
   };
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col">
       <Header tab={tab} onTab={setTab} toReview={toReview} hasScans={Boolean(scans)} onNew={cloudApi ? () => setEditing({ id: null, form: EMPTY }) : null} />
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[800px] px-6 pt-6 pb-16">
@@ -330,6 +331,7 @@ function Header({
             New
           </Button>
         )}
+        <PageTools />
       </div>
       <PageTabs
         label="Automations"

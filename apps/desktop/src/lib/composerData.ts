@@ -17,7 +17,8 @@ export interface ComposerSources {
   searchFiles: (query: string, signal?: AbortSignal) => Promise<string[]>;
 }
 
-async function getJson(conn: Connection, path: string, signal?: AbortSignal): Promise<unknown> {
+/** GET a JSON answer from the thread's runner. */
+export async function getJson(conn: Connection, path: string, signal?: AbortSignal): Promise<unknown> {
   const res = await fetch(`${runnerHttpBase(conn.url)}${path}`, {
     headers: { authorization: `Bearer ${await conn.token()}` },
     ...(signal ? { signal } : {}),

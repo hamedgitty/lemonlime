@@ -32,6 +32,7 @@ import {
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, PageTabs } from "./primitives.tsx";
 import { HideListButton, ListColumn } from "./ListColumn.tsx";
 import { Button, IconButton, RetryCard, SkeletonRows, SkeletonText, Spinner, TextInput, cx, openExternal, rowFill } from "./ui.tsx";
+import { PageTools } from "./PanelButtons.tsx";
 
 const SOURCE_LABELS: Record<SkillSource, string> = {
   yours: "Yours",
@@ -111,7 +112,7 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
   const yours = useMemo(() => new Set((skills ?? []).filter(s => s.source === "yours").map(s => s.name)), [skills]);
 
   return (
-    <main className="flex min-w-0 flex-1 flex-col">
+    <main className="flex min-h-0 min-w-0 flex-1 flex-col">
       <header className="shrink-0 border-b border-line px-6 pl-[max(1.5rem,var(--chrome-inset,0px))]">
         <div data-tauri-drag-region className="flex h-[52px] min-w-0 items-center gap-3 overflow-hidden">
           <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
@@ -152,6 +153,7 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
               ))}
             </Menu>
           </div>
+          <PageTools />
         </div>
         <PageTabs
           label="Skills"

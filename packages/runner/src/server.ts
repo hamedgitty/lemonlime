@@ -8,6 +8,7 @@ import {
   DEFAULT_TERMINAL_ID,
   FILE_READ_MAX_BYTES,
   FILES_LIMIT_MAX,
+  FOLDER_LIMIT,
   RelayAnswers,
   parseClientMessage,
   parseTerminalClientMessage,
@@ -24,7 +25,7 @@ import { PortWatcher } from "./port-watch.ts";
 import { keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
-import { listWorkdirFiles, searchFiles } from "./composer.ts";
+import { folderEntries, listWorkdirFiles, searchFiles } from "./composer.ts";
 import { contentTypeFor, findWorkdirFile, resolveWorkdirFile } from "./files.ts";
 import { handleGitApi } from "./git-api.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
@@ -138,6 +139,7 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
     if (
       path === "/capabilities" ||
       path === "/files" ||
+      path === "/folder" ||
       path === "/file" ||
       path === "/file-exists" ||
       path === "/project-scripts" ||
@@ -715,6 +717,12 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     const limit = Math.min(FILES_LIMIT_MAX, Math.max(1, Number(params.get("limit")) || 50));
     const files = await listWorkdirFiles(runner.workdir).catch(() => [] as string[]);
     return reply(res, 200, searchFiles(files, (params.get("q") ?? "").slice(0, 200), limit));
+  }
+  // One folder's sub-folders and files, for the app's file tree.
+  if (path === "/folder" && req.method === "GET") {
+    const dir = (new URL(req.url ?? "/", "http://runner").searchParams.get("dir") ?? "").slice(0, 4096);
+    const files = await listWorkdirFiles(runner.workdir).catch(() => [] as string[]);
+    return reply(res, 200, folderEntries(files, dir, FOLDER_LIMIT));
   }
   // One file from the working folder, for the app's file tabs.
   if (path === "/file" && req.method === "GET") {

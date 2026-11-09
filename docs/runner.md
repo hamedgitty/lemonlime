@@ -205,6 +205,10 @@ for the app's file tabs, up to 20 MB. The path must be relative and stay inside 
 working folder once symlinks are followed; `..`, absolute paths, `.git` and the runner's
 own `.lemonlime` folder are refused.
 
+`GET /folder?dir=<relative path>` (client token) lists one folder for the app's Files tab:
+its sub-folders, then its files, each by name, up to 2,000 entries. It is built from the
+same list as the composer's `@` menu, so files git ignores stay out.
+
 The PTY comes from `@lydell/node-pty` (prebuilt, no compiler needed). The desktop app's
 single-file runner can't hold a native module, so `build:sea` copies it next to the
 executable and the app passes `LEMONLIME_NODE_PTY_DIR`.

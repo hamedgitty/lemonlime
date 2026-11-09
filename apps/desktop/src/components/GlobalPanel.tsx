@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeftRight, Globe, Maximize2, Minimize2, Plus, SquareTerminal, X } from "lucide-react";
+import { Globe, Plus, SquareTerminal, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { inDesktopShell } from "../lib/native.ts";
-import { KEYS, SIDE_PANEL, useSideWidth } from "../lib/sideWidth.ts";
+import { KEYS, PANEL_HEIGHT, SIDE_PANEL, isVertical, useSideWidth, type PanelPlace } from "../lib/sideWidth.ts";
+import { PanelPlaceMenu } from "./PanelPlaceMenu.tsx";
 import { Tip } from "./primitives.tsx";
 import { BrowserView, NewTabPage } from "./PanelBrowser.tsx";
 import { SideResizer } from "./SideResizer.tsx";
@@ -49,14 +50,16 @@ export function GlobalPanel({
   active: string | null;
   onTabs: (t: PanelTab[]) => void;
   onActive: (id: string) => void;
-  side: "left" | "right";
-  onSide: (s: "left" | "right") => void;
+  side: PanelPlace;
+  onSide: (s: PanelPlace) => void;
   onClose: () => void;
   /** Kept mounted (shells keep running) but out of sight. */
   hidden: boolean;
 }) {
   const [full, setFull] = useState(false);
   const [width, setWidth] = useSideWidth(KEYS.sidePanel, SIDE_PANEL);
+  const [height, setHeight] = useSideWidth(KEYS.sidePanelHeight, PANEL_HEIGHT);
+  const vertical = isVertical(side);
   const add = () => {
     const id = crypto.randomUUID();
     onTabs([...tabs, { id, kind: "new", title: "New tab" }]);
@@ -75,20 +78,26 @@ export function GlobalPanel({
     <aside
       aria-label="Side panel"
       hidden={hidden}
-      style={full ? undefined : { width, maxWidth: "60%" }}
+      style={full ? undefined : vertical ? { height, maxHeight: "75%" } : { width, maxWidth: "60%" }}
       className={cx(
         "flex shrink-0 flex-col bg-cream",
         full ? "absolute inset-0 z-30" : "relative",
-        !full && (side === "right" ? "order-last border-l border-line" : "order-first border-r border-line"),
+        !full &&
+          {
+            right: "order-last border-l border-line",
+            left: "order-first border-r border-line",
+            top: "order-first border-b border-line",
+            bottom: "order-last border-t border-line",
+          }[side],
       )}
     >
       {!full && (
         <SideResizer
-          edge={side === "right" ? "left" : "right"}
-          width={width}
-          bounds={SIDE_PANEL}
+          edge={({ right: "left", left: "right", top: "bottom", bottom: "top" } as const)[side]}
+          width={vertical ? height : width}
+          bounds={vertical ? PANEL_HEIGHT : SIDE_PANEL}
           label="Resize the side panel"
-          onWidth={setWidth}
+          onWidth={vertical ? setHeight : setWidth}
           onFold={onClose}
         />
       )}
@@ -128,21 +137,7 @@ export function GlobalPanel({
             <Plus aria-hidden="true" className="size-4" />
           </button>
         </Tip>
-        <Tip label={side === "right" ? "Move to the left" : "Move to the right"} side="bottom">
-          <button
-            type="button"
-            aria-label={side === "right" ? "Move panel to the left" : "Move panel to the right"}
-            onClick={() => onSide(side === "right" ? "left" : "right")}
-            className={ICON_BUTTON}
-          >
-            <ArrowLeftRight aria-hidden="true" className="size-4" />
-          </button>
-        </Tip>
-        <Tip label={full ? "Exit full screen" : "Full screen"} side="bottom">
-          <button type="button" aria-label={full ? "Exit full screen" : "Full screen"} onClick={() => setFull(f => !f)} className={ICON_BUTTON}>
-            {full ? <Minimize2 aria-hidden="true" className="size-4" /> : <Maximize2 aria-hidden="true" className="size-4" />}
-          </button>
-        </Tip>
+        <PanelPlaceMenu place={side} onPlace={onSide} full={full} onFull={setFull} />
         <Tip label="Close panel" side="bottom">
           <button type="button" aria-label="Close panel" onClick={onClose} className={ICON_BUTTON}>
             <X aria-hidden="true" className="size-4" />

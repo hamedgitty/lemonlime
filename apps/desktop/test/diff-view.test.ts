@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFileTree, diffSides, highlightedDiffLines, isTestFile, splitHighlightedLines, treeFolders } from "../src/lib/diffView.ts";
+import { buildFileTree, diffSides, highlightedDiffLines, isTestFile, splitHighlightedLines } from "../src/lib/diffView.ts";
 import type { HlNode } from "../src/lib/highlightGrammars.ts";
 import type { ReviewLine } from "../src/lib/review.ts";
 
@@ -17,7 +17,6 @@ describe("buildFileTree", () => {
     expect(tree.map(n => n.name)).toEqual(["src", "README.md"]);
     const src = tree[0]!;
     expect(src.kind === "dir" && src.children.map(n => `${n.kind}:${n.path}`)).toEqual(["dir:src/components", "dir:src/lib"]);
-    expect(treeFolders(tree)).toEqual(["src", "src/components", "src/lib"]);
     const deep = buildFileTree([{ path: "a/b/c/d.ts" }]);
     expect(deep).toMatchObject([{ kind: "dir", name: "a/b/c", path: "a/b/c", children: [{ kind: "file", name: "d.ts", path: "a/b/c/d.ts" }] }]);
   });

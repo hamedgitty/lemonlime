@@ -264,6 +264,16 @@ describe("thread terminal", () => {
     };
     const project = JSON.stringify({ scripts: [{ name: "Dev", command: "pnpm dev", previewUrl: "http://localhost:5173/" }] });
     const { port, runner, dir } = await boot(spawn, undefined, { "lemonlime.json": project });
+    // The app lists the scripts, and checks paths the terminal printed, over HTTP.
+    const auth = {
+      authorization: `Bearer ${await signToken({ threadId: "term-thread-1", scope: "client", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET)}`,
+    };
+    const listed = (await (await fetch(`http://127.0.0.1:${port}/project-scripts`, { headers: auth })).json()) as { scripts: { id: string }[] };
+    expect(listed.scripts.map(x => x.id)).toEqual(["dev"]);
+    const exists = await fetch(`http://127.0.0.1:${port}/file-exists?path=./lemonlime.json`, { headers: auth });
+    expect(await exists.json()).toEqual({ path: "lemonlime.json" });
+    expect((await fetch(`http://127.0.0.1:${port}/file-exists?path=nope.ts`, { headers: auth })).status).toBe(404);
+    expect((await fetch(`http://127.0.0.1:${port}/project-scripts`)).status).toBe(401);
     const a = open(port, { terminal: "script-dev", script: "dev" } as { terminal: string });
     await a.ready;
     await until(() => a.got.length > 0);

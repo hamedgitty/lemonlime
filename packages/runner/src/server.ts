@@ -139,6 +139,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
       path === "/capabilities" ||
       path === "/files" ||
       path === "/file" ||
+      path === "/file-exists" ||
+      path === "/project-scripts" ||
       path === "/commands" ||
       path.startsWith("/attachments") ||
       path === "/previews" ||

@@ -28,7 +28,7 @@ import {
   type DiffRequest,
   type ReviewLine,
 } from "../lib/review.ts";
-import { buildFileTree, diffSides, highlightedDiffLines, isTestFile, treeFolders, type FileTreeNode } from "../lib/diffView.ts";
+import { buildFileTree, diffSides, highlightedDiffLines, isTestFile, type FileTreeNode } from "../lib/diffView.ts";
 import { highlightDiffSides } from "../lib/diffHighlighter.ts";
 import { languageFor } from "../lib/filePreview.ts";
 import { render as renderHighlighted } from "../lib/markdownHighlight.tsx";
@@ -401,24 +401,6 @@ export function ReviewPanel({
                   onPick={jump}
                 />
               </ul>
-            )}
-            {view.tree && treeFolders(tree).length > 1 && (
-              <p className="flex gap-1 px-1 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setFolded(new Set(treeFolders(tree)))}
-                  className="rounded-md px-1.5 py-0.5 text-[13px] text-ink-soft hover:bg-cream-deep hover:text-ink"
-                >
-                  Fold folders
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFolded(new Set())}
-                  className="rounded-md px-1.5 py-0.5 text-[13px] text-ink-soft hover:bg-cream-deep hover:text-ink"
-                >
-                  Unfold folders
-                </button>
-              </p>
             )}
             {data.moreFiles > 0 && (
               <p className="px-2 pt-1 text-[13px] text-ink-soft">

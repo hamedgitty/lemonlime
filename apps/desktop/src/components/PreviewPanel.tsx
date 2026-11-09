@@ -85,9 +85,11 @@ export function PreviewPanel({
   };
   useEffect(() => {
     if (!open) return;
-    // Elsewhere a local address means the sandbox's port: show it as that preview (once it's offered).
+    // Elsewhere a local address means the sandbox's port: show it as that preview (once it's
+    // offered). Here, a preview's own front page is shown as that preview too.
     const port = localPort(open.url);
-    if (mode !== "local" && port) setChosen({ kind: "preview", port });
+    const front = port !== null && previews.some(p => p.port === port) && new URL(open.url).pathname === "/";
+    if (port && (mode !== "local" || front)) setChosen({ kind: "preview", port });
     else openPage(open.url);
     // openPage only sets state.
     // eslint-disable-next-line react-hooks/exhaustive-deps

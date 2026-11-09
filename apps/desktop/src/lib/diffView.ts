@@ -66,11 +66,6 @@ export function buildFileTree<F extends { path: string }>(files: readonly F[]): 
   return walk(root, "");
 }
 
-/** Every folder path in the tree (to fold or unfold them all). */
-export function treeFolders<F>(nodes: readonly FileTreeNode<F>[]): string[] {
-  return nodes.flatMap(n => (n.kind === "dir" ? [n.path, ...treeFolders(n.children)] : []));
-}
-
 // ── Highlighting ───────────────────────────────────────────
 
 /** Lines longer than this, or files with more text than `HIGHLIGHT_DIFF_MAX_CHARS`, show plain. */

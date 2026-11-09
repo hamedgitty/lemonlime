@@ -136,5 +136,9 @@ describe("snooze", () => {
     expect(snoozeWhen(local(11, 9), now)).toBe(`tomorrow, ${time(local(11, 9))}`);
     expect(snoozeWhen(local(16, 9), now)).toContain(time(local(16, 9)));
     expect(snoozeWhen(local(16, 9), now)).not.toContain("tomorrow");
+    // Short, for a sidebar row.
+    expect(snoozeWhen(local(10, 18), now, true)).toBe(time(local(10, 18)));
+    expect(snoozeWhen(local(11, 9), now, true)).toBe("Tomorrow");
+    expect(snoozeWhen(local(13, 9), now, true)).toBe(local(13, 9).toLocaleDateString(undefined, { weekday: "short" }));
   });
 });

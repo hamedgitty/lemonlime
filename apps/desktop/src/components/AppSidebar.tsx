@@ -61,7 +61,9 @@ import {
   type GroupProject,
   type ThreadGroup,
 } from "../lib/sidebarGroups.ts";
-import { knownPullRequests, snoozeWhen, subscribePullRequests } from "../lib/threadMenu.ts";
+import { knownPullRequestInfo, knownPullRequests, snoozeWhen, subscribePullRequests } from "../lib/threadMenu.ts";
+import { threadCardLines } from "../lib/threadCard.ts";
+import { ThreadCardTrigger, ThreadHoverCard } from "./ThreadHoverCard.tsx";
 import { useMissingFolders } from "../lib/missingFolders.ts";
 import { RenameField, ThreadMenu, ThreadRightClickMenu, type ThreadMenuProps } from "./ThreadMenu.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
@@ -301,6 +303,7 @@ export function AppSidebar(p: AppSidebarProps) {
 
   return (
     <nav aria-label="LemonLime" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">
+      <ThreadHoverCard />
       {/* Window controls: room for the traffic lights, then sidebar and history buttons. */}
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center px-2">
         <div data-tauri-drag-region className="flex h-9 items-center gap-0.5 rounded-full border border-line bg-cream/70 pr-1.5 pl-1">
@@ -596,7 +599,7 @@ export function AppSidebar(p: AppSidebarProps) {
         {p.undoNotice && (
           <div className="mb-2 flex items-start gap-2 rounded-xl border border-line bg-paper py-2 pr-1.5 pl-3 shadow-panel">
             <div className="min-w-0 flex-1 py-0.5">
-              <p className="truncate text-[13px] font-medium text-ink" title={p.undoNotice.label}>
+              <p className="line-clamp-2 text-[13px] font-medium break-words text-ink" title={p.undoNotice.label}>
                 {p.undoNotice.label}
               </p>
               {p.undoNotice.detail && <p className="mt-0.5 text-[13px] leading-snug text-pretty text-ink-soft">{p.undoNotice.detail}</p>}
@@ -802,59 +805,73 @@ function ThreadRow({
             }}
           />
         ) : (
-          <button
-            type="button"
-            onClick={() => onSelect(t)}
-            onDoubleClick={e => {
-              if (!onRename) return;
-              e.preventDefault();
-              setRenaming(true);
+          <ThreadCardTrigger
+            payload={{
+              title: t.title,
+              lines: threadCardLines(t, { machineName, pullRequest: prUrl ? (knownPullRequestInfo(t.id) ?? {}) : null, snoozedUntil: snoozedUntil ?? null }),
             }}
-            aria-current={selected ? "page" : undefined}
-            aria-keyshortcuts="Shift+F10"
-            data-shortcut={shortcut}
-            // Drag it onto a pane to open it there, or onto a pane's edge to split.
-            draggable={Boolean(onDrag)}
-            onDragStart={e => {
-              if (!onDrag) return;
-              e.dataTransfer.effectAllowed = "move";
-              e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
-              e.dataTransfer.setData("text/plain", t.title);
-              onDrag(t);
-            }}
-            onDragEnd={() => onDrag?.(null)}
-            className={cx(
-              "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
-              selected ? "bg-cream-hover" : "hover:bg-cream-hover",
-            )}
-          >
-            {glyph ? (
-              <RowMark glyph={glyph} status={t.status} />
-            ) : agentIcon ? (
-              <AgentBadge kind={t.agent.kind} />
-            ) : t.mode === "cloud" ? (
-              <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-            ) : t.machine ? (
-              <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-            ) : (
-              <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
-            )}
-            <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
-            {inSplit && (
-              <span role="img" aria-label="Open in the split view" title="Open in the split view" className="inline-flex shrink-0 group-hover/row:invisible">
-                <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
-              </span>
-            )}
-            {kids.length > 0 && <ProgressGrid kids={kids} />}
-            <span className="shrink-0 text-[12px] text-ink-faint tabular-nums group-hover/row:invisible">
-              {snoozedUntil ? snoozeWhen(new Date(snoozedUntil), new Date()) : relativeTime(t.updatedAt)}
-            </span>
-            <span className="sr-only">
-              {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]}, {STATUS_LABELS[t.status]}
-              {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
-              {snoozedUntil ? `, snoozed until ${snoozeWhen(new Date(snoozedUntil), new Date())}` : ""}
-            </span>
-          </button>
+            render={
+              <button
+                type="button"
+                onClick={() => onSelect(t)}
+                onDoubleClick={e => {
+                  if (!onRename) return;
+                  e.preventDefault();
+                  setRenaming(true);
+                }}
+                aria-current={selected ? "page" : undefined}
+                aria-keyshortcuts="Shift+F10"
+                data-shortcut={shortcut}
+                // Drag it onto a pane to open it there, or onto a pane's edge to split.
+                draggable={Boolean(onDrag)}
+                onDragStart={e => {
+                  if (!onDrag) return;
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData(THREAD_DRAG_TYPE, JSON.stringify({ mode: t.mode, id: t.id }));
+                  e.dataTransfer.setData("text/plain", t.title);
+                  onDrag(t);
+                }}
+                onDragEnd={() => onDrag?.(null)}
+                className={cx(
+                  "flex h-8 w-full items-center gap-2.5 rounded-lg pr-8 pl-2 text-left transition-colors duration-100",
+                  selected ? "bg-cream-hover" : "hover:bg-cream-hover",
+                )}
+              >
+                {glyph ? (
+                  <RowMark glyph={glyph} status={t.status} />
+                ) : agentIcon ? (
+                  <AgentBadge kind={t.agent.kind} />
+                ) : t.mode === "cloud" ? (
+                  <Cloud aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                ) : t.machine ? (
+                  <Server aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                ) : (
+                  <Laptop aria-hidden="true" className="size-4 shrink-0 text-ink-faint" />
+                )}
+                <span className={cx("min-w-0 flex-1 truncate text-[14px] text-ink", unread && "font-semibold")}>{t.title}</span>
+                {inSplit && (
+                  <span
+                    role="img"
+                    aria-label="Open in the split view"
+                    title="Open in the split view"
+                    className="inline-flex shrink-0 group-hover/row:invisible"
+                  >
+                    <Columns2 aria-hidden="true" className="size-3.5 text-ink-faint" />
+                  </span>
+                )}
+                {kids.length > 0 && <ProgressGrid kids={kids} />}
+                <span className="shrink-0 text-[12px] text-ink-faint tabular-nums group-hover/row:invisible">
+                  {snoozedUntil ? snoozeWhen(new Date(snoozedUntil), new Date(), true) : relativeTime(t.updatedAt)}
+                </span>
+                <span className="sr-only">
+                  {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]},{" "}
+                  {STATUS_LABELS[t.status]}
+                  {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
+                  {snoozedUntil ? `, snoozed until ${snoozeWhen(new Date(snoozedUntil), new Date())}` : ""}
+                </span>
+              </button>
+            }
+          />
         )}
         {showKids && kids.length > 0 && !renaming && (
           <ul aria-label={`Subagents of ${t.title}`} className="mt-px mb-0.5 flex flex-col">

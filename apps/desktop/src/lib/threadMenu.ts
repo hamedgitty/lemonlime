@@ -1,4 +1,5 @@
 import type { ThreadEvent } from "@lemonlime/protocol";
+import type { KnownPullRequest } from "./threadCard.ts";
 
 /**
  * The one menu of things you can do to a thread. The same items, in the same order, show
@@ -122,12 +123,16 @@ export function snoozePresets(now: Date): SnoozePreset[] {
   return out;
 }
 
-/** When a snooze ends, said briefly: "18:00", "tomorrow, 9:00", "Mon 10 Nov, 9:00". */
-export function snoozeWhen(until: Date, now: Date): string {
+/**
+ * When a snooze ends, said briefly: "18:00", "tomorrow, 9:00", "Mon 10 Nov, 9:00". `short`
+ * fits a sidebar row: the time today, else "Tomorrow" or the day ("Mon", "10 Nov").
+ */
+export function snoozeWhen(until: Date, now: Date, short = false): string {
   const time = clock(until);
   const day = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((day(until) - day(now)) / 86_400_000);
   if (days <= 0) return time;
+  if (short) return days === 1 ? "Tomorrow" : until.toLocaleDateString(undefined, days < 7 ? { weekday: "short" } : { day: "numeric", month: "short" });
   if (days === 1) return `tomorrow, ${time}`;
   const date = until.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
   return `${date}, ${time}`;
@@ -170,16 +175,25 @@ function quote(s: string): string {
  * too. Kept for this run of the app only.
  */
 const pullRequests = new Map<string, string>();
+const pullRequestInfo = new Map<string, KnownPullRequest>();
 const listeners = new Set<() => void>();
 let snapshot: ReadonlyMap<string, string> = new Map();
 
-export function rememberPullRequest(threadId: string, url: string | null): void {
-  if ((pullRequests.get(threadId) ?? null) === url) return;
+/** A thread's pull request link, and (for the sidebar's hover card) its number and state. */
+export function rememberPullRequest(threadId: string, url: string | null, info?: KnownPullRequest): void {
+  const before = pullRequestInfo.get(threadId);
+  const sameInfo = before?.number === info?.number && before?.state === info?.state && before?.draft === info?.draft;
+  if ((pullRequests.get(threadId) ?? null) === url && sameInfo) return;
   if (url) pullRequests.set(threadId, url);
   else pullRequests.delete(threadId);
+  if (url && info) pullRequestInfo.set(threadId, info);
+  else pullRequestInfo.delete(threadId);
   snapshot = new Map(pullRequests);
   for (const l of listeners) l();
 }
+
+/** What's known of a thread's pull request beyond its link. */
+export const knownPullRequestInfo = (threadId: string): KnownPullRequest | null => pullRequestInfo.get(threadId) ?? null;
 
 export function subscribePullRequests(listener: () => void): () => void {
   listeners.add(listener);

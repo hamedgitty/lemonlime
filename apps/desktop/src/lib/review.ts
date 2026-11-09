@@ -1,5 +1,15 @@
 import { runnerHttpBase } from "@lemonlime/client";
-import { GitDiffResponse, GitPullRequestResponse, GitStatusResponse, type CreatePullRequestBody, type DiffHunk, type DiffScope } from "@lemonlime/protocol";
+import {
+  GitDiffResponse,
+  GitPullRequestResponse,
+  GitStatusResponse,
+  PullRequestDraft,
+  PullRequestWatchState,
+  UpdateFromBaseResponse,
+  type CreatePullRequestBody,
+  type DiffHunk,
+  type DiffScope,
+} from "@lemonlime/protocol";
 import type { Connection } from "./useThreadSession.ts";
 
 /** The runner's git review API (see docs/runner.md, "Reviewing the branch"). */
@@ -61,6 +71,40 @@ export async function pushBranch(connection: Connection, fetchImpl?: FetchLike):
 
 export function createPullRequest(connection: Connection, body: CreatePullRequestBody, fetchImpl?: FetchLike): Promise<GitPullRequestResponse> {
   return call(connection, "/git/pull-request", GitPullRequestResponse, { method: "POST", body: JSON.stringify(body) }, fetchImpl);
+}
+
+export function fetchPullRequestDraft(connection: Connection, fetchImpl?: FetchLike): Promise<PullRequestDraft> {
+  return call(connection, "/git/pull-request/draft", PullRequestDraft, {}, fetchImpl);
+}
+
+export function watchPullRequest(connection: Connection, on: boolean, fetchImpl?: FetchLike): Promise<PullRequestWatchState> {
+  return call(connection, "/git/pull-request/watch", PullRequestWatchState, { method: "POST", body: JSON.stringify({ on }) }, fetchImpl);
+}
+
+export function updateFromBase(connection: Connection, fetchImpl?: FetchLike): Promise<UpdateFromBaseResponse> {
+  return call(connection, "/git/update-from-base", UpdateFromBaseResponse, { method: "POST" }, fetchImpl);
+}
+
+/** GitHub's compare page with the title and description filled in (the description kept short enough for a link). */
+export function compareUrlWithDraft(compareUrl: string, draft: { title: string; body: string }): string {
+  const u = new URL(compareUrl);
+  if (draft.title.trim()) u.searchParams.set("title", draft.title.trim());
+  const body = draft.body.trim();
+  if (body) u.searchParams.set("body", body.length > 4000 ? `${body.slice(0, 4000)}…` : body);
+  return u.toString();
+}
+
+/** The message that asks the agent to merge the base branch in and resolve the conflicts. */
+export function conflictsPrompt(base: string, files: string[]): string {
+  const list = files.slice(0, 30).map(f => `- ${f}`);
+  if (files.length > 30) list.push(`- …and ${files.length - 30} more`);
+  return [
+    `Merge ${base} into this branch and resolve the merge conflicts.`,
+    files.length ? `These files conflict:\n\n${list.join("\n")}` : "",
+    "Keep what both sides meant to do, run the tests, and commit the merge. If a conflict needs a decision from me, stop and ask.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 // ── Showing hunks ──────────────────────────────────────────────

@@ -36,7 +36,7 @@ import {
 import { fetchAttachmentImage, runnerHttpBase } from "@lemonlime/client";
 import { buildTimeline, waitingOnYou, withoutQueued, type TimelineItem } from "../lib/timeline.ts";
 import { latestSubagents } from "../lib/steps.ts";
-import { editSendPlan, forkNote, forkTitle, rewindLanded, startEdit, type EditDraft } from "../lib/messageActions.ts";
+import { editSendPlan, forkCommit, forkNote, forkTitle, rewindLanded, startEdit, type EditDraft } from "../lib/messageActions.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
 import { useComposerSources } from "../lib/composerData.ts";
@@ -60,6 +60,7 @@ import { QuickOpen } from "./QuickOpen.tsx";
 import { BackgroundWorkCard, type HeldMessage } from "./BackgroundWork.tsx";
 import { ApprovalCard, EditingCard, QueuedCard } from "./WaitingStack.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
+import { ForkDialog } from "./GitDialogs.tsx";
 import { suggestNextPrompt } from "../lib/nextPrompt.ts";
 import { saveDraft } from "../lib/storage.ts";
 import { loadPanelState, openFile, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
@@ -130,8 +131,13 @@ export interface ThreadViewProps {
   onSwitchOthers?: (threadIds: string[], accountId: string) => Promise<number>;
   /** The thread menu's items the app handles (pin, unread, split, fork, archive, rename). */
   threadMenu?: AppThreadMenu;
-  /** Start a new thread on the same project from a note of this conversation. */
-  onFork?: (entry: ThreadEntry, note: string, title: string) => Promise<void>;
+  /**
+   * Start a new thread on the same project from a note of this conversation, starting from
+   * `startFrom` (this thread's branch or a commit on it), or fresh from the base when null.
+   */
+  onFork?: (entry: ThreadEntry, note: string, title: string, o?: { startFrom: string | null }) => Promise<void>;
+  /** Archive the thread and remove its worktree (its pull request was merged). */
+  onTidyMerged?: () => Promise<void>;
 }
 
 /** Below this width a pane's side panel lies over the conversation, and only in the active pane. */
@@ -187,6 +193,7 @@ function ThreadSessionView({
   onSwitchOthers,
   threadMenu,
   onFork,
+  onTidyMerged,
 }: ThreadViewProps & { target: SessionTarget }) {
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -520,8 +527,19 @@ function ThreadSessionView({
   }, [session.events, afterRewind, sessionSend]);
   // ── Forking into a new thread ──────────────────────────
   const [forking, setForking] = useState(false);
+  // Local threads ask whether the fork keeps this thread's code; cloud ones start from the base.
+  const [forkAsk, setForkAsk] = useState<{ key: string; quote?: string | undefined } | null>(null);
   const fork = (key: string, quote?: string) => {
     if (!onFork || forking) return;
+    if (entry.mode === "local") return setForkAsk({ key, quote });
+    runFork(key, quote, false);
+  };
+  const forkSeq = (key: string) => {
+    const it = items.find(i => i.key === key);
+    return it && "seq" in it && typeof it.seq === "number" ? it.seq : null;
+  };
+  const runFork = (key: string, quote: string | undefined, withCode: boolean) => {
+    if (!onFork) return;
     const note = forkNote(
       items,
       { key, quote },
@@ -529,12 +547,15 @@ function ThreadSessionView({
         title: summary.title,
         branch: summary.branch,
         baseBranch: entry.mode === "local" ? entry.meta.baseBranch : entry.thread.repo.baseBranch,
+        withCode,
       },
     );
     if (!note) return;
+    const seq = forkSeq(key);
+    const startFrom = withCode ? ((seq !== null ? forkCommit(session.events, seq) : null) ?? summary.branch) : null;
     setForking(true);
     setActionError(null);
-    onFork(entry, note, forkTitle(summary.title))
+    onFork(entry, note, forkTitle(summary.title), { startFrom })
       .catch(err => setActionError(err instanceof Error ? err.message : String(err)))
       .finally(() => setForking(false));
   };
@@ -889,6 +910,27 @@ function ThreadSessionView({
           />
           {find !== null && <FindBar root={timelineRef} version={timelineItems} focusNonce={find} onClose={() => setFind(null)} />}
           <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} onFork={onFork ? fork : undefined} />
+          {entry.mode === "local" && (
+            <ForkDialog
+              open={forkAsk !== null}
+              branch={summary.branch}
+              baseBranch={entry.meta.baseBranch}
+              latest={
+                forkAsk
+                  ? (() => {
+                      const seq = forkSeq(forkAsk.key);
+                      return seq === null || forkCommit(session.events, seq) === null;
+                    })()
+                  : true
+              }
+              onClose={() => setForkAsk(null)}
+              onFork={withCode => {
+                const ask = forkAsk;
+                setForkAsk(null);
+                if (ask) runFork(ask.key, ask.quote, withCode);
+              }}
+            />
+          )}
         </div>
 
         <div
@@ -938,7 +980,9 @@ function ThreadSessionView({
                 if (m) composerRef.current?.fill(m.text);
               }}
             />
-            {git.available && <GitStrip git={git} onOpenChanges={showChanges} />}
+            {git.available && (
+              <GitStrip git={git} onOpenChanges={showChanges} onAsk={text => session.send(text)} {...(onTidyMerged ? { onTidy: onTidyMerged } : {})} />
+            )}
             {files.items.length > 0 && (
               <ul aria-label="Attached files" className="mb-2 flex flex-wrap gap-1.5">
                 {files.items.map(a => (

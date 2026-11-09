@@ -6,6 +6,11 @@ import { fuzzyFilter, fuzzyMatchPath, type AgentCommand, type FuzzyMatch } from 
 import { applyPick, detectTrigger, insertQuote, type Trigger } from "../lib/composerTriggers.ts";
 import { HISTORY_IDLE, loadDraft, saveDraft, stepHistory, type HistoryState } from "../lib/promptHistory.ts";
 import { caretCoordinates } from "../lib/caret.ts";
+import { changedRange, replaceRange } from "../lib/textareaEdit.ts";
+import { continueList, endList, indentLines, wrapSelection, type TextChange } from "../lib/composerMarkdown.ts";
+import { enterAction, sendKeyLabel, type SendKey } from "../lib/composerSend.ts";
+import { pasteBecomesFile } from "../lib/pastedText.ts";
+import { IS_MAC } from "../lib/shortcuts.ts";
 import { Highlighted } from "./Highlighted.tsx";
 import { Kbd, Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
@@ -16,6 +21,10 @@ export interface ComposerHandle {
   focus(): void;
   /** Add `text` as a `>` quote at the end of what's there, and focus. */
   quote(text: string): void;
+  /** Add `text` as its own paragraph after what's there, and focus. */
+  insert(text: string): void;
+  /** Paste `text` at the caret, as if pasted into the box (a very long one may become a file). */
+  paste(text: string): void;
 }
 
 /** Where the `/` and `@` menus get their entries (a thread's runner); leave out for no menus. */
@@ -41,7 +50,8 @@ const MENU_WIDTH = 380;
 export const Composer = forwardRef<
   ComposerHandle,
   {
-    onSend: (text: string) => void;
+    /** Send the message. Return false when it wasn't taken: the text stays in the box. */
+    onSend: (text: string) => boolean;
     onInterrupt?: () => void;
     /** The agent is in the middle of a turn: show the stop button. */
     working?: boolean;
@@ -62,7 +72,9 @@ export const Composer = forwardRef<
     /** Called as the text changes. */
     onTextChange?: (text: string) => void;
     /** ⌥Enter: hand the message over to be sent later (e.g. once subagents finish). */
-    onHold?: (text: string) => void;
+    onHold?: (text: string) => boolean;
+    /** A paste too long for the box: attach it as a file instead. Return false to paste it as text after all. */
+    onLongPaste?: (text: string) => boolean;
   }
 >(function Composer(
   {
@@ -81,35 +93,63 @@ export const Composer = forwardRef<
     suggestion,
     onTextChange,
     onHold,
+    onLongPaste,
   },
   handle,
 ) {
   const [text, setText] = useState(() => (draftKey ? loadDraft(draftKey) : ""));
-  // Voice input: each finished phrase lands at the end of the message.
-  const dictation = useDictation(phrase => setText(cur => joinDictation(cur, phrase)));
   const ref = useRef<HTMLTextAreaElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const listId = useId();
   const historyState = useRef<HistoryState>(HISTORY_IDLE);
 
-  const setCaret = (at: number) =>
-    requestAnimationFrame(() => {
-      ref.current?.focus();
-      ref.current?.setSelectionRange(at, at);
-    });
+  /**
+   * Our own edits (menu picks, history, quotes, dictation) go in the way typing does, so ⌘Z
+   * still takes them back. A disabled box can't be typed into, so it just takes the text.
+   */
+  const ownEdit = useRef(false);
+  const setBox = (next: string, selStart = next.length, selEnd = selStart) => {
+    const el = ref.current;
+    if (!el || el.disabled) return setText(next);
+    const r = changedRange(el.value, next);
+    ownEdit.current = true;
+    try {
+      replaceRange(el, r.start, r.end, r.insert, [selStart, selEnd]);
+    } finally {
+      ownEdit.current = false;
+    }
+  };
+  const applyChange = (c: TextChange) => setBox(c.text, c.selStart, c.selEnd);
+  const current = () => ref.current?.value ?? textRef.current;
+  // Voice input: each finished phrase lands at the end of the message.
+  const dictation = useDictation(phrase => setBox(joinDictation(current(), phrase)));
+
+  /** Pastes at the caret; a paste too long for the box becomes a file when the thread can take one. */
+  const pasteText = (pasted: string) => {
+    const el = ref.current;
+    if (!el || el.disabled || !pasted) return;
+    const { selectionStart: a, selectionEnd: b } = el;
+    if (onLongPaste && pasteBecomesFile(pasted, el.value.length, b - a) && onLongPaste(pasted)) return el.focus();
+    replaceRange(el, a, b, pasted);
+  };
+  /** ⌘⇧V pastes as text even when it's long. Set on the key, cleared by the paste it brings. */
+  const plainPaste = useRef(false);
 
   useImperativeHandle(handle, () => ({
-    fill(t: string) {
-      setText(t);
-      setCaret(t.length);
-    },
+    fill: (t: string) => setBox(t),
     focus: () => ref.current?.focus(),
-    quote(selected: string) {
-      setText(cur => {
-        const next = insertQuote(cur, selected);
-        setCaret(next.length);
-        return next;
-      });
+    quote: (selected: string) => setBox(insertQuote(current(), selected)),
+    insert(t: string) {
+      const cur = current();
+      setBox(cur.trim() ? `${cur.trimEnd()}\n\n${t}` : t);
+    },
+    paste(t: string) {
+      const el = ref.current;
+      if (el && document.activeElement !== el) {
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+      pasteText(t);
     },
   }));
 
@@ -236,17 +276,17 @@ export const Composer = forwardRef<
   const pick = (o: Option) => {
     if (!menuTrigger) return;
     const next = applyPick(text, menuTrigger, o.kind === "command" ? o.command.name : o.path);
-    setText(next.text);
+    setBox(next.text, next.caret);
     setTrigger(null);
-    setCaret(next.caret);
   };
 
   const canSend = !disabled && !busy && text.trim().length > 0;
-  const submit = (send: (text: string) => void = onSend) => {
+  const submit = (send: (text: string) => boolean = onSend) => {
     if (!canSend) return;
+    // A message that wasn't taken (still uploading, not connected) stays as typed.
+    if (!send(text.trim())) return ref.current?.focus();
     // Sending ends dictation, so a late phrase doesn't start the next message.
     if (dictation.listening) dictation.stop();
-    send(text.trim());
     setText("");
     historyState.current = HISTORY_IDLE;
     setTrigger(null);
@@ -256,13 +296,29 @@ export const Composer = forwardRef<
 
   const offered = !disabled && !working && text === "" && suggestion ? suggestion : null;
   const hintId = useId();
+  // Read again whenever the box gets focus, so a change in Settings applies straight away.
+  const [sendKey, setSendKey] = useState<SendKey>(() => loadUiPrefs().sendKey);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
-    if (offered && e.key === "Tab" && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+    const plainKeys = !e.altKey && !e.metaKey && !e.ctrlKey;
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "v") {
+      // Where ⌘⇧V brings no paste of its own, read the clipboard instead.
+      plainPaste.current = true;
+      const el = e.currentTarget;
+      setTimeout(() => {
+        if (!plainPaste.current) return;
+        plainPaste.current = false;
+        void navigator.clipboard
+          ?.readText()
+          .then(t => t && replaceRange(el, el.selectionStart, el.selectionEnd, t))
+          .catch(() => undefined);
+      }, 80);
+      return;
+    }
+    if (offered && e.key === "Tab" && !e.shiftKey && plainKeys) {
       e.preventDefault();
-      setText(offered);
-      setCaret(offered.length);
+      setBox(offered);
       return;
     }
     if (open) {
@@ -285,20 +341,35 @@ export const Composer = forwardRef<
         }
       }
     }
-    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
-      const el = e.currentTarget;
-      const step = stepHistory(history, historyState.current, e.key === "ArrowUp" ? "up" : "down", { text, caret: el.selectionStart });
+    const el = e.currentTarget;
+    const { selectionStart: a, selectionEnd: b, value } = el;
+    // Markdown aids: wrap a selection, indent list items and code, carry lists on.
+    const change = (c: TextChange | null) => {
+      if (!c) return false;
+      e.preventDefault();
+      applyChange(c);
+      return true;
+    };
+    if (plainKeys && a !== b && change(wrapSelection(value, a, b, e.key))) return;
+    if (e.key === "Tab" && plainKeys && change(indentLines(value, a, b, e.shiftKey))) return;
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && plainKeys) {
+      const step = stepHistory(history, historyState.current, e.key === "ArrowUp" ? "up" : "down", { text, caret: a });
       if (step) {
         e.preventDefault();
         historyState.current = step.state;
-        setText(step.text);
-        setCaret(e.key === "ArrowUp" ? 0 : step.text.length);
+        setBox(step.text, e.key === "ArrowUp" ? 0 : step.text.length);
         return;
       }
     }
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter") {
+      const action = enterAction(e, sendKey, value);
+      // A new line: in a list it starts the next item (or ends the list on an empty one).
+      if (action === "newline") return void change(continueList(value, a, b));
       e.preventDefault();
-      submit(e.altKey && onHold ? onHold : onSend);
+      // Enter on an empty list item ends the list rather than sending.
+      if (action === "send" && plainKeys && !e.shiftKey && a === b && change(endList(value, a))) return;
+      submit(action === "hold" && onHold ? onHold : onSend);
+      return;
     }
     if (e.key === "Escape" && working && onInterrupt) {
       e.preventDefault();
@@ -325,13 +396,24 @@ export const Composer = forwardRef<
           autoFocus={autoFocus}
           onChange={e => {
             setText(e.target.value);
-            historyState.current = HISTORY_IDLE;
+            if (!ownEdit.current) historyState.current = HISTORY_IDLE;
             if (dismissedAt !== null && !detectTrigger(e.target.value, e.target.selectionStart)) setDismissedAt(null);
             readTrigger();
           }}
           onSelect={readTrigger}
+          onFocus={() => setSendKey(loadUiPrefs().sendKey)}
           onBlur={() => setTrigger(null)}
           onKeyDown={onKeyDown}
+          onPaste={e => {
+            const inline = plainPaste.current;
+            plainPaste.current = false;
+            // Files are attached by the thread; ⌘⇧V pastes the text as it is.
+            if (inline || e.clipboardData.files.length || !onLongPaste) return;
+            const pasted = e.clipboardData.getData("text/plain");
+            const el = e.currentTarget;
+            if (pasted && pasteBecomesFile(pasted, el.value.length, el.selectionEnd - el.selectionStart) && onLongPaste(pasted)) e.preventDefault();
+          }}
+          dir="auto"
           disabled={disabled}
           placeholder={
             disabled
@@ -409,7 +491,7 @@ export const Composer = forwardRef<
             onClick={() => submit()}
             disabled={!canSend}
             aria-label="Send message"
-            title="Send (Enter)"
+            title={`Send (${sendKeyLabel(sendKey, text, IS_MAC ? "⌘" : "Ctrl+")})`}
             className={cx(
               "inline-flex size-[34px] shrink-0 items-center justify-center rounded-full transition-colors duration-150",
               canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",

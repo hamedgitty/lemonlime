@@ -40,6 +40,7 @@ const on = (page: string, title: string, keywords = "", tab?: string, anchor?: s
 export const SETTINGS_INDEX: SettingEntry[] = [
   // General
   g("general", "Open new threads right away", "navigate go to thread create"),
+  g("general", "Send messages with", "send key enter cmd ctrl command return new line shift multiline"),
   g("general", "While the agent is working, Enter…", "queue steer follow up enter key send"),
   g("general", "Suggest what to say next", "next prompt suggestion reply tab"),
   g("general", "Spot the wrong project", "project hint switch home"),

@@ -10,6 +10,9 @@ import { ErrorText, Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, useS
 import { normalizeBaseUrl } from "../../lib/cloud.ts";
 import { computerPlatform, defaultComputerName, type PhoneLinkState } from "../../lib/phoneBridge.ts";
 import { QrCode } from "../QrCode.tsx";
+import { IS_MAC } from "../../lib/shortcuts.ts";
+
+const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
 type Tab = "general" | "notifications" | "awake" | "files" | "phone";
 
@@ -50,6 +53,21 @@ function GeneralTab({ ctx }: { ctx: SettingsCtx }) {
           checked={prefs.navigateOnCreate}
           onChange={navigateOnCreate => onPrefs({ navigateOnCreate })}
         />
+        <Row
+          label="Send messages with"
+          description={`Shift+Enter always starts a new line. “For longer messages” sends with Enter until a message has more than one line, then with ${MOD}Enter.`}
+        >
+          <Select<UiPrefs["sendKey"]>
+            label="Send messages with"
+            value={prefs.sendKey}
+            onChange={sendKey => onPrefs({ sendKey })}
+            options={[
+              { value: "enter", label: "Enter" },
+              { value: "mod-enter", label: `${MOD}Enter` },
+              { value: "mod-enter-multiline", label: `${MOD}Enter for longer messages` },
+            ]}
+          />
+        </Row>
         <Row label="While the agent is working, Enter…" description="You can always do the other from the message's menu.">
           <Select<UiPrefs["followUp"]>
             label="While the agent is working, Enter"

@@ -19,6 +19,8 @@ import type { CloudApi } from "./cloud.ts";
 import { machineName, startThreadRunner } from "./threadRunner.ts";
 import { deliverFirstMessage, forgetFirstMessage, peekFirstMessage } from "./firstMessage.ts";
 import { newAttachmentId } from "./useAttachments.ts";
+import { sendRoute } from "./composerSend.ts";
+import { shrinkImage } from "./imageShrink.ts";
 
 export type SessionState =
   /** Starting the local runner or asking the control plane where to connect. */
@@ -70,7 +72,8 @@ export interface ThreadSession {
   status: ThreadStatus | null;
   /** Send a message, with ids of finished uploads (live connections only). */
   /** `steer` sends it now (stopping the current turn) instead of queueing it. */
-  send: (text: string, attachments?: string[], opts?: { steer?: boolean }) => void;
+  /** Says whether the message was taken; when it wasn't, the caller keeps the text. */
+  send: (text: string, attachments?: string[], opts?: { steer?: boolean }) => boolean;
   interrupt: () => void;
   /** Answer the agent's request for permission. */
   approve: (requestId: string, decision: "allow" | "deny") => void;
@@ -334,13 +337,18 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         void deliverFirstMessage(first, text ?? "", {
           ready: () => live,
           setPermission: permission => sendTo.setOptions({ permission }),
-          upload: (file, id) =>
-            uploadAttachment({
-              base: runnerHttpBase(conn.url),
-              token: conn.token,
-              file: Object.assign(file.slice(0, file.size, file.type), { name: file.name }),
-              id,
-            }).then(() => undefined),
+          upload: (picked, id) =>
+            shrinkImage(picked)
+              .catch(() => picked)
+              .then(file =>
+                uploadAttachment({
+                  base: runnerHttpBase(conn.url),
+                  token: conn.token,
+                  file: Object.assign(file.slice(0, file.size, file.type), { name: file.name }),
+                  id,
+                }),
+              )
+              .then(() => undefined),
           send: (msg, ids) => {
             if (t.mode === "local") callbacksRef.current.onPromptSent?.(threadId);
             sendTo.send(msg, clientMsgId, ids);
@@ -387,20 +395,20 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const send = useCallback((text: string, attachments: string[] = [], opts: { steer?: boolean } = {}) => {
     const client = clientRef.current;
     const trimmed = text.trim();
-    if (!trimmed) return;
     const t = targetRef.current;
-    if (!client && t.mode !== "cloud") return;
+    const route = sendRoute(trimmed, client !== null, t.mode);
+    if (!route) return false;
     const clientMsgId = newClientMsgId();
     setPending(p => [...p, { clientMsgId, text: trimmed, at: new Date().toISOString() }]);
     if (client) {
       client.send(trimmed, clientMsgId, attachments);
       // Steer: if it's waiting behind a running turn, run it now. A message that already started is left alone.
       if (opts.steer) client.editQueued(clientMsgId, { action: "send_now" });
-      return;
+      return true;
     }
     // Paused cloud thread: the control plane keeps the message and wakes the sandbox,
     // whose runner picks it up; then we connect.
-    if (t.mode !== "cloud") return;
+    if (t.mode !== "cloud") return false;
     void t.api.sendWhilePaused(t.thread.id, { clientMsgId, text: trimmed }).then(
       () => setGeneration(g => g + 1),
       err => {
@@ -408,6 +416,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         setState("error");
       },
     );
+    return true;
   }, []);
 
   const interrupt = useCallback(() => clientRef.current?.interrupt(), []);

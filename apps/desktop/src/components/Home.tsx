@@ -24,6 +24,7 @@ import { keysFor } from "../lib/shortcuts.ts";
 import type { AgentInstall } from "../lib/system.ts";
 import { inDesktopShell, inspectRepo, listSkills, pickFolder, type SkillInfo } from "../lib/native.ts";
 import { attachmentProblem } from "../lib/useAttachments.ts";
+import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
 import { PermissionPicker } from "./AgentLoop.tsx";
 import { DeniedError, type NewThreadInput } from "../lib/newThread.ts";
 import { showGetStarted, type GetStartedFacts, type GetStartedStep } from "../lib/getStarted.ts";
@@ -184,27 +185,30 @@ export function Home({
     }
   };
 
-  const send = async (prompt: string) => {
+  /** Starts the thread; false (the message stays in the box) when something is missing first. */
+  const send = (prompt: string): boolean => {
     setError(null);
     setDenial(null);
+    const stop = (message: string, openProject = false) => {
+      if (openProject) setProjectOpen(true);
+      setError(message);
+      return false;
+    };
     const words = agent === "acp" ? splitCommand(acpCommand) : [];
-    if (agent === "acp" && words.length === 0) return setError("Pick an ACP agent in the model picker, or add one in Settings, Agents, ACP agents.");
+    if (agent === "acp" && words.length === 0) return stop("Pick an ACP agent in the model picker, or add one in Settings, Agents, ACP agents.");
     const remote = remotePath.trim();
     if (machine) {
       const problem = remotePathProblem(remote, "project folder");
-      if (problem) {
-        setProjectOpen(true);
-        return setError(problem);
-      }
+      if (problem) return stop(problem, true);
     } else if (place === "local" && !repoPath) {
-      setProjectOpen(true);
-      return setError("Choose the project folder the agent should work in.");
+      return stop("Choose the project folder the agent should work in.", true);
     }
-    if (place === "cloud" && !repoUrl.trim()) {
-      setProjectOpen(true);
-      return setError("Enter the repository the cloud agent should clone.");
-    }
-    if (!baseBranch.trim()) return setError("Enter the branch the agent should start from.");
+    if (place === "cloud" && !repoUrl.trim()) return stop("Enter the repository the cloud agent should clone.", true);
+    if (!baseBranch.trim()) return stop("Enter the branch the agent should start from.");
+    void create(prompt, words, remote);
+    return true;
+  };
+  const create = async (prompt: string, words: string[], remote: string) => {
     const sending = files.filter(f => !f.problem).map(f => f.file);
     const common = {
       title: "",
@@ -294,7 +298,7 @@ export function Home({
                 )}
               >
                 <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
-                <span className="min-w-0 truncate">{f.file.name}</span>
+                <span className="min-w-0 truncate">{attachmentLabel(f.file.name)}</span>
                 {f.problem && <span className="shrink-0 text-[12px]">Too big</span>}
                 <button
                   type="button"
@@ -330,7 +334,16 @@ export function Home({
             ref={composer}
             autoFocus
             busy={busy}
-            onSend={text => void send(text)}
+            onSend={send}
+            onLongPaste={pasted => {
+              addFiles([
+                pastedTextFile(
+                  pasted,
+                  files.map(f => f.file.name),
+                ),
+              ]);
+              return true;
+            }}
             onTextChange={setTyped}
             tools={
               <>

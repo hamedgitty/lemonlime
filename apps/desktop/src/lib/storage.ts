@@ -187,6 +187,8 @@ export const UiPrefs = z.object({
   navigateOnCreate: z.boolean().default(true),
   /** What Enter does while the agent is working: queue the message for after the turn, or steer (stop and send now). */
   followUp: z.enum(["queue", "steer"]).default("queue"),
+  /** Which key sends a message: Enter, ⌘Enter, or ⌘Enter once the message has more than one line. */
+  sendKey: z.enum(["enter", "mod-enter", "mod-enter-multiline"]).catch("enter").default("enter"),
   /** Where new threads start: the last place used, this computer, or the cloud. */
   defaultPlace: z.enum(["last", "local", "cloud"]).default("last"),
   /** Offer the highest reasoning levels in the picker. */

@@ -46,6 +46,7 @@ export const FIXED_SHORTCUTS: [string, string][] = [
   ["Shift Enter", "New line"],
   ["Alt (⌥) Enter", "Send once the agent's subagents finish"],
   ["Esc", "Stop the agent, or leave Settings"],
+  ["⌘ Z (Ctrl Z)", "Undo the last archive, pin, snooze or mark as unread in the sidebar"],
   ["↑ ↓", "Earlier prompts, in an empty message box"],
   ["/", "Agent commands, at the start of a message"],
   ["@", "Mention a file in the thread's project"],

@@ -54,6 +54,7 @@ import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
 import { RESTART_WHILE_WORKING, checkForUpdate, type AvailableUpdate } from "./lib/updates.ts";
 import { DeniedError, type NewThreadInput } from "./lib/newThread.ts";
+import { isTextField, isTypingKey, isUndoKey, liveUndo, popUndo, pushUndo, takeUndo, undoTakesOver, type UndoEntry } from "./lib/undo.ts";
 import { queueFirstMessage } from "./lib/firstMessage.ts";
 import {
   draftThreadIds,
@@ -284,6 +285,82 @@ export function App() {
       return next;
     });
   }, []);
+
+  // ── ⌘Z: undo the sidebar's last archive, pin or mark as unread ──
+  const undoStack = useRef<UndoEntry[]>([]);
+  const undoSeq = useRef(0);
+  const typedSinceAction = useRef(false);
+  // The newest action, said in the sidebar's footer with its Undo.
+  const [undoNotice, setUndoNotice] = useState<UndoEntry | null>(null);
+  const runUndo = useCallback((entry: UndoEntry | null, rest: UndoEntry[]) => {
+    undoStack.current = rest;
+    if (!entry) return;
+    entry.undo();
+    setUndoNotice(n => (n?.id === entry.id ? null : n));
+  }, []);
+  const undoById = useCallback(
+    (id: number) => {
+      const { entry, stack } = takeUndo(undoStack.current, id);
+      runUndo(entry, stack);
+    },
+    [runUndo],
+  );
+  const remember = useCallback(
+    (label: string, undo: () => void, detail?: string) => {
+      const entry: UndoEntry = { id: ++undoSeq.current, label, undo, at: Date.now(), ...(detail ? { detail } : {}) };
+      undoStack.current = pushUndo(undoStack.current, entry, entry.at);
+      typedSinceAction.current = false;
+      // With no sidebar to say it in (folded away, or Settings), a toast does.
+      const p = prefsRef.current;
+      if (p.sidebarCollapsed || placeRef.current.view === "settings")
+        toast({
+          title: label,
+          ...(detail ? { description: detail } : {}),
+          action: { label: "Undo", onClick: () => undoById(entry.id) },
+          ...(detail ? { timeout: 10_000 } : {}),
+        });
+      else setUndoNotice(entry);
+    },
+    [undoById],
+  );
+  useEffect(() => {
+    if (!undoNotice) return;
+    const t = setTimeout(() => setUndoNotice(n => (n?.id === undoNotice.id ? null : n)), undoNotice.detail ? 12_000 : 8_000);
+    return () => clearTimeout(t);
+  }, [undoNotice]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = isTextField(document.activeElement);
+      if (isUndoKey(e)) {
+        const now = Date.now();
+        if (!undoTakesOver({ undoable: liveUndo(undoStack.current, now).length, inTextField: inField, typedSinceAction: typedSinceAction.current })) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const { entry, stack } = popUndo(undoStack.current, now);
+        runUndo(entry, stack);
+        return;
+      }
+      if (inField && isTypingKey(e)) typedSinceAction.current = true;
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [runUndo]);
+
+  /** Pin a thread to the top (or unpin it); ⌘Z puts it back where it was. */
+  const setPinned = useCallback(
+    (t: { id: string; title: string }, pin: boolean) => {
+      const before = prefsRef.current.pinned;
+      const rest = before.filter(x => x !== t.id);
+      onPrefs({ pinned: pin ? [t.id, ...rest] : rest });
+      remember(pin ? `Pinned “${t.title}”` : `Unpinned “${t.title}”`, () => {
+        const now = prefsRef.current.pinned.filter(x => x !== t.id);
+        const at = before.indexOf(t.id);
+        if (at >= 0) now.splice(Math.min(at, now.length), 0, t.id);
+        onPrefs({ pinned: now });
+      });
+    },
+    [onPrefs, remember],
+  );
 
   // What each cloud thread may do on this computer is kept by the app's native side; show
   // what it holds (a level set in an older version has to be granted again there).
@@ -676,29 +753,23 @@ export function App() {
         archived[t.id] = new Date().toISOString();
         // Free what it was using: nothing runs for an archived thread.
         if (t.mode === "local") void stopLocalRunner(t.id).finally(refreshRunners);
-        // The first time, say what archiving does; Undo puts it back either way.
+        // The first time, say what archiving does; Undo (or ⌘Z) puts it back either way.
         const explain = t.mode === "local" && !prefs.archivedHint;
-        toast({
-          title: `Archived “${t.title}”`,
-          ...(explain
-            ? { description: "Its agent stopped. Archived threads on this computer are removed after 21 days; their branch stays in your repository." }
-            : {}),
-          action: {
-            label: "Undo",
-            onClick: () => {
-              const p = prefsRef.current;
-              const back = { ...p.archived };
-              delete back[t.id];
-              onPrefs({ archived: back, ...(wasPinned ? { pinned: [t.id, ...p.pinned.filter(id => id !== t.id)] } : {}) });
-            },
+        remember(
+          `Archived “${t.title}”`,
+          () => {
+            const p = prefsRef.current;
+            const back = { ...p.archived };
+            delete back[t.id];
+            onPrefs({ archived: back, ...(wasPinned ? { pinned: [t.id, ...p.pinned.filter(id => id !== t.id)] } : {}) });
           },
-          ...(explain ? { timeout: 10_000 } : {}),
-        });
+          explain ? "Its agent stopped. Archived threads on this computer are removed after 21 days; their branch stays in your repository." : undefined,
+        );
         if (explain) onPrefs({ archivedHint: true });
       } else delete archived[t.id];
       onPrefs({ archived, pinned: prefs.pinned.filter(id => id !== t.id) });
     },
-    [prefs.archived, prefs.archivedHint, prefs.pinned, onPrefs, refreshRunners],
+    [prefs.archived, prefs.archivedHint, prefs.pinned, onPrefs, refreshRunners, remember],
   );
 
   // Archived threads on this computer are removed after 21 days (worktree and history; the branch stays).
@@ -1012,9 +1083,11 @@ export function App() {
           return select(open[at < 0 ? 0 : Math.min(open.length - 1, at + 1)]);
         case "last-pinned":
           return select(open.find(t => t.id === pr.pinned[0]));
-        case "pin-thread":
-          if (currentId) onPrefs({ pinned: pr.pinned.includes(currentId) ? pr.pinned.filter(x => x !== currentId) : [currentId, ...pr.pinned] });
+        case "pin-thread": {
+          const t = list.find(x => x.id === currentId);
+          if (t) setPinned(t, !pr.pinned.includes(t.id));
           return;
+        }
         case "archive-thread": {
           const t = list.find(x => x.id === currentId && !pr.archived[x.id]);
           if (t) void onArchiveRef.current(t, true);
@@ -1040,7 +1113,7 @@ export function App() {
           return focusPaneAt(Number(id.slice(-1)));
       }
     },
-    [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt],
+    [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt, setPinned],
   );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1173,10 +1246,19 @@ export function App() {
   const onMarkUnread = useCallback(
     (t: ThreadSummary, unread: boolean) => {
       const p = prefsRef.current;
+      const wasMarked = p.markedUnread.includes(t.id);
+      const seenBefore = p.seenSeq[t.id];
       if (unread) onPrefs({ markedUnread: [...p.markedUnread.filter(id => id !== t.id), t.id] });
       else onPrefs({ markedUnread: p.markedUnread.filter(id => id !== t.id), seenSeq: { ...p.seenSeq, [t.id]: latestSeq(t) } });
+      remember(unread ? `Marked “${t.title}” as unread` : `Marked “${t.title}” as read`, () => {
+        const now = prefsRef.current;
+        const seenSeq = { ...now.seenSeq };
+        if (seenBefore === undefined) delete seenSeq[t.id];
+        else seenSeq[t.id] = seenBefore;
+        onPrefs({ markedUnread: wasMarked ? [...now.markedUnread.filter(id => id !== t.id), t.id] : now.markedUnread.filter(id => id !== t.id), seenSeq });
+      });
     },
-    [onPrefs, latestSeq],
+    [onPrefs, latestSeq, remember],
   );
   const onRename = useCallback(
     (t: ThreadSummary, title: string) => {
@@ -1204,12 +1286,19 @@ export function App() {
   const onSnooze = useCallback(
     (t: ThreadSummary, until: Date | "custom" | null) => {
       if (until === "custom") return setSnoozeAsk(t);
+      const before = prefsRef.current.snoozed[t.id];
       const next = { ...prefsRef.current.snoozed };
       if (until) next[t.id] = until.toISOString();
       else delete next[t.id];
       onPrefs({ snoozed: next });
+      remember(until ? `Snoozed “${t.title}”` : `“${t.title}” is back`, () => {
+        const now = { ...prefsRef.current.snoozed };
+        if (before) now[t.id] = before;
+        else delete now[t.id];
+        onPrefs({ snoozed: now });
+      });
     },
-    [onPrefs],
+    [onPrefs, remember],
   );
   const visibleIdsRef = useRef<ReadonlySet<string>>(new Set());
   visibleIdsRef.current = visibleIds;
@@ -1247,13 +1336,6 @@ export function App() {
   }, [rowStates.needsYou, wakeThreads]);
 
   // ── The thread menu (sidebar row, right-click, thread header) ──
-  const setPinned = useCallback(
-    (id: string, pin: boolean) => {
-      const pinned = prefsRef.current.pinned.filter(x => x !== id);
-      onPrefs({ pinned: pin ? [id, ...pinned] : pinned });
-    },
-    [onPrefs],
-  );
   /** Home, with a project chosen and (for a fork) the first message written. */
   const startInProject = useCallback(
     (project: GroupProject | undefined, text = "") => {
@@ -1310,20 +1392,19 @@ export function App() {
         pinned: p.pinned.filter(id => !ids.has(id)),
         ...(path ? { recentProjects: p.recentProjects.filter(x => x !== path) } : {}),
       });
-      toast({
-        title: `Took ${g.label} off the list`,
-        action: {
-          label: "Undo",
-          onClick: () => {
-            const now = prefsRef.current;
-            const back = { ...now.archived };
-            for (const id of ids) delete back[id];
-            onPrefs({ archived: back, ...(path && !now.recentProjects.includes(path) ? { recentProjects: [...now.recentProjects, path] } : {}) });
-          },
-        },
+      const pinnedBefore = p.pinned;
+      remember(`Took ${g.label} off the list`, () => {
+        const now = prefsRef.current;
+        const back = { ...now.archived };
+        for (const id of ids) delete back[id];
+        onPrefs({
+          archived: back,
+          pinned: [...new Set([...pinnedBefore.filter(id => ids.has(id)), ...now.pinned])],
+          ...(path && !now.recentProjects.includes(path) ? { recentProjects: [...now.recentProjects, path] } : {}),
+        });
       });
     },
-    [onPrefs, refreshRunners],
+    [onPrefs, refreshRunners, remember],
   );
   const openChild = useCallback(
     (t: ThreadSummary, childId: string) => {
@@ -1531,7 +1612,7 @@ export function App() {
                 inSplit: layout ? openThreadIds(layout).has(summary.id) : false,
                 editor: Boolean(prefs.editor),
                 actions: {
-                  pin: (pin: boolean) => setPinned(summary.id, pin),
+                  pin: (pin: boolean) => setPinned(summary, pin),
                   unread: (u: boolean) => onMarkUnread(summary, u),
                   snooze: (until: Date | "custom" | null) => onSnooze(summary, until),
                   split: () => openInSplit({ mode: summary.mode, id: summary.id }),
@@ -1722,7 +1803,11 @@ export function App() {
         searchOpen={searchOpen}
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
+        onPin={setPinned}
         onSnooze={onSnooze}
+        {...(undoNotice
+          ? { undoNotice: { label: undoNotice.label, detail: undoNotice.detail, onUndo: () => undoById(undoNotice.id), onDismiss: () => setUndoNotice(null) } }
+          : {})}
         glyphs={rowStates.glyphs}
         childrenOf={sidebarChildren}
         unread={rowStates.unread}

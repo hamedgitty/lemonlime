@@ -66,6 +66,7 @@ import { useMissingFolders } from "../lib/missingFolders.ts";
 import { RenameField, ThreadMenu, ThreadRightClickMenu, type ThreadMenuProps } from "./ThreadMenu.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
 import { AgentIcon } from "./AgentIcon.tsx";
+import { IS_MAC } from "../lib/shortcuts.ts";
 import { LogoMark, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface AppSidebarProps {
@@ -93,6 +94,8 @@ export interface AppSidebarProps {
   onSettings: (page?: string) => void;
   onBack: (() => void) | null;
   onForward: (() => void) | null;
+  /** The last archive, pin or mark as unread, with its Undo (⌘Z does the same). */
+  undoNotice?: { label: string; detail?: string | undefined; onUndo: () => void; onDismiss: () => void };
   /** Card above the footer, e.g. cloud hours left (from the deployment). */
   usageCard?: ReactNode;
   /** The notification bell, given the footer buttons' class. */
@@ -566,6 +569,37 @@ export function AppSidebar(p: AppSidebarProps) {
       </div>
 
       {p.usageCard && <div className="px-2 pb-2">{p.usageCard}</div>}
+
+      {/* Said here, not in a toast: it belongs to the list. It answers a key as often as a click, so it doesn't animate. */}
+      <div role="status" className="px-2 empty:hidden">
+        {p.undoNotice && (
+          <div className="mb-2 flex items-start gap-2 rounded-xl border border-line bg-paper py-2 pr-1.5 pl-3 shadow-panel">
+            <div className="min-w-0 flex-1 py-0.5">
+              <p className="truncate text-[13px] font-medium text-ink" title={p.undoNotice.label}>
+                {p.undoNotice.label}
+              </p>
+              {p.undoNotice.detail && <p className="mt-0.5 text-[13px] leading-snug text-pretty text-ink-soft">{p.undoNotice.detail}</p>}
+            </div>
+            <button
+              type="button"
+              onClick={p.undoNotice.onUndo}
+              aria-keyshortcuts={IS_MAC ? "Meta+Z" : "Control+Z"}
+              className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-line-strong bg-paper px-2 text-[13px] font-semibold text-ink hover:bg-cream active:scale-[0.97]"
+            >
+              Undo
+              <span className="font-normal text-ink-faint">{IS_MAC ? "⌘Z" : "Ctrl+Z"}</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={p.undoNotice.onDismiss}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-faint hover:bg-ink/5 hover:text-ink"
+            >
+              <X aria-hidden="true" className="size-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
 
       <div className="flex h-11 shrink-0 items-center gap-0.5 border-t border-line px-2">
         <Tip

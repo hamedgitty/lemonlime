@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   AlarmClock,
   Archive,
@@ -66,7 +66,7 @@ import { useMissingFolders } from "../lib/missingFolders.ts";
 import { RenameField, ThreadMenu, ThreadRightClickMenu, type ThreadMenuProps } from "./ThreadMenu.tsx";
 import { GLYPH_LABELS, type RowGlyph } from "../lib/threadState.ts";
 import { AgentIcon } from "./AgentIcon.tsx";
-import { IS_MAC } from "../lib/shortcuts.ts";
+import { IS_MAC, rowShortcut, type ShortcutId } from "../lib/shortcuts.ts";
 import { LogoMark, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
 
 export interface AppSidebarProps {
@@ -101,6 +101,10 @@ export interface AppSidebarProps {
   /** The notification bell, given the footer buttons' class. */
   notifications?: (className: string) => ReactNode;
   onArchive: (t: ThreadSummary, archive: boolean) => void;
+  /** The thread rows in the order shown, as they change (⌘1–9 go to them). */
+  onRowOrder?: (ids: string[]) => void;
+  /** Mark the first nine rows with ⌘1–9 for the hints shown while ⌘ is held (not while split). */
+  numberRows?: boolean;
   /** Pin a thread to the top, or unpin it. */
   onPin?: (t: ThreadSummary, pin: boolean) => void;
   /** Snooze a thread until a time, ask for a time ("custom"), or wake it (null). */
@@ -203,6 +207,22 @@ export function AppSidebar(p: AppSidebarProps) {
   const toggleGroup = (key: string) => p.onPrefs({ collapsedGroups: toggleKey(p.prefs.collapsedGroups, key) });
   const moveTo = (key: string, to: number) => p.onPrefs({ groupOrder: moveGroup(p.prefs.groupOrder, movable, key, to) });
   const headed = showHeaders ? groups : [];
+  // The rows as listed, top to bottom: folded groups and rows behind "Show more" aren't there.
+  const rowOrder = useMemo(
+    () =>
+      threadsOpen
+        ? groups.flatMap(g =>
+            showHeaders && p.prefs.collapsedGroups.includes(g.key)
+              ? []
+              : groupRows(g.threads, { expanded: expanded.has(g.key), selectedId: p.selectedId }).shown.map(t => t.id),
+          )
+        : [],
+    [threadsOpen, groups, showHeaders, p.prefs.collapsedGroups, expanded, p.selectedId],
+  );
+  const rowKey = rowOrder.join(" ");
+  const { onRowOrder } = p;
+  useEffect(() => onRowOrder?.(rowKey ? rowKey.split(" ") : []), [rowKey, onRowOrder]);
+  const rowNumber = useMemo(() => new Map(rowOrder.slice(0, 9).map((id, i) => [id, i + 1])), [rowOrder]);
   const allCollapsed = headed.length > 0 && headed.every(g => p.prefs.collapsedGroups.includes(g.key));
 
   /** The thread list's options, on its ⋯ and on a right-click on its heading. */
@@ -472,6 +492,7 @@ export function AppSidebar(p: AppSidebarProps) {
                           prUrl={pullRequests.get(t.id) ?? null}
                           {...rowActions(t)}
                           inSplit={p.openInSplit?.has(t.id) ?? false}
+                          {...(p.numberRows && rowNumber.has(t.id) ? { shortcut: rowShortcut(rowNumber.get(t.id)!) ?? undefined } : {})}
                           {...(p.onOpenInSplit ? { onOpenInSplit: () => p.onOpenInSplit!(t) } : {})}
                           {...(p.onDragThread ? { onDrag: p.onDragThread } : {})}
                         />
@@ -716,6 +737,7 @@ function ThreadRow({
   prUrl = null,
   snoozedUntil,
   onSnooze,
+  shortcut,
 }: {
   inSplit?: boolean;
   onOpenInSplit?: () => void;
@@ -746,6 +768,8 @@ function ThreadRow({
   /** Snoozed until then (ISO): the row says when it's back instead of when it last moved. */
   snoozedUntil?: string | undefined;
   onSnooze?: (until: Date | "custom" | null) => void;
+  /** Its ⌘ number, shown while ⌘ is held. */
+  shortcut?: ShortcutId | undefined;
 }) {
   const [renaming, setRenaming] = useState(false);
   const machines = useMachines();
@@ -788,6 +812,7 @@ function ThreadRow({
             }}
             aria-current={selected ? "page" : undefined}
             aria-keyshortcuts="Shift+F10"
+            data-shortcut={shortcut}
             // Drag it onto a pane to open it there, or onto a pane's edge to split.
             draggable={Boolean(onDrag)}
             onDragStart={e => {

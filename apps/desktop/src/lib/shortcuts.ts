@@ -23,17 +23,27 @@ export const SHORTCUTS = [
   // ⌘\ already shows or hides the sidebar, so splitting uses ⌘D.
   { id: "split-right", label: "Split to the right", group: "Split view", keys: "mod+d" },
   { id: "maximise-pane", label: "Maximise or restore this pane", group: "Split view", keys: "mod+shift+enter" },
-  { id: "focus-pane-1", label: "Go to pane 1", group: "Split view", keys: "mod+1" },
-  { id: "focus-pane-2", label: "Go to pane 2", group: "Split view", keys: "mod+2" },
-  { id: "focus-pane-3", label: "Go to pane 3", group: "Split view", keys: "mod+3" },
-  { id: "focus-pane-4", label: "Go to pane 4", group: "Split view", keys: "mod+4" },
-  { id: "focus-pane-5", label: "Go to pane 5", group: "Split view", keys: "mod+5" },
-  { id: "focus-pane-6", label: "Go to pane 6", group: "Split view", keys: "mod+6" },
+  // Split, ⌘1–6 go to the panes; otherwise ⌘1–9 go to the threads as listed in the sidebar.
+  { id: "focus-pane-1", label: "Go to pane 1, or the first thread in the sidebar", group: "Split view", keys: "mod+1" },
+  { id: "focus-pane-2", label: "Go to pane 2, or the second thread in the sidebar", group: "Split view", keys: "mod+2" },
+  { id: "focus-pane-3", label: "Go to pane 3, or the third thread in the sidebar", group: "Split view", keys: "mod+3" },
+  { id: "focus-pane-4", label: "Go to pane 4, or the fourth thread in the sidebar", group: "Split view", keys: "mod+4" },
+  { id: "focus-pane-5", label: "Go to pane 5, or the fifth thread in the sidebar", group: "Split view", keys: "mod+5" },
+  { id: "focus-pane-6", label: "Go to pane 6, or the sixth thread in the sidebar", group: "Split view", keys: "mod+6" },
+  { id: "sidebar-thread-7", label: "Go to the seventh thread in the sidebar", group: "Threads", keys: "mod+7" },
+  { id: "sidebar-thread-8", label: "Go to the eighth thread in the sidebar", group: "Threads", keys: "mod+8" },
+  { id: "sidebar-thread-9", label: "Go to the ninth thread in the sidebar", group: "Threads", keys: "mod+9" },
   { id: "quick-open", label: "Open a file in the side panel", group: "Threads", keys: "mod+p" },
   { id: "reopen-tab", label: "Reopen the last closed panel tab", group: "Threads", keys: "mod+shift+t" },
   // Only while the message box has focus (see ModelControl).
   { id: "cycle-effort", label: "Cycle the agent's effort, in the message box", group: "Threads", keys: "alt+t" },
 ] as const;
+
+/** The shortcut that goes to the sidebar's nth thread (1–9) while the view isn't split. */
+export function rowShortcut(n: number): ShortcutId | null {
+  if (n < 1 || n > 9) return null;
+  return (n <= 6 ? `focus-pane-${n}` : `sidebar-thread-${n}`) as ShortcutId;
+}
 
 /** Shortcuts that only work while typing a message, so they're not commands in the palette. */
 export const COMPOSER_SHORTCUTS: readonly ShortcutId[] = ["cycle-effort"];

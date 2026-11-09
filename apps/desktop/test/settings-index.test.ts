@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { settingAnchor, groupByPage, findSettings, SETTINGS_INDEX } from "../src/lib/settingsIndex.ts";
-import { turnOffShortcut, keysFor, matchShortcut, resetShortcut, setShortcut } from "../src/lib/shortcuts.ts";
+import { rowShortcut, turnOffShortcut, keysFor, matchShortcut, resetShortcut, setShortcut } from "../src/lib/shortcuts.ts";
 
 const PAGES = ["account", "general", "agents", "instructions", "cloud", "machines", "projects", "appearance", "keyboard", "updates"];
 const settingsDir = join(__dirname, "../src/components/settings");
@@ -65,5 +65,17 @@ describe("turning a shortcut off", () => {
     const moved = setShortcut({}, "new-thread", "mod+shift+n");
     expect(moved).toEqual({ "new-thread": "mod+shift+n" });
     expect(setShortcut(moved, "new-thread", "mod+n")).toEqual({});
+  });
+});
+
+describe("⌘1–9 for the sidebar's threads", () => {
+  it("uses the pane keys for the first six rows and keys of their own for the rest", () => {
+    expect(rowShortcut(1)).toBe("focus-pane-1");
+    expect(rowShortcut(6)).toBe("focus-pane-6");
+    expect(rowShortcut(7)).toBe("sidebar-thread-7");
+    expect(rowShortcut(9)).toBe("sidebar-thread-9");
+    expect(rowShortcut(0)).toBeNull();
+    expect(rowShortcut(10)).toBeNull();
+    expect(keysFor(rowShortcut(9)!, {})).toBe("mod+9");
   });
 });

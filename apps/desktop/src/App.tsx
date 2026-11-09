@@ -1076,6 +1076,11 @@ export function App() {
 
   // ── Keyboard shortcuts (Settings → Keyboard can change them) ──
   const shortcutState = useRef({ place, summaries: [] as ThreadSummary[], prefs });
+  // The threads in the order the sidebar shows them (folded groups and "Show more" left out), for ⌘1–9.
+  const sidebarRows = useRef<string[]>([]);
+  const onRowOrder = useCallback((ids: string[]) => {
+    sidebarRows.current = ids;
+  }, []);
   // One place that runs each shortcut, for the keys and for the command palette.
   const runShortcut = useCallback(
     (id: ShortcutId) => {
@@ -1143,7 +1148,15 @@ export function App() {
         case "focus-pane-4":
         case "focus-pane-5":
         case "focus-pane-6":
-          return focusPaneAt(Number(id.slice(-1)));
+        case "sidebar-thread-7":
+        case "sidebar-thread-8":
+        case "sidebar-thread-9": {
+          const n = Number(id.slice(-1));
+          // Split: the panes. Otherwise: the nth thread as the sidebar lists it.
+          if (layoutRef.current && here.view === "thread" && id.startsWith("focus-pane-")) return focusPaneAt(n);
+          const rowId = sidebarRows.current[n - 1];
+          return select(list.find(t => t.id === rowId));
+        }
       }
     },
     [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt, setPinned],
@@ -1583,6 +1596,10 @@ export function App() {
     );
     const skip: ShortcutId[] = [
       "settings",
+      // Which thread these reach depends on the sidebar, so they're keys only.
+      "sidebar-thread-7",
+      "sidebar-thread-8",
+      "sidebar-thread-9",
       ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "split-right", "quick-open", "reopen-tab"] as const)),
       ...paneCommands,
     ];
@@ -1932,6 +1949,8 @@ export function App() {
         onSearchOpen={setSearchOpen}
         onArchive={onArchive}
         onPin={setPinned}
+        onRowOrder={onRowOrder}
+        numberRows={!splitShown}
         onSnooze={onSnooze}
         {...(undoNotice
           ? { undoNotice: { label: undoNotice.label, detail: undoNotice.detail, onUndo: () => undoById(undoNotice.id), onDismiss: () => setUndoNotice(null) } }

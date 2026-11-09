@@ -1,4 +1,4 @@
-import { NAV_ITEMS, type NavItem, type UiPrefs } from "../../lib/storage.ts";
+import { NAV_ITEMS, type NavItem } from "../../lib/storage.ts";
 import { SegmentedControl } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
 import { Row, Section, ToggleRow } from "./parts.tsx";

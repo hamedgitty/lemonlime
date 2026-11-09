@@ -50,6 +50,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The runner, as one executable the app ships inside it.
       - run: pnpm --filter @lemonlime/runner build:sea ${{ contains(matrix.args, 'x86_64-apple-darwin') && 'x86_64-apple-darwin' || '' }}
+      # Tauri signs the app and the runner, but not resources, and the terminal's native
+      # helper ships as one. Notarization rejects any unsigned executable inside the app, so
+      # sign those files first, with the hardened runtime and a secure timestamp.
+      - name: Sign the terminal helper (macOS)
+        if: startsWith(matrix.os, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then echo "No signing certificate; skipping."; exit 0; fi
+          kc="$RUNNER_TEMP/pty-signing.keychain-db"; kpw=$(openssl rand -hex 16)
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$kpw" "$kc"
+          security unlock-keychain -p "$kpw" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kpw" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          find apps/desktop/src-tauri/binaries/node-pty -type f \( -name '*.node' -o -name 'spawn-helper' -o -name '*.dylib' \) -print0 |
+            xargs -0 -n1 codesign --force --options runtime --timestamp --keychain "$kc" --sign "$APPLE_SIGNING_IDENTITY"
+          find apps/desktop/src-tauri/binaries/node-pty -type f \( -name '*.node' -o -name 'spawn-helper' \) -print0 | xargs -0 -n1 codesign --verify --strict --verbose=1
+          security delete-keychain "$kc"; rm -f "$RUNNER_TEMP/cert.p12"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -87,6 +87,8 @@ export function SplitView({
               hidden ? "hidden" : "flex",
               !full && b.x > 0 && "border-l border-line",
               !full && b.y > 0 && "border-t border-line",
+              // Only the top-left pane sits under the Show sidebar button.
+              !full && (b.x > 0 || b.y > 0) && "[--chrome-inset:0px]",
             )}
             style={full ? { inset: 0 } : { left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` }}
             onPointerDownCapture={() => !active && onFocusPane(id)}
@@ -230,7 +232,7 @@ export function PaneHeader({
     <header
       data-tauri-drag-region
       className={cx(
-        "flex h-10 shrink-0 items-center gap-1 border-b border-line pr-1.5 pl-3",
+        "flex h-10 shrink-0 items-center gap-1 border-b border-line pr-1.5 pl-[max(0.75rem,var(--chrome-inset,0px))]",
         active ? "bg-paper shadow-[inset_0_2px_0_var(--color-lime-2)]" : "bg-cream",
       )}
     >

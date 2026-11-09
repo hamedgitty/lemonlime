@@ -302,7 +302,7 @@ export function AppSidebar(p: AppSidebarProps) {
   };
 
   return (
-    <nav aria-label="LemonLime" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">
+    <nav aria-label="LemonLime" className="flex w-full min-w-0 flex-col border-r border-line bg-cream-deep">
       <ThreadPeek />
       {/* Window controls: room for the traffic lights, then sidebar and history buttons. */}
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center px-2">
@@ -686,7 +686,7 @@ export function AppSidebar(p: AppSidebarProps) {
           <button
             type="button"
             onClick={() => p.onSettings("account")}
-            className="inline-flex h-[26px] items-center gap-1.5 rounded-full border border-line bg-cream px-2.5 text-[13px] font-medium text-ink-soft hover:border-line-strong"
+            className="inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-full border border-line bg-cream px-2.5 text-[13px] whitespace-nowrap font-medium text-ink-soft hover:border-line-strong"
           >
             <span aria-hidden="true" className={cx("size-1.5 rounded-full", p.cloudConfigured ? (p.cloudError ? "bg-danger" : "bg-lime-2") : "bg-control")} />
             {p.cloudConfigured ? "Cloud" : "Local only"}

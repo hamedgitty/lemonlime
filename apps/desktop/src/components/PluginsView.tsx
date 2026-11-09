@@ -54,6 +54,7 @@ import {
   type CatalogPlugin,
 } from "../lib/pluginCatalog.ts";
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, PageTabs, Toggle } from "./primitives.tsx";
+import { HideListButton, ListColumn } from "./ListColumn.tsx";
 import { Button, IconButton, RetryCard, Skeleton, SkeletonRows, SkeletonText, Spinner, TextInput, cx, openExternal, rowFill } from "./ui.tsx";
 
 export interface PluginsViewProps {
@@ -173,7 +174,7 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
 
   return (
     <main className="@container flex min-h-0 min-w-0 flex-1 flex-col">
-      <header className="shrink-0 border-b border-line px-6">
+      <header className="shrink-0 border-b border-line px-6 pl-[max(1.5rem,var(--chrome-inset,0px))]">
         <div data-tauri-drag-region className="flex h-[52px] min-w-0 items-center gap-3 overflow-hidden">
           <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
             <Puzzle aria-hidden="true" className="size-4 text-ink-soft" />
@@ -247,9 +248,10 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
         <EmptyState shell={shell} onBrowse={() => setTab("browse")} onGit={openGit} onFolder={() => void installFolder()} onCreate={createWithAgent} />
       ) : (
         <div className="flex min-h-0 flex-1">
-          <aside aria-label="Installed plugins" className="flex w-[clamp(240px,40%,320px)] shrink-0 flex-col border-r border-line">
-            <div className="p-3">
+          <ListColumn label="Installed plugins" as="aside">
+            <div className="flex items-center gap-1.5 p-3">
               <SearchBox value={query} onChange={setQuery} label="Search installed plugins" />
+              <HideListButton />
             </div>
             <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
               {plugins === null ? (
@@ -295,7 +297,7 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
                 </div>
               )}
             </div>
-          </aside>
+          </ListColumn>
           <section className="@container scroll-thin min-w-0 flex-1 overflow-y-auto">
             {pane.kind === "git" ? (
               <GitInstallForm
@@ -393,7 +395,7 @@ function Catalogue({
 
   return (
     <div className="flex min-h-0 flex-1">
-      <aside aria-label="Plugins to install" className="flex w-[clamp(240px,40%,320px)] shrink-0 flex-col border-r border-line">
+      <ListColumn label="Plugins to install" as="aside">
         <div className="flex flex-col gap-1.5 p-3">
           <div className="flex items-center gap-1.5">
             <SearchBox value={query} onChange={setQuery} label="Search the directory" />
@@ -419,6 +421,7 @@ function Catalogue({
                 ]}
               />
             </Menu>
+            <HideListButton />
           </div>
           <p className="px-1 text-[13px] text-ink-faint">
             {category !== "all" ? (
@@ -485,7 +488,7 @@ function Catalogue({
             ))
           )}
         </div>
-      </aside>
+      </ListColumn>
       <section className="@container scroll-thin min-w-0 flex-1 overflow-y-auto">
         {current && (
           <CatalogPane

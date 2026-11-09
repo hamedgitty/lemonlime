@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { PanelLeft } from "lucide-react";
 import { branchForThread, isSafeBranchPrefix, newThreadId, type AgentKind, type ChildWork, type Thread, type ThreadStatus } from "@lemonlime/protocol";
 import { AppSidebar } from "./components/AppSidebar.tsx";
@@ -30,6 +30,8 @@ import { CommandPalette } from "./components/CommandPalette.tsx";
 import { NotificationCenter } from "./components/NotificationCenter.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
+import { SideResizer } from "./components/SideResizer.tsx";
+import { KEYS, SIDEBAR, useSideWidth } from "./lib/sideWidth.ts";
 import { Toaster, connectToastThreads, syncThreadToasts, toast } from "./components/Toaster.tsx";
 import { rowGlyph, isUnread, waitingCount, type RowGlyph } from "./lib/threadState.ts";
 import { settled, withChildren } from "./lib/children.ts";
@@ -149,6 +151,7 @@ const newPaneId = () => crypto.randomUUID().slice(0, 8);
 export function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings);
   const [prefs, setPrefs] = useState<UiPrefs>(loadUiPrefs);
+  const [sidebarWidth, setSidebarWidth] = useSideWidth(KEYS.sidebar, SIDEBAR);
   const [localThreads, setLocalThreads] = useState<LocalThreadMeta[]>(loadLocalThreads);
   const [cloudThreads, setCloudThreads] = useState<Thread[]>([]);
   const [cloudLoading, setCloudLoading] = useState(false);
@@ -1985,6 +1988,7 @@ export function App() {
         page={place.page}
         onPage={page => go({ view: "settings", page })}
         onBack={() => go(selection ? { view: "thread", selection } : { view: "home" })}
+        onHide={() => onPrefs({ sidebarCollapsed: true })}
       />
     ) : prefs.sidebarCollapsed ? null : (
       <AppSidebar
@@ -2072,9 +2076,26 @@ export function App() {
         {palette}
         <SnoozeDialog title={snoozeAsk?.title ?? null} onClose={() => setSnoozeAsk(null)} onSnooze={until => snoozeAsk && onSnooze(snoozeAsk, until)} />
         <div className="flex h-full overflow-hidden">
-          {sidebar}
-          <div className="relative flex min-w-0 flex-1 flex-col">
-            {prefs.sidebarCollapsed && place.view !== "settings" && (
+          {sidebar && (
+            // Settings keeps its sidebar mounted while hidden, so Esc still leaves Settings.
+            <div hidden={prefs.sidebarCollapsed} className="relative flex shrink-0" style={{ width: sidebarWidth }}>
+              {sidebar}
+              <SideResizer
+                edge="right"
+                width={sidebarWidth}
+                bounds={SIDEBAR}
+                label="Resize the sidebar"
+                onWidth={setSidebarWidth}
+                onFold={() => onPrefs({ sidebarCollapsed: true })}
+              />
+            </div>
+          )}
+          <div
+            className="relative flex min-w-0 flex-1 flex-col"
+            // Page headers leave this much room on the left for the Show sidebar button (and the window buttons).
+            style={{ "--chrome-inset": prefs.sidebarCollapsed ? (MAC_CHROME ? "128px" : "56px") : "0px" } as CSSProperties}
+          >
+            {prefs.sidebarCollapsed && (
               <button
                 type="button"
                 aria-label="Show sidebar"

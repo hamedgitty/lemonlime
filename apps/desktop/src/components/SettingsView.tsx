@@ -8,6 +8,7 @@ import {
   NotebookPen,
   Package,
   Palette,
+  PanelLeft,
   Search,
   Server,
   Settings as SettingsIcon,
@@ -16,7 +17,7 @@ import {
 import { settingAnchor, groupByPage, findSettings, type SettingEntry } from "../lib/settingsIndex.ts";
 import { requestSettingsTab, requestSettingTarget, SETTING_TARGET_EVENT, takeSettingTarget } from "../lib/settingsNav.ts";
 import { Kbd } from "./primitives.tsx";
-import { cx } from "./ui.tsx";
+import { IconButton, cx } from "./ui.tsx";
 import { AccountPage } from "./settings/AccountPage.tsx";
 import { AgentsPage } from "./settings/AgentsPage.tsx";
 import { AppearancePage } from "./settings/AppearancePage.tsx";
@@ -85,7 +86,17 @@ function searchResults(query: string): Result[] {
 }
 
 /** The sidebar while Settings is open: back to the app, search, and the sections. */
-export function SettingsSidebar({ page, onPage, onBack }: { page: SettingsPage; onPage: (p: SettingsPage) => void; onBack: () => void }) {
+export function SettingsSidebar({
+  page,
+  onPage,
+  onBack,
+  onHide,
+}: {
+  page: SettingsPage;
+  onPage: (p: SettingsPage) => void;
+  onBack: () => void;
+  onHide: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const search = useRef<HTMLInputElement>(null);
@@ -131,8 +142,12 @@ export function SettingsSidebar({ page, onPage, onBack }: { page: SettingsPage; 
   const optionId = (i: number) => `${listId}-${i}`;
 
   return (
-    <nav aria-label="Settings" className="flex w-[288px] shrink-0 flex-col border-r border-line bg-cream-deep">
-      <div data-tauri-drag-region className="h-[52px] shrink-0" />
+    <nav aria-label="Settings" className="flex w-full flex-col border-r border-line bg-cream-deep">
+      <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center justify-end px-2">
+        <IconButton label="Hide sidebar" onClick={onHide}>
+          <PanelLeft aria-hidden="true" />
+        </IconButton>
+      </div>
       <div className="px-2">
         <button
           type="button"
@@ -287,7 +302,7 @@ export function SettingsView({ page, ctx, importTab }: { page: SettingsPage; ctx
   return (
     <main ref={root} className="scroll-thin min-w-0 flex-1 overflow-y-auto">
       {/* One heading: the page's name in the title bar; its tabs sit right under it. */}
-      <header data-tauri-drag-region className="h-[52px] border-b border-line">
+      <header data-tauri-drag-region className="h-[52px] border-b border-line pl-[max(0px,calc(var(--chrome-inset,0px)-1.5rem))]">
         <div data-tauri-drag-region className="mx-auto flex h-full w-full max-w-[880px] items-center gap-2.5 px-6">
           <current.icon aria-hidden="true" className="size-4 text-ink-soft" />
           <h1 className="font-sans text-[15px] font-semibold tracking-normal">{current.label}</h1>

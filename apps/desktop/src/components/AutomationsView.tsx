@@ -317,7 +317,7 @@ function Header({
   onNew: (() => void) | null;
 }) {
   return (
-    <header className="shrink-0 border-b border-line px-6">
+    <header className="shrink-0 border-b border-line px-6 pl-[max(1.5rem,var(--chrome-inset,0px))]">
       <div data-tauri-drag-region className="flex h-[52px] items-center gap-3">
         <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
           <AlarmClock aria-hidden="true" className="size-4 text-ink-soft" />

@@ -4,8 +4,10 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { inDesktopShell } from "../lib/native.ts";
+import { KEYS, SIDE_PANEL, useSideWidth } from "../lib/sideWidth.ts";
 import { Tip } from "./primitives.tsx";
 import { BrowserView, NewTabPage } from "./PanelBrowser.tsx";
+import { SideResizer } from "./SideResizer.tsx";
 import { Button, ICON_BUTTON, cx } from "./ui.tsx";
 
 export type PanelTab =
@@ -54,6 +56,7 @@ export function GlobalPanel({
   hidden: boolean;
 }) {
   const [full, setFull] = useState(false);
+  const [width, setWidth] = useSideWidth(KEYS.sidePanel, SIDE_PANEL);
   const add = () => {
     const id = crypto.randomUUID();
     onTabs([...tabs, { id, kind: "new", title: "New tab" }]);
@@ -72,12 +75,23 @@ export function GlobalPanel({
     <aside
       aria-label="Side panel"
       hidden={hidden}
+      style={full ? undefined : { width, maxWidth: "60%" }}
       className={cx(
         "flex shrink-0 flex-col bg-cream",
-        full ? "absolute inset-0 z-30" : "w-[clamp(300px,42%,460px)]",
+        full ? "absolute inset-0 z-30" : "relative",
         !full && (side === "right" ? "order-last border-l border-line" : "order-first border-r border-line"),
       )}
     >
+      {!full && (
+        <SideResizer
+          edge={side === "right" ? "left" : "right"}
+          width={width}
+          bounds={SIDE_PANEL}
+          label="Resize the side panel"
+          onWidth={setWidth}
+          onFold={onClose}
+        />
+      )}
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-2">
         <div role="tablist" aria-label="Panel tabs" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
           {tabs.map(t => (

@@ -881,7 +881,10 @@ function ThreadSessionView({
             {panelToggle}
           </PaneHeader>
         ) : (
-          <header data-tauri-drag-region className="@container/head flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5">
+          <header
+            data-tauri-drag-region
+            className="@container/head flex h-[52px] shrink-0 items-center gap-3 border-b border-line px-5 pl-[max(1.25rem,var(--chrome-inset,0px))]"
+          >
             {/* The title always keeps some room; buttons drop their words first (see @max-…/head). */}
             <div data-tauri-drag-region className="flex min-w-[120px] flex-1 items-center gap-2.5">
               {renaming && threadMenu?.onRename ? (

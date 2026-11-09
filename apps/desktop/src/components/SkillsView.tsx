@@ -30,6 +30,7 @@ import {
   type CatalogSkill,
 } from "../lib/skillCatalog.ts";
 import { Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, PageTabs } from "./primitives.tsx";
+import { HideListButton, ListColumn } from "./ListColumn.tsx";
 import { Button, IconButton, RetryCard, SkeletonRows, SkeletonText, Spinner, TextInput, cx, openExternal, rowFill } from "./ui.tsx";
 
 const SOURCE_LABELS: Record<SkillSource, string> = {
@@ -111,7 +112,7 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
 
   return (
     <main className="flex min-w-0 flex-1 flex-col">
-      <header className="shrink-0 border-b border-line px-6">
+      <header className="shrink-0 border-b border-line px-6 pl-[max(1.5rem,var(--chrome-inset,0px))]">
         <div data-tauri-drag-region className="flex h-[52px] min-w-0 items-center gap-3 overflow-hidden">
           <h1 className="flex items-center gap-2 font-sans text-[15px] font-semibold tracking-normal">
             <BookOpen aria-hidden="true" className="size-4 text-ink-soft" />
@@ -264,7 +265,7 @@ function Installed({
 
   return (
     <div className="flex min-h-0 flex-1">
-      <section aria-label="Your skills" className="flex w-[clamp(220px,45%,340px)] shrink-0 flex-col border-r border-line">
+      <ListColumn label="Your skills">
         <div className="flex items-center gap-1.5 p-3">
           <SearchBox value={query} onChange={setQuery} label="Search skills" />
           <Menu
@@ -289,6 +290,7 @@ function Installed({
               ]}
             />
           </Menu>
+          <HideListButton />
         </div>
         {source !== "all" && (
           <p className="-mt-1 flex items-center gap-1 px-4 pb-2 text-[13px] text-ink-soft">
@@ -340,7 +342,7 @@ function Installed({
             </ul>
           )}
         </div>
-      </section>
+      </ListColumn>
 
       <section aria-label="Skill" className="scroll-thin min-w-0 flex-1 overflow-y-auto">
         {current ? (
@@ -473,9 +475,12 @@ function Browse({
 
   return (
     <div className="flex min-h-0 flex-1">
-      <section aria-label="Skills to install" className="flex w-[clamp(220px,45%,340px)] shrink-0 flex-col border-r border-line">
+      <ListColumn label="Skills to install">
         <div className="flex flex-col gap-1.5 p-3">
-          <SearchBox value={query} onChange={setQuery} label="Search skills to install" />
+          <div className="flex items-center gap-1.5">
+            <SearchBox value={query} onChange={setQuery} label="Search skills to install" />
+            <HideListButton />
+          </div>
           <p className="px-1 text-[13px] text-ink-faint">
             From{" "}
             <button type="button" className="inline text-left text-leaf hover:underline" onClick={() => void openExternal(skillsSourcePage())}>
@@ -514,7 +519,7 @@ function Browse({
             </ul>
           )}
         </div>
-      </section>
+      </ListColumn>
       <section aria-label="Skill to install" className="scroll-thin min-w-0 flex-1 overflow-y-auto">
         {current && <CatalogPreview key={current.name} skill={current} yours={yours} shell={shell} onInstalled={onInstalled} onShow={onShow} />}
       </section>

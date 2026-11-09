@@ -275,6 +275,8 @@ export function Timeline({
   );
 
   // Opening a thread with something new in it starts at the "New" divider, once.
+  const onScrollRef = useRef(onScroll);
+  onScrollRef.current = onScroll;
   const shownUnread = useRef(false);
   useEffect(() => {
     if (shownUnread.current || divider < 0) return;
@@ -286,7 +288,7 @@ export function Timeline({
     el.scrollTop += node.getBoundingClientRect().top - el.getBoundingClientRect().top - 48;
     ownTop.current = el.scrollTop;
     stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    onScroll();
+    onScrollRef.current();
   }, [divider]);
 
   /** Scroll to an item (from the message list) and tint it for a moment. */

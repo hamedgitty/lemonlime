@@ -165,7 +165,7 @@ describe("EventStore", () => {
       const repo = userRepo();
       git(repo, "checkout", "-q", "-b", "agent/thread-2");
       const ws = new GitWorkspace(join(tempDir(), "thread-2"));
-      await expect(ws.ensureWorktree(repo, "agent/thread-2", "main")).rejects.toThrow(/checked out in another folder/);
+      await expect(ws.ensureWorktree(repo, "agent/thread-2", "main")).rejects.toThrow(/checked out in your project folder/);
     });
 
     it("refuses repositories without commits, folders that aren't repos, and foreign folders", async () => {

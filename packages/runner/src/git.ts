@@ -115,16 +115,21 @@ export class GitWorkspace {
   }
 
   /**
-   * Push the current branch to `origin`, setting it as upstream. Returns null on success,
-   * or git's error. Never forces: if the remote has moved on, the push is refused.
+   * Push the current branch, setting it as upstream: to `origin` under the same name, or to
+   * `target` (a pull request's branch in a fork). Returns null on success, or git's error.
+   * Never forces: if the remote has moved on, the push is refused.
    */
-  async push(branch: string, opts: { force?: boolean } = {}): Promise<string | null> {
+  async push(branch: string, opts: { force?: boolean; target?: PushTarget } = {}): Promise<string | null> {
+    const remote = opts.target?.remote ?? "origin";
+    const remoteBranch = opts.target?.branch ?? branch;
     const remotes = (await this.git(["remote"], { allowFail: true })).split("\n").map(r => r.trim());
-    if (!remotes.includes("origin")) return "no remote named origin";
+    if (!remotes.includes(remote)) return `no remote named ${remote}`;
     try {
       assertSafeRef(branch, "branch name");
+      assertSafeRef(remote, "remote name");
+      assertSafeRef(remoteBranch, "branch name");
       // After a rewind the branch moved back, so it's replaced; only ever the thread's own branch.
-      await runGit(["push", "-q", "-u", ...(opts.force ? ["--force-with-lease"] : []), "origin", `HEAD:refs/heads/${branch}`], {
+      await runGit(["push", "-q", "-u", ...(opts.force ? ["--force-with-lease"] : []), remote, `HEAD:refs/heads/${remoteBranch}`], {
         cwd: this.dir,
         maxBuffer: 4 * 1024 * 1024,
         timeout: 120_000,
@@ -137,6 +142,36 @@ export class GitWorkspace {
         .slice(-3)
         .join("\n");
     }
+  }
+
+  /** Fetch from a remote (allowed to fail: offline is fine). Returns git's error, or null. */
+  async fetch(remote: string, refspecs: string[], o: { timeout?: number } = {}): Promise<string | null> {
+    assertSafeRef(remote, "remote name");
+    for (const r of refspecs) if (r.startsWith("-")) throw new Error("Not a usable refspec");
+    try {
+      await this.git(["fetch", "-q", "--no-tags", "--no-recurse-submodules", remote, ...refspecs], { timeout: o.timeout ?? NETWORK_TIMEOUT_MS });
+      return null;
+    } catch (err) {
+      return gitError(err);
+    }
+  }
+
+  /**
+   * Merge `ref` into the checked-out branch. On conflicts the merge is undone, so the
+   * branch and files are as they were, and the conflicting files are returned.
+   */
+  async mergeFrom(ref: string, message: string): Promise<{ result: "merged" | "up_to_date" } | { result: "conflicts"; conflicts: string[] }> {
+    assertSafeRef(ref, "ref");
+    const before = await this.head();
+    try {
+      await this.git([...AGENT_IDENTITY, "merge", "-q", "--no-edit", "--no-verify", "-m", message, "--end-of-options", ref]);
+    } catch (err) {
+      const conflicts = (await this.git(["diff", "--name-only", "-z", "--diff-filter=U"], { allowFail: true })).split("\0").filter(Boolean);
+      await this.git(["merge", "--abort"], { allowFail: true });
+      if (conflicts.length) return { result: "conflicts", conflicts };
+      throw new Error(`Couldn't merge ${ref}: ${gitError(err)}`);
+    }
+    return (await this.head()) === before ? { result: "up_to_date" } : { result: "merged" };
   }
 
   /** Keep runner data out of the repo without touching the user's .gitignore. */
@@ -152,12 +187,16 @@ export class GitWorkspace {
 
   /**
    * Make this directory a git worktree of `source` with `branch` checked out, creating the
-   * branch from `base` the first time. The user's own checkout of `source` is never
-   * switched, and their uncommitted work there is never touched.
+   * branch the first time: from `from` when given (a fork starts from the thread it came
+   * from), else from `base`. With `existing`, the branch must already be there, locally or
+   * on origin, and is never created from anything else. The user's own checkout of
+   * `source` is never switched, and their uncommitted work there is never touched.
+   * Returns warnings worth showing (submodules that couldn't be filled).
    */
-  async ensureWorktree(source: string, branch: string, base: string): Promise<void> {
+  async ensureWorktree(source: string, branch: string, base: string, o: { from?: string; existing?: boolean } = {}): Promise<{ warnings: string[] }> {
     assertSafeRef(branch, "branch name");
     assertSafeRef(base, "base branch");
+    if (o.from) assertSafeRef(o.from, "starting point");
     const src = new GitWorkspace(source);
     const srcCommon = await src.commonDir();
     if (!srcCommon) throw new Error(`${source} is not a git repository`);
@@ -166,7 +205,7 @@ export class GitWorkspace {
       // Reusing an earlier worktree: it must belong to the same repository.
       if ((await this.commonDir()) !== srcCommon) throw new Error(`${this.dir} already holds a different repository`);
       await this.ensureBranch(branch, base);
-      return;
+      return { warnings: [] };
     }
     if (existsSync(this.dir) && readdirSync(this.dir).length > 0) throw new Error(`${this.dir} is not empty and is not a worktree of ${source}`);
     if (!(await src.hasCommits())) throw new Error("This repository has no commits yet. Make a first commit, then start the thread.");
@@ -174,16 +213,49 @@ export class GitWorkspace {
     mkdirSync(dirname(this.dir), { recursive: true });
     await src.git(["worktree", "prune"], { allowFail: true });
     const exists = (await src.git(["rev-parse", "--verify", "-q", `refs/heads/${branch}`], { allowFail: true })).trim();
+    let args: string[];
+    if (exists) args = ["worktree", "add", "-q", this.dir, branch];
+    else if (o.existing) {
+      const remote = (await src.git(["rev-parse", "--verify", "-q", `refs/remotes/origin/${branch}`], { allowFail: true })).trim();
+      if (!remote) throw new Error(`There's no branch named ${branch} in this repository, here or on origin.`);
+      // Made from origin's copy and tracking it, so pulls and pushes go back to the same branch.
+      args = ["worktree", "add", "-q", "--track", "-b", branch, this.dir, `refs/remotes/origin/${branch}`];
+    } else {
+      const start = o.from ? await src.resolveRef(o.from) : await src.resolveBase(base);
+      if (!start) throw new Error(`Couldn't find ${o.from} to start the thread from.`);
+      args = ["worktree", "add", "-q", "-b", branch, this.dir, start];
+    }
     try {
-      if (exists) await src.git(["worktree", "add", "-q", this.dir, branch]);
-      else await src.git(["worktree", "add", "-q", "-b", branch, this.dir, await src.resolveBase(base)]);
+      await src.git(args);
     } catch (err) {
       const msg = String((err as { stderr?: string }).stderr ?? err);
       if (/already (checked out|used by worktree)/.test(msg)) {
-        throw new Error(`The branch ${branch} is checked out in another folder. Switch that folder to a different branch, then start the thread again.`);
+        const where = /(?:checked out at|used by worktree at) '([^']+)'/.exec(msg)?.[1];
+        throw new Error(checkedOutMessage(branch, where ?? null, source));
       }
       throw new Error(`Could not create a worktree for this thread: ${msg.trim()}`);
     }
+    return { warnings: await this.fillSubmodules() };
+  }
+
+  /** Check out the repository's submodules, if it has any. A failure is a warning, not an error. */
+  async fillSubmodules(): Promise<string[]> {
+    if (!existsSync(join(this.dir, ".gitmodules"))) return [];
+    try {
+      await this.git(["submodule", "update", "--init", "--recursive"], { timeout: NETWORK_TIMEOUT_MS });
+      return [];
+    } catch (err) {
+      return [`Couldn't check out this repository's submodules, so their folders are empty in this thread. Git said: ${gitError(err)}`];
+    }
+  }
+
+  /** The commit `ref` names (a commit id, a local branch, or origin's copy of one), or "" if there's none. */
+  async resolveRef(ref: string): Promise<string> {
+    assertSafeRef(ref, "ref");
+    return (
+      (await this.git(["rev-parse", "--verify", "-q", "--end-of-options", `${ref}^{commit}`], { allowFail: true })).trim() ||
+      (await this.git(["rev-parse", "--verify", "-q", "--end-of-options", `refs/remotes/origin/${ref}^{commit}`], { allowFail: true })).trim()
+    );
   }
 
   /** Remove this worktree (keeping its branch and commits). Safe to call if it's already gone. */
@@ -312,6 +384,35 @@ export class GitWorkspace {
     const { stdout } = await pending;
     return stdout.trim();
   }
+}
+
+/** Where the thread's branch is pushed when it isn't `origin` under the same name. */
+export interface PushTarget {
+  remote: string;
+  branch: string;
+}
+
+/** The last few lines git printed for a failed call. */
+export function gitError(err: unknown): string {
+  return String((err as { stderr?: string }).stderr || (err as Error).message || err)
+    .trim()
+    .split("\n")
+    .slice(-3)
+    .join(" ");
+}
+
+/** What to tell the user when a branch they picked is checked out somewhere else. */
+export function checkedOutMessage(branch: string, where: string | null, source: string): string {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const inProject = where !== null && real(where) === real(source);
+  const place = inProject ? "your project folder" : where ? where : "another folder";
+  return `${branch} is checked out in ${place}, and a branch can only be checked out in one place at a time. Switch ${inProject ? "your project folder" : "that folder"} to another branch, or start the thread from ${branch} as a new branch instead.`;
 }
 
 function statusToChange(status: string): FileChange["change"] {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { workspaceMembers } from "@lemonlime/db";
 import { createAuth } from "../src/lib/better-auth.ts";
+import { pluginServices } from "../src/lib/context.ts";
 import { runPluginSchedule } from "../src/lib/plugin-schedule.ts";
 import { createThread } from "../src/lib/threads.ts";
 import { addUser, createTestApp } from "./helpers.ts";
@@ -64,5 +66,20 @@ describe("plugin events", () => {
       },
     };
     await expect(runPluginSchedule(app.ctx)).resolves.toBeUndefined();
+  });
+});
+
+describe("plugin services", () => {
+  it("looks up a workspace's owners, not its other members", async () => {
+    const app = await createTestApp();
+    const owner = await addUser(app.db, "owner@example.com");
+    const other = await addUser(app.db, "member@example.com");
+    await app.db.insert(workspaceMembers).values({ workspaceId: owner.workspaceId, userId: other.userId, role: "member" });
+    const services = pluginServices(
+      app.db,
+      () => app.ctx.email,
+      () => app.ctx.config.emailBrand(),
+    );
+    expect(await services.workspaceOwnerEmails(owner.workspaceId)).toEqual(["owner@example.com"]);
   });
 });

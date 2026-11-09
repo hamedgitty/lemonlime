@@ -1,6 +1,6 @@
-import { createD1Db, user, type D1Binding, type Db } from "@lemonlime/db";
+import { createD1Db, user, workspaceMembers, type D1Binding, type Db } from "@lemonlime/db";
 import { resolvePlugin, type EmailBrand, type PluginServices, type ResolvedPlugin } from "@lemonlime/plugins";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { createSandboxProvider, type SandboxProvider } from "@lemonlime/sandbox";
 import pluginExport from "@lemonlime/deployment-plugin";
 import { createEmailSender, emailBrand, type EmailSender, type SendEmailBinding } from "./email.ts";
@@ -137,13 +137,21 @@ const textToHtml = (text: string) =>
   `<p>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
 
 /** Email and user lookups for plugins, using this deployment's own email setup. */
-function pluginServices(db: Db, email: () => EmailSender, brand: () => EmailBrand): PluginServices {
+export function pluginServices(db: Db, email: () => EmailSender, brand: () => EmailBrand): PluginServices {
   return {
     sendEmail: m => email().send({ to: m.to, subject: m.subject, text: m.text, html: m.html ?? textToHtml(m.text) }),
     emailBrand: brand,
     async userEmail(userId) {
       const [row] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId));
       return row?.email ?? null;
+    },
+    async workspaceOwnerEmails(workspaceId) {
+      const rows = await db
+        .select({ email: user.email })
+        .from(workspaceMembers)
+        .innerJoin(user, eq(user.id, workspaceMembers.userId))
+        .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.role, "owner")));
+      return rows.map(r => r.email).filter(Boolean);
     },
   };
 }

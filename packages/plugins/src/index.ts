@@ -57,6 +57,8 @@ export interface PluginServices {
   emailBrand(): EmailBrand;
   /** A user's email address, or null. */
   userEmail(userId: string): Promise<string | null>;
+  /** The email addresses of a workspace's owners, for notices about the workspace itself. */
+  workspaceOwnerEmails(workspaceId: string): Promise<string[]>;
 }
 
 /**

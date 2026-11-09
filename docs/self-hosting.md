@@ -42,7 +42,8 @@ reads `apps/web/.env.local`. On Workers, plain settings go under `vars` in
 | `LEMONLIME_TOKEN_SECRET` | yes (secret) | Master secret, at least 16 characters (`openssl rand -hex 32`). Each thread's secret is derived from it. Changing it invalidates every running sandbox's tokens. |
 | `LEMONLIME_CRON_SECRET` | Node | Bearer secret for `POST /api/cron/sweep`. Not needed on Workers. |
 | `LEMONLIME_DATABASE_URL` | no | Node only. libSQL URL of the SQLite database, default `file:./data/lemonlime.db` (relative to `apps/web`). |
-| `LEMONLIME_EMAIL_FROM` | yes | Sender of sign-in codes, e.g. `LemonLime <sign-in@example.com>`. |
+| `LEMONLIME_EMAIL_FROM` | yes | Sender of every email (sign-in codes, invites), e.g. `LemonLime <sign-in@example.com>`. |
+| `LEMONLIME_SUPPORT_EMAIL` | no | An address people can write to, shown at the bottom of every email, e.g. `help@example.com`. |
 | `RESEND_API_KEY` | no (secret) | Send email through Resend when there is no `EMAIL` binding. |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | no | Both set → "Continue with GitHub" on the sign-in page. |
 | `LEMONLIME_SANDBOX_PROVIDER` | yes | `docker`, `daytona` or `e2b`. |

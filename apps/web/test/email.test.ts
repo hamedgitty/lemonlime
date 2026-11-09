@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { EmailNotConfiguredError, createEmailSender, parseAddress, signInCodeEmail } from "../src/lib/email.ts";
+import { EmailNotConfiguredError, createEmailSender, emailBrand, parseAddress, signInCodeEmail } from "../src/lib/email.ts";
 
-const message = signInCodeEmail("ada@example.com", "123456", 10);
+const message = signInCodeEmail(emailBrand("https://app.example.com"), "ada@example.com", "123456", 10);
 
 describe("parseAddress", () => {
   it("splits display names from addresses", () => {

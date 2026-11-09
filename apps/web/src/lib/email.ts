@@ -1,5 +1,5 @@
 /**
- * Outgoing email (sign-in codes). Picks a transport from the environment:
+ * Outgoing email. Every message is laid out by `renderEmail` from @lemonlime/plugins. Picks a transport from the environment:
  *
  * 1. Cloudflare Email Service, when the Worker has a `send_email` binding named `EMAIL`.
  * 2. Resend's HTTP API, when `RESEND_API_KEY` is set.
@@ -8,6 +8,8 @@
  *
  * The sender address comes from `LEMONLIME_EMAIL_FROM`, e.g. `LemonLime <sign-in@example.com>`.
  */
+
+import { renderEmail, type EmailBrand } from "@lemonlime/plugins";
 
 export interface EmailMessage {
   to: string;
@@ -107,22 +109,54 @@ export function createEmailSender(env: EmailEnv): EmailSender {
   };
 }
 
+/** This deployment's name, logo and links for its emails. The logo is served by the app itself. */
+export function emailBrand(publicUrl: string, supportEmail?: string): EmailBrand {
+  return {
+    name: "LemonLime",
+    appUrl: publicUrl,
+    logoUrl: `${publicUrl}/email/lemonlime.png`,
+    ...(supportEmail?.trim() ? { supportEmail: supportEmail.trim() } : {}),
+    links: [
+      { label: "Dashboard", url: publicUrl },
+      { label: "Docs", url: "https://lemonlime.dev/docs/" },
+    ],
+  };
+}
+
 /** The sign-in code email. */
-export function signInCodeEmail(to: string, code: string, minutes: number): EmailMessage {
-  const subject = `${code} is your LemonLime sign-in code`;
-  const text = [
-    `Your LemonLime sign-in code is ${code}.`,
-    "",
-    `It expires in ${minutes} minutes. If you did not try to sign in, you can ignore this email.`,
-  ].join("\n");
-  const html = `<!doctype html>
-<html><body style="margin:0;padding:32px 16px;background:#fffbea;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#17200e">
-  <div style="max-width:420px;margin:0 auto;background:#ffffff;border:1px solid #e9e3c4;border-radius:16px;padding:28px">
-    <p style="margin:0 0 4px;font-size:15px;font-weight:600">LemonLime</p>
-    <p style="margin:0 0 20px;font-size:15px;color:#5d6651">Your sign-in code:</p>
-    <p style="margin:0 0 20px;font-size:32px;font-weight:700;letter-spacing:8px;font-family:ui-monospace,Menlo,monospace">${code}</p>
-    <p style="margin:0;font-size:13px;color:#5d6651">It expires in ${minutes} minutes. If you did not try to sign in, you can ignore this email.</p>
-  </div>
-</body></html>`;
-  return { to, subject, text, html };
+export function signInCodeEmail(brand: EmailBrand, to: string, code: string, minutes: number): EmailMessage {
+  return {
+    to,
+    ...renderEmail(
+      {
+        subject: `${code} is your ${brand.name} sign-in code`,
+        preview: `Enter it within ${minutes} minutes to finish signing in.`,
+        title: "Your sign-in code",
+        intro: [`Enter this code in ${brand.name} to finish signing in.`],
+        code,
+        note: `It expires in ${minutes} minutes. If you didn't try to sign in, you can ignore this email: nobody gets in without the code.`,
+        reason: `You're getting this because someone asked to sign in to ${brand.name} with this address.`,
+      },
+      brand,
+    ),
+  };
+}
+
+/** The invitation to join a workspace. */
+export function inviteEmail(brand: EmailBrand, o: { to: string; inviter: string; workspace: string; link: string; days: number }): EmailMessage {
+  return {
+    to: o.to,
+    ...renderEmail(
+      {
+        subject: `${o.inviter} invited you to ${o.workspace} on ${brand.name}`,
+        preview: `Join the workspace to share coding agent threads with ${o.inviter}.`,
+        title: `Join ${o.workspace}`,
+        intro: [`**${o.inviter}** invited you to the **${o.workspace}** workspace on ${brand.name}, where your team runs coding agents and shares their threads.`],
+        button: { label: "Accept the invitation", url: o.link },
+        note: `The link works for ${o.days} days, and only for ${o.to}. If you weren't expecting this, you can ignore it.`,
+        reason: `You're getting this because someone in a ${brand.name} workspace invited this address.`,
+      },
+      brand,
+    ),
+  };
 }

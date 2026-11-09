@@ -1,9 +1,11 @@
 import type { AgentKind, ThreadMode } from "@lemonlime/protocol";
 import { allowAllPolicy, type UsagePolicy } from "./usage-policy.ts";
 import { emptyBillingUI, type BillingUI } from "./billing-ui.ts";
+import type { EmailBrand } from "./email.ts";
 
 export * from "./usage-policy.ts";
 export * from "./billing-ui.ts";
+export * from "./email.ts";
 
 /** Things that happen in the control plane a deployment may want to act on. */
 export interface PluginEvents {
@@ -32,6 +34,8 @@ export interface PluginEmail {
 /** What the control plane offers plugins at runtime. */
 export interface PluginServices {
   sendEmail(message: PluginEmail): Promise<void>;
+  /** This deployment's name, logo and links, for `renderEmail`, so plugin emails match the app's own. */
+  emailBrand(): EmailBrand;
   /** A user's email address, or null. */
   userEmail(userId: string): Promise<string | null>;
 }

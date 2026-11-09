@@ -1,9 +1,9 @@
 import { createD1Db, user, type D1Binding, type Db } from "@lemonlime/db";
-import { resolvePlugin, type PluginServices, type ResolvedPlugin } from "@lemonlime/plugins";
+import { resolvePlugin, type EmailBrand, type PluginServices, type ResolvedPlugin } from "@lemonlime/plugins";
 import { eq } from "drizzle-orm";
 import { createSandboxProvider, type SandboxProvider } from "@lemonlime/sandbox";
 import pluginExport from "@lemonlime/deployment-plugin";
-import { createEmailSender, type EmailSender, type SendEmailBinding } from "./email.ts";
+import { createEmailSender, emailBrand, type EmailSender, type SendEmailBinding } from "./email.ts";
 import { fileHistoryStore, r2HistoryStore, type HistoryStore } from "./history.ts";
 
 /**
@@ -39,6 +39,8 @@ export interface AppConfig {
   tokenSecret(): string;
   /** Bearer secret for /api/cron/sweep. */
   cronSecret(): string;
+  /** Name, logo and links for every email this deployment sends. */
+  emailBrand(): EmailBrand;
 }
 
 /** Only the string values of an environment (Workers mixes vars and bindings in one object). */
@@ -61,6 +63,7 @@ export function makeConfig(vars: Record<string, string | undefined>): AppConfig 
     runnerControlPlaneUrl: () => (vars.LEMONLIME_RUNNER_CONTROL_PLANE_URL || required("LEMONLIME_PUBLIC_URL")).replace(/\/+$/, ""),
     tokenSecret: () => required("LEMONLIME_TOKEN_SECRET"),
     cronSecret: () => required("LEMONLIME_CRON_SECRET"),
+    emailBrand: () => emailBrand(required("LEMONLIME_PUBLIC_URL").replace(/\/+$/, ""), vars.LEMONLIME_SUPPORT_EMAIL),
   };
 }
 
@@ -99,7 +102,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
     env: opts.env,
     db: opts.db,
     production,
-    plugin: opts.plugin ?? resolvePlugin(pluginExport, { env: opts.env, services: pluginServices(opts.db, () => email) }),
+    plugin: opts.plugin ?? resolvePlugin(pluginExport, { env: opts.env, services: pluginServices(opts.db, () => email, () => makeConfig(vars).emailBrand()) }),
     email,
     sandbox:
       opts.sandbox ??
@@ -125,9 +128,10 @@ const textToHtml = (text: string) =>
   `<p>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
 
 /** Email and user lookups for plugins, using this deployment's own email setup. */
-function pluginServices(db: Db, email: () => EmailSender): PluginServices {
+function pluginServices(db: Db, email: () => EmailSender, brand: () => EmailBrand): PluginServices {
   return {
     sendEmail: m => email().send({ to: m.to, subject: m.subject, text: m.text, html: m.html ?? textToHtml(m.text) }),
+    emailBrand: brand,
     async userEmail(userId) {
       const [row] = await db.select({ email: user.email }).from(user).where(eq(user.id, userId));
       return row?.email ?? null;

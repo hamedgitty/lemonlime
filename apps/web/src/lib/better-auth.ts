@@ -78,7 +78,7 @@ export function createAuth(ctx: AppContext) {
             console.warn("Skipped a sign-in code: too many for this address in the last hour.");
             return;
           }
-          await ctx.email.send(signInCodeEmail(email, otp, SIGN_IN_CODE_TTL_SECONDS / 60));
+          await ctx.email.send(signInCodeEmail(ctx.config.emailBrand(), email, otp, SIGN_IN_CODE_TTL_SECONDS / 60));
         },
       }),
     ],

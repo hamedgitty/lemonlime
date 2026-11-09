@@ -2,6 +2,7 @@ import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
 import { user, workspaceInvites, workspaceMembers, workspaces, type Db, type WorkspaceRole } from "@lemonlime/db";
 import { userWorkspaceIds } from "./access.ts";
 import type { AppContext } from "./context.ts";
+import { inviteEmail } from "./email.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
 
 /**
@@ -156,10 +157,8 @@ export async function inviteMember(ctx: AppContext, o: { userId: string; workspa
   const [inviter] = await ctx.db.select({ email: user.email, name: user.name }).from(user).where(eq(user.id, o.userId));
   const who = inviter?.name || inviter?.email || "Someone";
   const link = new URL(`/invite/${token}`, ctx.config.publicUrl()).toString();
-  const text = `${who} invited you to the "${ws?.name ?? "LemonLime"}" workspace on LemonLime, where you can share coding agent threads.\n\nAccept the invitation: ${link}\n\nThe link works for ${INVITE_TTL_DAYS} days, for ${address} only. If you weren't expecting this, you can ignore it.`;
-  const html = `<p>${escapeHtml(who)} invited you to the <strong>${escapeHtml(ws?.name ?? "LemonLime")}</strong> workspace on LemonLime, where you can share coding agent threads.</p><p><a href="${escapeHtml(link)}">Accept the invitation</a></p><p>The link works for ${INVITE_TTL_DAYS} days, for ${escapeHtml(address)} only. If you weren't expecting this, you can ignore it.</p>`;
   try {
-    await ctx.email.send({ to: address, subject: `${who} invited you to ${ws?.name ?? "a workspace"} on LemonLime`, text, html });
+    await ctx.email.send(inviteEmail(ctx.config.emailBrand(), { to: address, inviter: who, workspace: ws?.name ?? "a LemonLime workspace", link, days: INVITE_TTL_DAYS }));
   } catch (err) {
     await ctx.db.delete(workspaceInvites).where(eq(workspaceInvites.id, invite.id));
     console.error("[lemonlime] invite email failed:", err);
@@ -168,7 +167,6 @@ export async function inviteMember(ctx: AppContext, o: { userId: string; workspa
   return { id: invite.id, email: address, createdAt: invite.createdAt, expiresAt: invite.expiresAt };
 }
 
-const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export type InviteLookup =
   | { ok: true; inviteId: string; workspaceId: string; workspaceName: string; email: string; invitedBy: string | null }

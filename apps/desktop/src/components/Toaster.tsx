@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Toast } from "@base-ui/react/toast";
 import { X } from "lucide-react";
 import { cx } from "./ui.tsx";
+import { keyedToast, threadToastChange, type KeyedToast } from "../lib/toasts.ts";
 
 /**
  * Small notices at the bottom of the window ("Archived", "Pushed"), on Base UI's toast
@@ -17,29 +18,83 @@ export interface ToastOptions {
   tone?: "info" | "error";
   /** Milliseconds; 0 keeps it until closed. */
   timeout?: number;
+  /**
+   * One kind of notice: a toast with the same key replaces the one showing, and the same
+   * words again within 2 seconds are dropped (lib/toasts.ts).
+   */
+  key?: string;
+  /** The thread it's about: plain while that thread is on screen, with "Open thread" while it isn't. */
+  threadId?: string;
+}
+
+/** How the toasts know which threads are on screen, and open one (set by the app). */
+interface ThreadHooks {
+  visible: (threadId: string) => boolean;
+  open: (threadId: string) => void;
+}
+let threadHooks: ThreadHooks | null = null;
+export function connectToastThreads(hooks: ThreadHooks | null): void {
+  threadHooks = hooks;
+}
+
+const keyed = new Map<string, KeyedToast & { id: string }>();
+/** Open toasts about a thread that have no action of their own. */
+const forThread = new Map<string, { threadId: string; offersOpen: boolean }>();
+
+const plainText = (n: ReactNode) => (typeof n === "string" || typeof n === "number" ? String(n) : "");
+
+function actionProps(id: string, action: { label: string; onClick: () => void }) {
+  return {
+    children: action.label,
+    onClick: () => {
+      action.onClick();
+      manager.close(id);
+    },
+  };
+}
+
+function openThreadAction(threadId: string) {
+  return { label: "Open thread", onClick: () => threadHooks?.open(threadId) };
 }
 
 export function toast(o: ToastOptions): string {
-  let id = "";
-  id = manager.add({
+  const now = Date.now();
+  const text = `${plainText(o.title)}\n${plainText(o.description)}`;
+  const prev = o.key ? keyed.get(o.key) : undefined;
+  const decision = o.key ? keyedToast(prev, text, now) : "add";
+  if (decision === "drop" && prev) return prev.id;
+  const id = decision === "replace" && prev ? prev.id : crypto.randomUUID();
+  const offersOpen = Boolean(o.threadId && !o.action && threadHooks && !threadHooks.visible(o.threadId));
+  const action = o.action ?? (offersOpen && o.threadId ? openThreadAction(o.threadId) : undefined);
+  if (o.key) keyed.set(o.key, { id, at: now, text, open: true });
+  if (o.threadId && !o.action) forThread.set(id, { threadId: o.threadId, offersOpen });
+  manager.add({
+    id,
     title: o.title,
-    ...(o.description ? { description: o.description } : {}),
+    ...(o.description ? { description: o.description } : { description: undefined }),
     type: o.tone ?? "info",
-    timeout: o.timeout ?? (o.action ? 6000 : 4000),
+    timeout: o.timeout ?? (action ? 6000 : 4000),
     priority: o.tone === "error" ? "high" : "low",
-    ...(o.action
-      ? {
-          actionProps: {
-            children: o.action.label,
-            onClick: () => {
-              o.action!.onClick();
-              manager.close(id);
-            },
-          },
-        }
-      : {}),
+    actionProps: action ? actionProps(id, action) : undefined,
+    onClose: () => {
+      forThread.delete(id);
+      if (o.key && keyed.get(o.key)?.id === id) keyed.set(o.key, { ...keyed.get(o.key)!, open: false });
+    },
   });
   return id;
+}
+
+/** The thread on screen changed: thread toasts gain "Open thread", or go once you're there. */
+export function syncThreadToasts(): void {
+  if (!threadHooks) return;
+  for (const [id, t] of forThread) {
+    const change = threadToastChange({ visible: threadHooks.visible(t.threadId), offersOpen: t.offersOpen, ownAction: false });
+    if (change === "close") manager.close(id);
+    else if (change === "offer-open") {
+      forThread.set(id, { ...t, offersOpen: true });
+      manager.update(id, { actionProps: actionProps(id, openThreadAction(t.threadId)) });
+    }
+  }
 }
 
 export function Toaster({ children }: { children: ReactNode }) {

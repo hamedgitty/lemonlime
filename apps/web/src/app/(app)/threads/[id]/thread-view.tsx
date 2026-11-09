@@ -437,6 +437,7 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
                 onApprove={(id, d) => clientRef.current?.approve(id, d)}
                 onImplementPlan={live ? implementPlan : undefined}
                 onLimitWait={live ? () => clientRef.current?.limitAction({ action: "wait" }) : undefined}
+                onContinueAfterRestart={live ? () => clientRef.current?.continueAfterRestart() : undefined}
               />
             )}
             <div ref={bottomRef} />

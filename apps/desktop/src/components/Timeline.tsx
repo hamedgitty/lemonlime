@@ -24,6 +24,7 @@ import {
   ListTodo,
   MessageCircleQuestionMark,
   MoreHorizontal,
+  Play,
   Paperclip,
   Pencil,
   Search,
@@ -36,6 +37,7 @@ import {
 } from "lucide-react";
 import { elapsedMs, formatDuration, type SubagentInfo, type ThreadStatus } from "@lemonlime/protocol";
 import { foldFinishedTurns, type TimelineItem } from "../lib/timeline.ts";
+import { continuableRestart } from "../lib/recovery.ts";
 import { collapseLongText, commandOutput, liveTurnStart, terminalTail, tocEntries, TOC_MIN_MESSAGES, unreadIndex } from "../lib/timelineView.ts";
 import {
   bundleLabel,
@@ -64,7 +66,7 @@ import { DiffBody } from "./DiffView.tsx";
 import { ActionButton, AgentMessage, MessageActions } from "./AgentMessage.tsx";
 import { OptionsRow, PlanCard, QuestionRecord } from "./AgentLoop.tsx";
 import { LimitRow, SwitchRow, type LimitActions } from "./LimitRow.tsx";
-import { Spinner, cx } from "./ui.tsx";
+import { Button, Spinner, cx } from "./ui.tsx";
 import { ImageLoaderContext, SentImages, useImageLoader, type LoadImage } from "./SentImages.tsx";
 import { MessageRail } from "./MessageRail.tsx";
 
@@ -82,6 +84,8 @@ interface RowActions {
   onImplementPlan?: (() => void) | undefined;
   onEdit?: ((item: UserItem) => void) | undefined;
   onFork?: ((key: string) => void) | undefined;
+  /** The cut-short notice that can still be continued, and what Continue does. */
+  restart?: { key: string; onContinue: () => void } | undefined;
   subagents: ReadonlyMap<string, SubagentInfo>;
   /** Items from this seq on belong to the turn that is running now (null when none is). */
   liveSeq: number | null;
@@ -100,6 +104,7 @@ export function Timeline({
   onEdit,
   onFork,
   limit,
+  onContinueAfterRestart,
   foldFinished = false,
   unreadAfterSeq,
   loadImage,
@@ -123,6 +128,8 @@ export function Timeline({
   onFork?: ((key: string) => void) | undefined;
   /** What the usage-limit row can do (absent while it can't act). */
   limit?: LimitActions | undefined;
+  /** Carry on after the runner restarted mid-turn (absent while it can't act). */
+  onContinueAfterRestart?: (() => void) | undefined;
   /** The runner's subagents, by id, for their rows' live status. */
   subagents?: ReadonlyMap<string, SubagentInfo> | undefined;
 }) {
@@ -135,9 +142,20 @@ export function Timeline({
   const toc = useMemo(() => tocEntries(items), [items]);
   const turnStart = working ? liveTurnStart(items) : null;
   const liveSeq = useMemo(() => (working ? (items.findLast(i => i.kind === "user" && !i.pending)?.seq ?? 0) : null), [items, working]);
+  const restartKey = useMemo(() => (onContinueAfterRestart ? continuableRestart(items) : null), [items, onContinueAfterRestart]);
   const actions = useMemo<RowActions>(
-    () => ({ limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq }),
-    [limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq],
+    () => ({
+      limit,
+      lastSwitch,
+      onRewind,
+      onImplementPlan,
+      onEdit,
+      onFork,
+      subagents,
+      liveSeq,
+      restart: restartKey && onContinueAfterRestart ? { key: restartKey, onContinue: onContinueAfterRestart } : undefined,
+    }),
+    [limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq, restartKey, onContinueAfterRestart],
   );
 
   // The scrollbar shows while the person scrolls (not while new output follows itself).
@@ -363,7 +381,14 @@ const Row = memo(function Row({ row, actions }: { row: ShownRow; actions: RowAct
     case "status":
       return <StatusRow to={row.to} reason={row.reason} at={row.at} workedMs={row.workedMs} />;
     case "error":
-      return <ErrorRow message={row.message} code={row.code} fatal={row.fatal} />;
+      return (
+        <ErrorRow
+          message={row.message}
+          code={row.code}
+          fatal={row.fatal}
+          onContinue={actions.restart?.key === row.key ? actions.restart.onContinue : undefined}
+        />
+      );
     case "notice":
       return <NoticeRow message={row.untilAt ? `${row.message} ${resetsWhen(row.untilAt)}` : row.message} />;
     case "approval":
@@ -1041,7 +1066,19 @@ function StatusRow({ to, reason, at, workedMs }: { to: ThreadStatus; reason?: st
   );
 }
 
-function ErrorRow({ message, code, fatal }: { message: string; code?: string | undefined; fatal: boolean }) {
+function ErrorRow({
+  message,
+  code,
+  fatal,
+  onContinue,
+}: {
+  message: string;
+  code?: string | undefined;
+  fatal: boolean;
+  /** Offered on the newest notice that a restart cut a turn short. */
+  onContinue?: (() => void) | undefined;
+}) {
+  const [sent, setSent] = useState(false);
   return (
     <div className="flex gap-3 rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-ink" role="alert">
       <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-danger" />
@@ -1049,6 +1086,23 @@ function ErrorRow({ message, code, fatal }: { message: string; code?: string | u
         <p className="font-medium text-danger">{fatal ? "The thread stopped because of an error" : "Something went wrong"}</p>
         <p className="mt-0.5 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
         {code && <p className="mt-1 font-mono text-xs text-ink-soft">{code}</p>}
+        {onContinue && (
+          <div className="mt-2.5 flex flex-wrap items-center gap-3">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={sent}
+              onClick={() => {
+                setSent(true);
+                onContinue();
+              }}
+            >
+              <Play aria-hidden="true" className="size-3.5" />
+              Continue
+            </Button>
+            <span className="text-[13px] text-ink-soft">The agent checks what already happened before it repeats anything.</span>
+          </div>
+        )}
       </div>
     </div>
   );

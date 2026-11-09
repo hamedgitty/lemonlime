@@ -333,6 +333,11 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
           if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
         });
         break;
+      case "continue_after_restart": {
+        const r = runner.continueAfterRestart();
+        if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+        break;
+      }
       case "compact":
         if (!runner.compact()) send({ type: "error", code: "bad_request", message: "This agent can't compact its conversation." });
         break;

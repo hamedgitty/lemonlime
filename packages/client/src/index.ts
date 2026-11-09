@@ -130,6 +130,11 @@ export class RunnerClient {
     this.post({ type: "rewind", toSeq, restoreFiles });
   }
 
+  /** Carry on after the runner restarted mid-turn (see ClientContinueAfterRestart). */
+  continueAfterRestart(): void {
+    this.post({ type: "continue_after_restart" });
+  }
+
   /** Ask the agent to shrink its conversation (Claude Code). */
   compact(): void {
     this.post({ type: "compact" });

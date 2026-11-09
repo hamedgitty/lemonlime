@@ -8,6 +8,7 @@ import WebSocket from "ws";
 import { RunnerClient } from "@lemonlime/client";
 import { branchForThread, signToken, type Thread, type ThreadEvent } from "@lemonlime/protocol";
 import { acpAdapter, startServer, ThreadRunner, type AgentAdapter, type RunningServer } from "../src/index.ts";
+import { CONTINUE_AFTER_RESTART, RESTART_CONTINUE_WINDOW_MS, restartContinueAllowed } from "../src/thread-runner.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const here = dirname(fileURLToPath(import.meta.url));
@@ -287,6 +288,52 @@ describe("runner end to end", () => {
     expect(log).toContain("Unfinished changes from a turn the runner did not finish");
     // The interrupted message is never sent again, even if a client retries it.
     expect(second.sendMessage("interrupted work", "lost").result).toBe("duplicate");
+  });
+
+  it("continues after a restart with a careful prompt, at most a few times in a few minutes", async () => {
+    const dir = tempRepo();
+    const dataDir = join(dir, ".lemonlime");
+    const thread = makeThread("crash-thread-2");
+    const first = new ThreadRunner({ thread, workdir: dir, dataDir, adapter: fakeAdapter, session: { autonomy: "edits" } });
+    await first.init();
+    first.store.append({ type: "user_message", text: "interrupted work", clientMsgId: "lost" });
+    await first.close();
+    writeFileSync(join(dataDir, "state.json"), JSON.stringify({ agentState: {}, status: "running" }));
+
+    const prompts: string[] = [];
+    const recording: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => ({ runTurn: async ctx => void prompts.push(ctx.prompt), saveState: () => ({}), dispose: async () => {} }),
+    };
+    const second = new ThreadRunner({ thread, workdir: dir, dataDir, adapter: recording, session: { autonomy: "edits" } });
+    cleanups.push(() => second.close());
+    await second.init();
+    const now = Date.now();
+    expect(second.continueAfterRestart(now)).toEqual({ ok: true, result: "started" });
+    await second.settled();
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain(CONTINUE_AFTER_RESTART);
+    // Pressing it again for the same notice does nothing more; once the thread moved on, it's refused.
+    expect(second.continueAfterRestart(now)).toEqual({ ok: true, result: "duplicate" });
+    second.store.append({ type: "error", code: "turn_outcome_unknown", message: "cut short", fatal: false });
+    expect(second.continueAfterRestart(now + 1000)).toEqual({ ok: true, result: "started" });
+    await second.settled();
+    second.store.append({ type: "error", code: "turn_outcome_unknown", message: "cut short", fatal: false });
+    expect(second.continueAfterRestart(now + 2000)).toEqual({ ok: true, result: "started" });
+    await second.settled();
+    second.store.append({ type: "error", code: "turn_outcome_unknown", message: "cut short", fatal: false });
+    expect(second.continueAfterRestart(now + 3000)).toHaveProperty("error");
+    expect(prompts).toHaveLength(3);
+  });
+
+  it("only allows a few restart continues within the window", () => {
+    const now = 10 * 60_000;
+    expect(restartContinueAllowed([], now).allowed).toBe(true);
+    expect(restartContinueAllowed([now - 1000, now - 2000], now).allowed).toBe(true);
+    expect(restartContinueAllowed([now - 1000, now - 2000, now - 3000], now).allowed).toBe(false);
+    // Old presses no longer count.
+    const r = restartContinueAllowed([now - RESTART_CONTINUE_WINDOW_MS - 1, now - 1000, now - 2000], now);
+    expect(r).toEqual({ recent: [now - 1000, now - 2000], allowed: true });
   });
 
   it("drives an ACP agent over stdio, including permission requests", async () => {

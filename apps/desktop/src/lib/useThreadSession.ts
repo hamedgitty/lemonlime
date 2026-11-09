@@ -88,6 +88,8 @@ export interface ThreadSession {
   answerQuestion: (requestId: string, answers: string[][] | null) => void;
   /** After a usage limit: another account, another agent, or wait for the reset. */
   limitAction: (action: Omit<ClientLimitAction, "type">) => void;
+  /** Carry on after the runner restarted mid-turn (a careful "continue" prompt). */
+  continueAfterRestart: () => void;
   /** Signing a cloud thread's agent in to the user's own account (never part of the history). */
   login: {
     update: LoginUpdate | null;
@@ -418,6 +420,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const setOptions = useCallback((change: Omit<ClientSetOptions, "type">) => clientRef.current?.setOptions(change), []);
   const answerQuestion = useCallback((requestId: string, answers: string[][] | null) => clientRef.current?.answerQuestion(requestId, answers), []);
   const limitAction = useCallback((action: Omit<ClientLimitAction, "type">) => clientRef.current?.limitAction(action), []);
+  const continueAfterRestart = useCallback(() => clientRef.current?.continueAfterRestart(), []);
   const sideAsk = useCallback(
     (text: string, sideId?: string) =>
       new Promise<string>((resolve, reject) => {
@@ -478,6 +481,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     setOptions,
     answerQuestion,
     limitAction,
+    continueAfterRestart,
     login,
     side,
     restart,

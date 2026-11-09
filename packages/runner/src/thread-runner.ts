@@ -242,6 +242,8 @@ interface SavedState {
   account?: string;
   /** The turn stopped on a usage limit, until something carried the thread on. */
   limitStop?: LimitStop;
+  /** When the user pressed Continue after a restart cut a turn short (ms), for the cap. */
+  restartContinues?: number[];
 }
 
 /** A change to the thread's options (see ThreadRunner.setOptions). */
@@ -260,6 +262,22 @@ const MAX_AUTO_CONTINUES_PER_DAY = 3;
 const LIMIT_RETRY_MS = 30 * 60_000;
 /** Never wait longer than this for one (weekly limits); the user can always send a message. */
 const LIMIT_MAX_WAIT_MS = 7 * 24 * 3_600_000;
+
+/**
+ * What Continue sends after a restart cut a turn short. The agent may have run a command
+ * that took effect (or is still running), so it checks before doing anything twice.
+ */
+export const CONTINUE_AFTER_RESTART =
+  "Continue where you left off. Your last turn was cut short because LemonLime's runner restarted, so a command or other action from it may have finished, may have only partly run, or may still be running. Before repeating anything that changes state (writing files, installing, migrating, pushing, sending), check whether it already took effect and is not still running. If you can't tell, say so instead of repeating it.";
+/** Continue after a restart works at most this many times in `RESTART_CONTINUE_WINDOW_MS`, so a crash loop can't spin. */
+export const MAX_RESTART_CONTINUES = 3;
+export const RESTART_CONTINUE_WINDOW_MS = 5 * 60_000;
+
+/** The recent Continue presses that still count, and whether another is allowed now. */
+export function restartContinueAllowed(times: readonly number[], now: number): { recent: number[]; allowed: boolean } {
+  const recent = times.filter(t => t > now - RESTART_CONTINUE_WINDOW_MS && t <= now);
+  return { recent, allowed: recent.length < MAX_RESTART_CONTINUES };
+}
 
 /** Commit subject for changes an interrupted turn left behind. */
 const UNFINISHED_SUBJECT = "Unfinished changes from a turn the runner did not finish";
@@ -505,6 +523,7 @@ export class ThreadRunner {
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
     for (const q of this.queue) this.seen.add(q.clientMsgId);
     this.autoContinues = saved?.autoContinues ?? [];
+    this.restartContinues = (saved?.restartContinues ?? []).filter(t => typeof t === "number");
     const lastPreviews = [...this.store.since(0)].reverse().find(e => e.type === "preview_update");
     if (lastPreviews?.type === "preview_update") this.previewList = lastPreviews.previews;
     if (saved?.usageLimit) {
@@ -1704,6 +1723,34 @@ export class ThreadRunner {
   }
 
   /** Shrink the agent's conversation. Only Claude Code has a way to do it from outside. */
+  private restartContinues: number[] = [];
+
+  /**
+   * The user pressed Continue on the notice that a restart cut the last turn short: send a
+   * careful prompt so the agent checks what already happened before repeating it.
+   */
+  continueAfterRestart(now = Date.now()): { ok: true; result: SendResult["result"] } | { error: string } {
+    if (!this.initialised) return { error: "The thread isn't ready yet." };
+    const events = this.store.since(0);
+    const cut = events.findLast(e => e.type === "error" && e.code === "turn_outcome_unknown");
+    if (!cut) return { error: "No turn was cut short here." };
+    const clientMsgId = `restart-continue-${cut.seq}`;
+    if (this.seen.has(clientMsgId)) return { ok: true, result: "duplicate" };
+    if (events.some(e => e.seq > cut.seq && e.type === "user_message")) return { error: "The thread has carried on since then." };
+    const { recent, allowed } = restartContinueAllowed(this.restartContinues, now);
+    this.restartContinues = recent;
+    if (!allowed) {
+      this.saveState();
+      return {
+        error: `LemonLime already continued this thread ${MAX_RESTART_CONTINUES} times in the last few minutes after restarts. Check what's happening, then send a message yourself.`,
+      };
+    }
+    this.restartContinues.push(now);
+    this.saveState();
+    const sent = this.sendMessage(CONTINUE_AFTER_RESTART, clientMsgId);
+    return { ok: true, result: sent.result };
+  }
+
   compact(): boolean {
     if (this.adapter.kind !== "claude-code") return false;
     this.sendMessage("/compact");
@@ -1746,6 +1793,7 @@ export class ThreadRunner {
       queue: this.queue,
       ...(this.usageLimit ? { usageLimit: this.usageLimit } : {}),
       ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
+      ...(this.restartContinues.length ? { restartContinues: this.restartContinues } : {}),
       ...(this.recap ? { recap: this.recap } : {}),
       ...(this.retry ? { retry: this.retry } : {}),
       options: this.options,

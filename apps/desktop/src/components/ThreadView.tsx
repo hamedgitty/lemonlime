@@ -886,6 +886,7 @@ function ThreadSessionView({
             subagents={subagents}
             onImplementPlan={session.state === "live" ? implementPlan : undefined}
             limit={limitActions}
+            onContinueAfterRestart={session.state === "live" ? session.continueAfterRestart : undefined}
           />
           {find !== null && <FindBar root={timelineRef} version={timelineItems} focusNonce={find} onClose={() => setFind(null)} />}
           <SelectionQuote root={timelineRef} onQuote={text => composerRef.current?.quote(text)} onFork={onFork ? fork : undefined} />

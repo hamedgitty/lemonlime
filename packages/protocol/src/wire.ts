@@ -148,6 +148,13 @@ export const ClientLimitAction = z.object({
 });
 export type ClientLimitAction = z.infer<typeof ClientLimitAction>;
 
+/**
+ * Carry on after the runner restarted mid-turn (the `turn_outcome_unknown` error): the
+ * runner sends a careful "continue" prompt. Refused with an error when the thread moved on
+ * or was continued too often in the last few minutes.
+ */
+export const ClientContinueAfterRestart = z.object({ type: z.literal("continue_after_restart") });
+
 export const ClientMessage = z.discriminatedUnion("type", [
   ClientHello,
   ClientSendMessage,
@@ -168,6 +175,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   ClientSetOptions,
   ClientAnswerQuestion,
   ClientLimitAction,
+  ClientContinueAfterRestart,
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
 

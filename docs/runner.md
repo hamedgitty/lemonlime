@@ -26,6 +26,10 @@ lemonlime-runner cleanup --thread <id> --source-repo <path>
   --source-repo <path>     Work in a separate git worktree of this local repository
                            (default location: ~/.lemonlime/worktrees/<repo>/<thread>)
   --base <branch>          Branch the agent branch starts from (default: main)
+  --start-from <ref>       With --source-repo: start the new branch from this commit or
+                           branch instead (forks keep the code they came from)
+  --branch <name>          With --source-repo: work on this existing branch, not a new one
+  --pull-request <n>       With --branch: it's pull request <n>'s branch (forks too)
   --port <n>               Port to listen on (default: 7420, env LEMONLIME_RUNNER_PORT)
   --host <addr>            Interface to bind (default: 127.0.0.1; use 0.0.0.0 in sandboxes)
   --data-dir <path>        Where history is stored (default: <workdir>/.lemonlime, or
@@ -78,9 +82,23 @@ worktree for the thread's branch (`git worktree add`), so:
 - your uncommitted and untracked files are never touched,
 - the agent's commits still show up in your repository on `agent/<thread-id>`.
 
-The agent starts from the latest commit of `--base`; uncommitted work on that branch
-is not copied in. `lemonlime-runner cleanup` removes the worktree and the thread's
-local history and keeps the branch, so nothing the agent committed is lost.
+The agent starts from the latest commit of `--base` (or `--start-from`); uncommitted
+work on that branch is not copied in. If the repository has submodules, the new worktree
+fills them (`git submodule update --init --recursive`); if that fails, the thread starts
+anyway and says so. `lemonlime-runner cleanup` removes the worktree and the thread's
+local history and keeps the branch, so nothing the agent committed is lost;
+`lemonlime-runner git remove-worktree` removes only the worktree, and refuses when it has
+uncommitted changes.
+
+With `--branch <name>` the thread works on a branch that's already there (local, or
+origin's), instead of making `agent/<thread>`. A branch can be checked out in only one
+folder, so one that's checked out elsewhere (your own checkout included) is refused with
+a message saying where. With `--pull-request <n>` as well, the runner looks the pull request
+up with `gh` and makes its branch: from origin, or for a fork through a remote named after
+the fork's owner, tracking the fork's branch so pushes go back to the pull request. When
+the fork doesn't allow edits from maintainers, the thread says the agent can't push to it.
+`lemonlime-runner git branches --repo <path>` and `git pull-request --repo <path> --ref
+<link or #n>` print what the app's branch picker and pull request lookup show, as JSON.
 
 Environment:
 
@@ -218,7 +236,16 @@ the GitHub CLI is signed in), `GET /git/diff?scope=branch|uncommitted|commit` (p
 status, line counts and hunks; `commit=<sha>` for one commit, `path=` and `context=` for
 more lines around one file), `POST /git/push` (never forced) and `GET`/`POST
 /git/pull-request` (opens one with `gh` when it's installed and signed in; otherwise the
-answer has the compare page to open instead). Diffs are capped at 400 files and 3 MB of
+answer has the compare page to open instead). `GET /git/pull-request/draft` writes a title
+and description from the thread's first message and commits, without a model.
+`GET /git/status` also says how many commits the branch is `behind` its base (origin's
+copy when that's newer, fetched every few minutes), and `POST /git/update-from-base`
+merges the base in, in the thread's own folder only: when it conflicts, the merge is
+undone and the conflicting files are listed. `POST /git/pull-request/watch {on}` watches
+the pull request every three minutes and sends the agent a message when its checks fail,
+new comments arrive or it gets merge conflicts; comments alone wake it at most 10 times,
+and it says once if no checks have shown up after 15 minutes. The watch is saved, so it
+carries on after a restart, and stops when the pull request is merged or closed. Diffs are capped at 400 files and 3 MB of
 text; bigger files say they were shortened. Working-tree diffs use a scratch index, so
 the agent's own index is never touched.
 

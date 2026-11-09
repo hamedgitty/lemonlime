@@ -58,6 +58,19 @@ async function boot() {
 }
 
 describe("previews", () => {
+  it("offers a port the runner found listening, and only those", async () => {
+    const { runner } = await boot();
+    runner.setListeningPorts([{ port: 5173, command: "node" }]);
+    expect(runner.store.since(0).findLast(e => e.type === "listening_ports")).toMatchObject({ ports: [{ port: 5173, command: "node" }] });
+    expect(runner.offerListeningPort(3000)).toBe(false);
+    expect(runner.offerListeningPort(5173)).toBe(true);
+    expect(runner.previews).toMatchObject([{ port: 5173, name: "node" }]);
+    // A script's preview address is offered once, and never the runner's own port.
+    runner.offerScriptPreview("http://localhost:8080/app", "Dev", [7420]);
+    runner.offerScriptPreview("http://localhost:7420/", "Oops", [7420]);
+    expect(runner.previews.map(p => p.port)).toEqual([5173, 8080]);
+  });
+
   it("carry HTTP, WebSockets and server-sent events from a sandbox port to 127.0.0.1", async () => {
     const dev = await devServer();
     const { runner, port, sign } = await boot();

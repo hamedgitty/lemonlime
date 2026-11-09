@@ -1,5 +1,20 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Columns2, GitCommitHorizontal, MessageSquarePlus, RotateCw, Rows3, UnfoldVertical, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Columns2,
+  FileText,
+  Folder,
+  GitCommitHorizontal,
+  MessageSquarePlus,
+  RotateCw,
+  Rows3,
+  SlidersHorizontal,
+  UnfoldVertical,
+  X,
+} from "lucide-react";
 import type { DiffHunk, GitDiffResponse, ReviewFile } from "@lemonlime/protocol";
 import type { Connection } from "../lib/useThreadSession.ts";
 import {
@@ -13,18 +28,46 @@ import {
   type DiffRequest,
   type ReviewLine,
 } from "../lib/review.ts";
-import { Menu, MenuChoice, MenuLabel, MenuSeparator, Tip } from "./primitives.tsx";
+import { buildFileTree, diffSides, highlightedDiffLines, isTestFile, type FileTreeNode } from "../lib/diffView.ts";
+import { highlightDiffSides } from "../lib/diffHighlighter.ts";
+import { languageFor } from "../lib/filePreview.ts";
+import { render as renderHighlighted } from "../lib/markdownHighlight.tsx";
+import { Menu, MenuCheck, MenuChoice, MenuLabel, MenuSeparator, Tip } from "./primitives.tsx";
 import { Button, Spinner, cx } from "./ui.tsx";
 
 type Scope = { scope: "branch" } | { scope: "uncommitted" } | { scope: "commit"; commit: string };
 type Layout = "unified" | "split";
 
 const LAYOUT_KEY = "lemonlime:review-layout";
+const VIEW_KEY = "lemonlime:review-view";
 const MORE_CONTEXT = 20;
 const WHOLE_FILE = 100_000;
-/** Open every file at first when the change is this small. */
-const AUTO_OPEN_FILES = 6;
-const AUTO_OPEN_LINES = 400;
+/** Files open at first when there are this few; each draws only once it scrolls into view. */
+const AUTO_OPEN_FILES = 60;
+/** A single file with more changed lines than this starts closed. */
+const AUTO_OPEN_LINES = 1500;
+/** Roughly one diff line's height, for the space a file takes before it is drawn. */
+const LINE_PX = 19;
+
+/** How the diffs show, remembered on this computer. */
+interface ViewPrefs {
+  hideTests: boolean;
+  ignoreWhitespace: boolean;
+  wrap: boolean;
+  /** The list of changed files above the diffs. */
+  tree: boolean;
+}
+const DEFAULT_VIEW: ViewPrefs = { hideTests: false, ignoreWhitespace: false, wrap: false, tree: true };
+
+function loadView(): ViewPrefs {
+  try {
+    const raw = JSON.parse(localStorage.getItem(VIEW_KEY) ?? "{}") as Partial<Record<keyof ViewPrefs, unknown>>;
+    const flag = (k: keyof ViewPrefs) => (typeof raw[k] === "boolean" ? (raw[k] as boolean) : DEFAULT_VIEW[k]);
+    return { hideTests: flag("hideTests"), ignoreWhitespace: flag("ignoreWhitespace"), wrap: flag("wrap"), tree: flag("tree") };
+  } catch {
+    return DEFAULT_VIEW;
+  }
+}
 
 const STATUS_LETTER: Record<ReviewFile["status"], string> = { added: "A", modified: "M", deleted: "D", renamed: "R", copied: "C", type_changed: "T" };
 const STATUS_LABEL: Record<ReviewFile["status"], string> = {
@@ -61,14 +104,30 @@ export function ReviewPanel({
   connection,
   refreshKey,
   onAddToChat,
+  onOpenFile,
   fallback,
 }: {
   connection: Connection | null;
   /** Changes whenever the files may have changed (a turn ended, the agent wrote a file). */
   refreshKey: string;
   onAddToChat: (text: string) => void;
+  /** Open a file in its own tab (from a diff's header). */
+  onOpenFile?: ((path: string) => void) | undefined;
   fallback: ReactNode;
 }) {
+  const [view, setViewState] = useState<ViewPrefs>(loadView);
+  const setView = (patch: Partial<ViewPrefs>) =>
+    setViewState(v => {
+      const next = { ...v, ...patch };
+      try {
+        localStorage.setItem(VIEW_KEY, JSON.stringify(next));
+      } catch {
+        /* not remembered */
+      }
+      return next;
+    });
+  const scroller = useRef<HTMLDivElement>(null);
+  const [folded, setFolded] = useState<Set<string>>(new Set());
   const [scope, setScope] = useState<Scope>({ scope: "branch" });
   const [layout, setLayoutState] = useState<Layout>(loadLayout);
   const setLayout = (l: Layout) => {
@@ -95,15 +154,19 @@ export function ReviewPanel({
     const mine = ++seq.current;
     setLoading(true);
     try {
-      const req: DiffRequest = scope.scope === "commit" ? { scope: "commit", commit: scope.commit } : { scope: scope.scope };
+      const req: DiffRequest = {
+        ...(scope.scope === "commit" ? { scope: "commit" as const, commit: scope.commit } : { scope: scope.scope }),
+        ...(view.ignoreWhitespace ? { ignoreWhitespace: true } : {}),
+      };
       const next = await fetchGitDiff(connection, req);
       if (mine !== seq.current) return;
       // First answer for this scope: open everything if the change is small.
       const key = `${next.scope}:${next.commit ?? ""}`;
       if (shownKey.current !== key) {
         shownKey.current = key;
-        const lines = next.files.reduce((n, f) => n + f.additions + f.deletions, 0);
-        setOpen(next.files.length <= AUTO_OPEN_FILES && lines <= AUTO_OPEN_LINES ? new Set(next.files.map(f => f.path)) : new Set());
+        setOpen(
+          next.files.length <= AUTO_OPEN_FILES ? new Set(next.files.filter(f => f.additions + f.deletions <= AUTO_OPEN_LINES).map(f => f.path)) : new Set(),
+        );
       }
       setData(next);
       setWider({});
@@ -116,14 +179,14 @@ export function ReviewPanel({
     } finally {
       if (mine === seq.current) setLoading(false);
     }
-  }, [connection, scope]);
+  }, [connection, scope, view.ignoreWhitespace]);
 
   // Load on open, when the scope changes, and (debounced) when the files may have changed.
   useEffect(() => {
     const t = setTimeout(() => void load(), data ? 600 : 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, refreshKey, scopeKey]);
+  }, [load, refreshKey, scopeKey, view.ignoreWhitespace]);
 
   const widen = async (f: ReviewFile, context: number) => {
     if (!connection) return;
@@ -133,6 +196,7 @@ export function ReviewPanel({
         path: f.path,
         ...(f.oldPath ? { oldPath: f.oldPath } : {}),
         context,
+        ...(view.ignoreWhitespace ? { ignoreWhitespace: true } : {}),
       };
       const r = await fetchGitDiff(connection, req);
       const file = r.files.find(x => x.path === f.path);
@@ -142,9 +206,13 @@ export function ReviewPanel({
     }
   };
 
+  const allFiles = useMemo(() => data?.files ?? [], [data]);
+  const testCount = useMemo(() => allFiles.filter(f => isTestFile(f.path)).length, [allFiles]);
+  const files = useMemo(() => (view.hideTests ? allFiles.filter(f => !isTestFile(f.path)) : allFiles), [allFiles, view.hideTests]);
+  const tree = useMemo(() => buildFileTree(files), [files]);
+
   if (unavailable || !connection) return <>{fallback}</>;
 
-  const files = data?.files ?? [];
   const additions = files.reduce((n, f) => n + f.additions, 0);
   const deletions = files.reduce((n, f) => n + f.deletions, 0);
   const commits = data?.commits ?? [];
@@ -159,6 +227,9 @@ export function ReviewPanel({
     setOpen(o => new Set(o).add(path));
     requestAnimationFrame(() => document.getElementById(fileAnchor(path))?.scrollIntoView({ block: "start" }));
   };
+  const anyOpen = files.some(f => open.has(f.path));
+  const toggleAll = () => setOpen(anyOpen ? new Set() : new Set(files.map(f => f.path)));
+  const hiddenTests = view.hideTests ? testCount : 0;
 
   return (
     <div role="tabpanel" aria-label="Changes" className="flex min-h-0 flex-1 flex-col">
@@ -208,6 +279,43 @@ export function ReviewPanel({
           )}
         </Menu>
         <span className="flex-1" />
+        {files.length > 0 && (
+          <Tip label={anyOpen ? "Collapse all files" : "Expand all files"} side="bottom">
+            <button
+              type="button"
+              aria-label={anyOpen ? "Collapse all files" : "Expand all files"}
+              onClick={toggleAll}
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink"
+            >
+              {anyOpen ? <ChevronsDownUp aria-hidden="true" className="size-3.5" /> : <ChevronsUpDown aria-hidden="true" className="size-3.5" />}
+            </button>
+          </Tip>
+        )}
+        <Menu
+          align="end"
+          trigger={
+            <button
+              type="button"
+              aria-label="View options"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep hover:text-ink data-[popup-open]:bg-cream-deep"
+            >
+              <SlidersHorizontal aria-hidden="true" className="size-3.5" />
+            </button>
+          }
+        >
+          <MenuCheck checked={view.tree} onChange={tree => setView({ tree })}>
+            Show the file list
+          </MenuCheck>
+          <MenuCheck checked={view.wrap} onChange={wrap => setView({ wrap })}>
+            Wrap long lines
+          </MenuCheck>
+          <MenuCheck checked={view.ignoreWhitespace} onChange={ignoreWhitespace => setView({ ignoreWhitespace })}>
+            Ignore whitespace changes
+          </MenuCheck>
+          <MenuCheck checked={view.hideTests} onChange={hideTests => setView({ hideTests })}>
+            Hide test files
+          </MenuCheck>
+        </Menu>
         <div role="radiogroup" aria-label="Diff layout" className="flex rounded-lg border border-line bg-cream-deep/60 p-0.5">
           {(
             [
@@ -253,37 +361,58 @@ export function ReviewPanel({
       {!data ? (
         <div className="flex flex-1 items-center justify-center text-[14px] text-ink-soft">{loading ? <Spinner /> : null}</div>
       ) : files.length === 0 ? (
-        <p className="m-3 rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
-          {scope.scope === "uncommitted" ? "Everything is committed." : "No changes here yet."}
-        </p>
+        <div className="m-3 rounded-lg border border-dashed border-line-strong px-4 py-8 text-center text-[14px] text-ink-soft">
+          <p>{hiddenTests > 0 ? "Only test files changed here." : scope.scope === "uncommitted" ? "Everything is committed." : "No changes here yet."}</p>
+          {hiddenTests > 0 && (
+            <Button size="sm" variant="secondary" className="mt-3" onClick={() => setView({ hideTests: false })}>
+              Show test files
+            </Button>
+          )}
+        </div>
       ) : (
-        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
           <div className="border-b border-line px-2 py-2">
-            <p className="flex items-center gap-2 px-2 pb-1 text-[13px] text-ink-soft">
+            <button
+              type="button"
+              aria-expanded={view.tree}
+              onClick={() => setView({ tree: !view.tree })}
+              className="flex h-7 w-full items-center gap-2 rounded-lg px-2 text-left text-[13px] text-ink-soft hover:bg-cream-deep"
+            >
+              <ChevronRight aria-hidden="true" className={cx("size-3.5 shrink-0 text-ink-faint", view.tree && "rotate-90")} />
               <span>
                 {files.length + (data.moreFiles ?? 0)} {files.length + (data.moreFiles ?? 0) === 1 ? "file" : "files"}
               </span>
               <Counts additions={additions} deletions={deletions} />
-            </p>
-            <ul aria-label="Changed files" className="flex flex-col gap-px">
-              {files.map(f => (
-                <li key={f.path}>
-                  <button
-                    type="button"
-                    onClick={() => jump(f.path)}
-                    title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}
-                    className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left hover:bg-cream-deep"
-                  >
-                    <StatusBadge status={f.status} />
-                    <PathLabel path={f.path} />
-                    <Counts additions={f.additions} deletions={f.deletions} binary={f.binary} />
-                  </button>
-                </li>
-              ))}
-            </ul>
+            </button>
+            {view.tree && (
+              <ul aria-label="Changed files" className="mt-0.5 flex flex-col gap-px">
+                <TreeRows
+                  nodes={tree}
+                  depth={0}
+                  folded={folded}
+                  onFold={path =>
+                    setFolded(f => {
+                      const n = new Set(f);
+                      if (n.has(path)) n.delete(path);
+                      else n.add(path);
+                      return n;
+                    })
+                  }
+                  onPick={jump}
+                />
+              </ul>
+            )}
             {data.moreFiles > 0 && (
               <p className="px-2 pt-1 text-[13px] text-ink-soft">
                 {data.moreFiles} more {data.moreFiles === 1 ? "file isn't" : "files aren't"} listed because the change is very large.
+              </p>
+            )}
+            {hiddenTests > 0 && (
+              <p className="flex items-center gap-2 px-2 pt-1 text-[13px] text-ink-soft">
+                {hiddenTests} test {hiddenTests === 1 ? "file is" : "files are"} hidden.
+                <button type="button" onClick={() => setView({ hideTests: false })} className="rounded-md px-1 font-medium text-ink hover:bg-cream-deep">
+                  Show
+                </button>
               </p>
             )}
           </div>
@@ -295,6 +424,8 @@ export function ReviewPanel({
                   key={f.path}
                   file={shown}
                   layout={layout}
+                  wrap={view.wrap}
+                  root={scroller}
                   open={open.has(f.path)}
                   onToggle={() =>
                     setOpen(o => {
@@ -307,6 +438,7 @@ export function ReviewPanel({
                   context={wider[f.path]?.context ?? 3}
                   onWiden={context => void widen(f, context)}
                   onAddToChat={onAddToChat}
+                  onOpenFile={onOpenFile && f.status !== "deleted" ? () => onOpenFile(f.path) : undefined}
                 />
               );
             })}
@@ -314,6 +446,63 @@ export function ReviewPanel({
         </div>
       )}
     </div>
+  );
+}
+
+/** The changed files as folders that fold, each file jumping to its diff. */
+function TreeRows({
+  nodes,
+  depth,
+  folded,
+  onFold,
+  onPick,
+}: {
+  nodes: FileTreeNode<ReviewFile>[];
+  depth: number;
+  folded: Set<string>;
+  onFold: (path: string) => void;
+  onPick: (path: string) => void;
+}) {
+  const indent = { paddingLeft: 8 + depth * 14 };
+  return (
+    <>
+      {nodes.map(n =>
+        n.kind === "dir" ? (
+          <li key={`d:${n.path}`}>
+            <button
+              type="button"
+              aria-expanded={!folded.has(n.path)}
+              onClick={() => onFold(n.path)}
+              style={indent}
+              className="flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-left hover:bg-cream-deep"
+            >
+              <ChevronRight aria-hidden="true" className={cx("size-3.5 shrink-0 text-ink-faint", !folded.has(n.path) && "rotate-90")} />
+              <Folder aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
+              <span className="min-w-0 truncate font-mono text-[13px] text-ink-soft">{n.name}</span>
+            </button>
+            {!folded.has(n.path) && (
+              <ul className="flex flex-col gap-px">
+                <TreeRows nodes={n.children} depth={depth + 1} folded={folded} onFold={onFold} onPick={onPick} />
+              </ul>
+            )}
+          </li>
+        ) : (
+          <li key={`f:${n.path}`}>
+            <button
+              type="button"
+              onClick={() => onPick(n.path)}
+              title={n.file.oldPath ? `${n.file.oldPath} → ${n.path}` : n.path}
+              style={{ paddingLeft: indent.paddingLeft + 20 }}
+              className="flex h-7 w-full items-center gap-2 rounded-lg pr-2 text-left hover:bg-cream-deep"
+            >
+              <StatusBadge status={n.file.status} />
+              <span className="min-w-0 flex-1 truncate font-mono text-[13px] text-ink">{n.name}</span>
+              <Counts additions={n.file.additions} deletions={n.file.deletions} binary={n.file.binary} />
+            </button>
+          </li>
+        ),
+      )}
+    </>
   );
 }
 
@@ -365,26 +554,78 @@ interface Picked {
   focus: number;
 }
 
+/** Draw a file once it comes within this far of the visible part of the list. */
+const NEAR_VIEW = "800px 0px";
+
+/** Becomes true once `ref` scrolls near the visible part of `root`, and stays true. */
+function useSeen(ref: RefObject<HTMLElement | null>, root: RefObject<HTMLElement | null>): boolean {
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (seen || !el) return;
+    if (typeof IntersectionObserver === "undefined") return setSeen(true);
+    const io = new IntersectionObserver(entries => entries.some(e => e.isIntersecting) && setSeen(true), { root: root.current, rootMargin: NEAR_VIEW });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, root, seen]);
+  return seen;
+}
+
+/** Syntax colours for each diff line, worked out off the main thread once the file is drawn. */
+function useDiffHighlight(path: string, lines: ReviewLine[], enabled: boolean): Map<ReviewLine, ReactNode> | null {
+  const [shown, setShown] = useState<Map<ReviewLine, ReactNode> | null>(null);
+  useEffect(() => {
+    setShown(null);
+    if (!enabled || !lines.length) return;
+    const sides = diffSides(lines);
+    if (!sides) return;
+    let live = true;
+    void highlightDiffSides(sides, languageFor(path)).then(r => {
+      if (!live || !r) return;
+      const nodes = highlightedDiffLines(lines, r.old ?? [], r.new ?? []);
+      const out = new Map<ReviewLine, ReactNode>();
+      let i = 0;
+      for (const [line, hl] of nodes) out.set(line, renderHighlighted(hl, `l${i++}`));
+      setShown(out);
+    });
+    return () => {
+      live = false;
+    };
+  }, [path, lines, enabled]);
+  return shown;
+}
+
 function FileDiffCard({
   file,
   layout,
+  wrap,
+  root,
   open,
   onToggle,
   context,
   onWiden,
   onAddToChat,
+  onOpenFile,
 }: {
   file: ReviewFile;
   layout: Layout;
+  wrap: boolean;
+  /** The scrolling list, to draw files only as they come into view. */
+  root: RefObject<HTMLDivElement | null>;
   open: boolean;
   onToggle: () => void;
   context: number;
   onWiden: (context: number) => void;
   onAddToChat: (text: string) => void;
+  onOpenFile?: (() => void) | undefined;
 }) {
+  const card = useRef<HTMLElement>(null);
+  const seen = useSeen(card, root);
   // Every line in order, so a picked range is a slice of this list.
   const numbered = useMemo(() => file.hunks.map(numberHunk), [file.hunks]);
   const flat = useMemo(() => numbered.flat(), [numbered]);
+  const drawn = open && seen;
+  const hl = useDiffHighlight(file.path, flat, drawn && !file.binary);
   const indexOf = useMemo(() => new Map(flat.map((l, i) => [l, i])), [flat]);
   const [picked, setPicked] = useState<Picked | null>(null);
   useEffect(() => setPicked(null), [file]);
@@ -409,7 +650,7 @@ function FileDiffCard({
   })();
 
   return (
-    <section id={fileAnchor(file.path)} aria-label={file.path} className="overflow-hidden rounded-xl border border-line bg-paper shadow-panel">
+    <section ref={card} id={fileAnchor(file.path)} aria-label={file.path} className="overflow-hidden rounded-xl border border-line bg-paper shadow-panel">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-paper px-2 py-1.5">
         <button
           type="button"
@@ -425,6 +666,18 @@ function FileDiffCard({
           </span>
           <Counts additions={file.additions} deletions={file.deletions} binary={file.binary} />
         </button>
+        {onOpenFile && (
+          <Tip label="Open the file" side="bottom">
+            <button
+              type="button"
+              aria-label="Open the file"
+              onClick={onOpenFile}
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-ink-soft hover:bg-cream-deep hover:text-ink"
+            >
+              <FileText aria-hidden="true" className="size-3.5" />
+            </button>
+          </Tip>
+        )}
         {open && !file.binary && file.hunks.length > 0 && context < WHOLE_FILE && (
           <Tip label="Show the whole file" side="bottom">
             <button
@@ -462,7 +715,11 @@ function FileDiffCard({
           </button>
         </div>
       )}
-      {open && (
+      {open && !seen && (
+        // Not near the view yet: hold its place, so the scrollbar and jumps stay right.
+        <div aria-hidden="true" style={{ height: Math.min(4000, Math.max(1, flat.length) * LINE_PX + file.hunks.length * 24) }} />
+      )}
+      {drawn && (
         <div className="scroll-thin overflow-x-auto">
           {file.binary ? (
             <p className="px-4 py-3 text-[13px] text-ink-soft">Binary file, not shown.</p>
@@ -471,7 +728,7 @@ function FileDiffCard({
               {file.truncated ? "This file's diff is too large to show here." : file.status === "renamed" ? "Renamed without changes." : "No line changes."}
             </p>
           ) : (
-            <table className={cx("w-full border-collapse font-mono text-[12px] leading-[1.6]", layout === "split" && "table-fixed")}>
+            <table className={cx("w-full border-collapse font-mono text-[12px] leading-[1.6]", (layout === "split" || wrap) && "table-fixed", hl && "md-code")}>
               {layout === "split" && (
                 // Side by side: two equal halves; long lines wrap rather than push the other side away.
                 <colgroup>
@@ -483,13 +740,21 @@ function FileDiffCard({
                   <col />
                 </colgroup>
               )}
+              {layout === "unified" && wrap && (
+                <colgroup>
+                  <col className="w-10" />
+                  <col className="w-10" />
+                  <col className="w-4" />
+                  <col />
+                </colgroup>
+              )}
               <tbody>
                 {file.hunks.map((h, hi) => (
                   <Fragment key={`${hi}:${h.header}`}>
                     <GapRow hunks={file.hunks} index={hi} layout={layout} onMore={() => onWiden(context + MORE_CONTEXT)} hunk={h} />
                     {layout === "unified"
-                      ? numbered[hi]!.map((l, li) => <UnifiedRow key={li} line={l} picked={isPicked(l)} onPick={pick} />)
-                      : splitRows(numbered[hi]!).map((r, ri) => <SplitRowView key={ri} row={r} isPicked={isPicked} onPick={pick} />)}
+                      ? numbered[hi]!.map((l, li) => <UnifiedRow key={li} line={l} picked={isPicked(l)} onPick={pick} wrap={wrap} code={hl?.get(l)} />)
+                      : splitRows(numbered[hi]!).map((r, ri) => <SplitRowView key={ri} row={r} isPicked={isPicked} onPick={pick} hl={hl} />)}
                   </Fragment>
                 ))}
               </tbody>
@@ -556,7 +821,20 @@ function LineNo({ n, line, picked, onPick }: { n: number | null; line: ReviewLin
   );
 }
 
-function UnifiedRow({ line, picked, onPick }: { line: ReviewLine; picked: boolean; onPick: (l: ReviewLine, extend: boolean) => void }) {
+function UnifiedRow({
+  line,
+  picked,
+  onPick,
+  wrap,
+  code,
+}: {
+  line: ReviewLine;
+  picked: boolean;
+  onPick: (l: ReviewLine, extend: boolean) => void;
+  wrap: boolean;
+  /** The line with syntax colours, once they're ready. */
+  code?: ReactNode | undefined;
+}) {
   return (
     <tr className={cx(LINE_BG[line.kind], picked && "outline-2 -outline-offset-2 outline-[#e9c900]")}>
       <LineNo n={line.oldNo} line={line} picked={picked} onPick={onPick} />
@@ -564,9 +842,9 @@ function UnifiedRow({ line, picked, onPick }: { line: ReviewLine; picked: boolea
       <td aria-hidden="true" className={cx("w-4 pl-1.5 align-top select-none", LINE_FG[line.kind])}>
         {SIGN[line.kind]}
       </td>
-      <td className={cx("pr-3 align-top whitespace-pre", LINE_FG[line.kind])}>
+      <td className={cx("pr-3 align-top", wrap ? "break-all whitespace-pre-wrap" : "whitespace-pre", code ? "text-ink" : LINE_FG[line.kind])}>
         <span className="sr-only">{line.kind === "add" ? "Added: " : line.kind === "del" ? "Removed: " : ""}</span>
-        {line.text || " "}
+        {code ?? (line.text || " ")}
       </td>
     </tr>
   );
@@ -576,10 +854,12 @@ function SplitRowView({
   row,
   isPicked,
   onPick,
+  hl,
 }: {
   row: ReturnType<typeof splitRows>[number];
   isPicked: (l: ReviewLine | null) => boolean;
   onPick: (l: ReviewLine, extend: boolean) => void;
+  hl: Map<ReviewLine, ReactNode> | null;
 }) {
   const side = (l: ReviewLine | null, which: "left" | "right") => {
     if (!l) return <td colSpan={3} className={cx("bg-cream/60", which === "left" && "border-r border-line/70")} />;
@@ -595,13 +875,13 @@ function SplitRowView({
           className={cx(
             "pr-3 align-top break-all whitespace-pre-wrap",
             LINE_BG[l.kind],
-            LINE_FG[l.kind],
+            hl?.has(l) ? "text-ink" : LINE_FG[l.kind],
             which === "left" && "border-r border-line/70",
             picked && "outline-2 -outline-offset-2 outline-[#e9c900]",
           )}
         >
           <span className="sr-only">{l.kind === "add" ? "Added: " : l.kind === "del" ? "Removed: " : ""}</span>
-          {l.text || " "}
+          {hl?.get(l) ?? (l.text || " ")}
         </td>
       </>
     );

@@ -53,6 +53,7 @@ import {
   type AgentInstall,
   type NotifyTarget,
 } from "./lib/system.ts";
+import { focusedScripts, requestScript } from "./lib/projectScripts.ts";
 import {
   confirmAction,
   inDesktopShell,
@@ -1188,6 +1189,12 @@ export function App() {
           const rowId = sidebarRows.current[n - 1];
           return select(list.find(t => t.id === rowId));
         }
+        case "run-script-1":
+        case "run-script-2":
+        case "run-script-3":
+        case "run-script-4":
+          if (here.view === "thread") requestScript({ keybinding: id });
+          return;
       }
     },
     [go, onPrefs, togglePanel, moveHistory, splitRight, commitLayout, focusPaneAt, setPinned],
@@ -1626,12 +1633,19 @@ export function App() {
     const paneCommands = (["maximise-pane", "focus-pane-1", "focus-pane-2", "focus-pane-3", "focus-pane-4", "focus-pane-5", "focus-pane-6"] as const).filter(
       id => paneCount === 0 || (id !== "maximise-pane" && Number(id.slice(-1)) > paneCount),
     );
+    // Script shortcuts show as the scripts themselves, by name.
+    const scripts = inThread ? focusedScripts().map(sc => ({ id: `script:${sc.id}`, label: `Run ${sc.name}`, keywords: `project script ${sc.command}` })) : [];
+    extras.push(...scripts);
     const skip: ShortcutId[] = [
       "settings",
       // Which thread these reach depends on the sidebar, so they're keys only.
       "sidebar-thread-7",
       "sidebar-thread-8",
       "sidebar-thread-9",
+      "run-script-1",
+      "run-script-2",
+      "run-script-3",
+      "run-script-4",
       ...(inThread ? [] : (["pin-thread", "archive-thread", "find", "split-right", "quick-open", "reopen-tab"] as const)),
       ...paneCommands,
     ];
@@ -1679,6 +1693,7 @@ export function App() {
       requestSettingTarget(e.page, settingAnchor(e));
       return go({ view: "settings", page: e.page as SettingsPage });
     }
+    if (value.startsWith("script:")) return requestScript({ id: value.slice("script:".length) });
     if (value === "plugins") return go({ view: "plugins" });
     if (value === "add-project") return void addProject();
     if (value.startsWith("settings:")) return go({ view: "settings", page: value.slice("settings:".length) as SettingsPage });

@@ -44,6 +44,8 @@ export interface DiffRequest {
   path?: string;
   oldPath?: string;
   context?: number;
+  /** Leave out changes to spaces and indentation only. */
+  ignoreWhitespace?: boolean;
 }
 
 export function fetchGitDiff(connection: Connection, q: DiffRequest, fetchImpl?: FetchLike): Promise<GitDiffResponse> {
@@ -52,6 +54,7 @@ export function fetchGitDiff(connection: Connection, q: DiffRequest, fetchImpl?:
   if (q.path) params.set("path", q.path);
   if (q.oldPath) params.set("oldPath", q.oldPath);
   if (q.context !== undefined) params.set("context", String(q.context));
+  if (q.ignoreWhitespace) params.set("whitespace", "ignore");
   return call(connection, `/git/diff?${params}`, GitDiffResponse, {}, fetchImpl);
 }
 
@@ -178,6 +181,18 @@ export function quoteLines(path: string, lines: ReviewLine[]): string {
   const body = picked.map(l => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`).join("\n");
   const fence = body.includes("```") ? "````" : "```";
   return `${where}\n${fence}diff\n${body}\n${fence}\n`;
+}
+
+/** The text "Add to chat" puts in the composer for text picked in a terminal. */
+export function quoteTerminal(text: string): string {
+  const body = text
+    .split(/\r?\n/)
+    .map(l => l.trimEnd())
+    .join("\n")
+    .replace(/^\n+|\n+$/g, "");
+  if (!body.trim()) return "";
+  const fence = body.includes("```") ? "````" : "```";
+  return `From the terminal:\n${fence}text\n${body}\n${fence}\n`;
 }
 
 /** A path split so the file name stays whole and the folders can shrink. */

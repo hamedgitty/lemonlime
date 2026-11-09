@@ -1,3 +1,4 @@
+import { spawn as spawnChild } from "node:child_process";
 import { createRequire } from "node:module";
 import { basename, join } from "node:path";
 import { MAX_TERMINALS, TERMINAL_REPLAY_CHARS } from "@lemonlime/protocol";
@@ -43,6 +44,92 @@ export function shellEnv(env: NodeJS.ProcessEnv = process.env): Record<string, s
   return out;
 }
 
+const defaultShell = () => process.env.SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/bash");
+
+/** A login shell, or one that runs `command` and ends (PowerShell and cmd on Windows). */
+export function shellArgs(shell: string, command: string | null, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === "win32") {
+    if (!command) return [];
+    return /cmd(\.exe)?$/i.test(shell) ? ["/d", "/s", "/c", command] : ["-NoLogo", "-Command", command];
+  }
+  return command ? ["-l", "-c", command] : ["-l"];
+}
+
+export interface ScriptRun {
+  ok: boolean;
+  /** The exit code, or null when it was stopped (timed out, or the runner is closing). */
+  code: number | null;
+  timedOut: boolean;
+  /** The end of what it printed. */
+  output: string;
+  ms: number;
+}
+
+/** Most of a script's output kept for its notice. */
+const SCRIPT_OUTPUT_KEPT = 6000;
+
+/**
+ * Run a command to the end in a login shell, without a terminal (setup when a worktree is
+ * made). It gets its own process group, so a timeout stops everything it started.
+ */
+export function runScriptToEnd(o: {
+  command: string;
+  cwd: string;
+  env: Record<string, string>;
+  timeoutMs: number;
+  shell?: string;
+  signal?: AbortSignal;
+}): Promise<ScriptRun> {
+  const started = Date.now();
+  const shell = o.shell ?? defaultShell();
+  return new Promise(resolve => {
+    let output = "";
+    let timedOut = false;
+    const keep = (b: Buffer) => {
+      output = (output + b.toString()).slice(-SCRIPT_OUTPUT_KEPT * 2);
+    };
+    let child: ReturnType<typeof spawnChild>;
+    try {
+      child = spawnChild(shell, shellArgs(shell, o.command), {
+        cwd: o.cwd,
+        env: { ...shellEnv(), ...o.env, TERM: "dumb" } as unknown as NodeJS.ProcessEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: process.platform !== "win32",
+      });
+    } catch (err) {
+      return resolve({ ok: false, code: null, timedOut: false, output: err instanceof Error ? err.message : String(err), ms: 0 });
+    }
+    const stop = () => {
+      try {
+        if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stop();
+    }, o.timeoutMs);
+    o.signal?.addEventListener("abort", stop, { once: true });
+    child.stdout?.on("data", keep);
+    child.stderr?.on("data", keep);
+    child.on("error", err => keep(Buffer.from(`\n${err.message}\n`)));
+    child.on("close", code => {
+      clearTimeout(timer);
+      o.signal?.removeEventListener("abort", stop);
+      const text = output.trim();
+      resolve({
+        ok: code === 0 && !timedOut,
+        code: timedOut ? null : code,
+        timedOut,
+        output: text.length > SCRIPT_OUTPUT_KEPT ? `…${text.slice(-SCRIPT_OUTPUT_KEPT)}` : text,
+        ms: Date.now() - started,
+      });
+    });
+  });
+}
+
 export type TerminalListener = {
   output(data: string, end: number): void;
   exit(code: number | null): void;
@@ -57,6 +144,8 @@ export type TerminalListener = {
  */
 export class TerminalSession {
   private pty: Pty | null = null;
+  /** A script this terminal runs instead of an interactive shell (see project-scripts). */
+  command: string | null;
   private chunks: string[] = [];
   private kept = 0;
   /** Characters of output since the shell started. */
@@ -69,8 +158,12 @@ export class TerminalSession {
   constructor(
     private readonly spawn: SpawnPty,
     private readonly cwd: string,
-    private readonly shell: string = process.env.SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/bash"),
-  ) {}
+    private readonly shell: string = defaultShell(),
+    private readonly env: Record<string, string> = {},
+    command: string | null = null,
+  ) {
+    this.command = command;
+  }
 
   /** The shell program's name, e.g. "zsh". */
   get name(): string {
@@ -93,7 +186,12 @@ export class TerminalSession {
     this.total = 0;
     this.generation++;
     for (const l of this.listeners) l.restarted(this.generation);
-    const pty = this.spawn(this.shell, process.platform === "win32" ? [] : ["-l"], { ...this.size, cwd: this.cwd, env: shellEnv(), name: "xterm-256color" });
+    const pty = this.spawn(this.shell, shellArgs(this.shell, this.command), {
+      ...this.size,
+      cwd: this.cwd,
+      env: { ...shellEnv(), ...this.env },
+      name: "xterm-256color",
+    });
     this.pty = pty;
     pty.onData(data => {
       this.total += data.length;
@@ -157,6 +255,8 @@ export class TerminalPool {
     private readonly cwd: string,
     readonly max: number = MAX_TERMINALS,
     private readonly shell?: string,
+    /** Extra variables for every terminal (the thread's id and paths). */
+    private readonly env: Record<string, string> = {},
   ) {}
 
   get size(): number {
@@ -167,12 +267,16 @@ export class TerminalPool {
     return [...this.sessions.keys()];
   }
 
-  /** The terminal with this id, made (not started) if it's new and there's room. */
-  open(id: string): TerminalSession | null {
+  get(id: string): TerminalSession | undefined {
+    return this.sessions.get(id);
+  }
+
+  /** The terminal with this id, made (not started) if it's new and there's room. A `command` makes it run that script. */
+  open(id: string, opts: { command?: string; env?: Record<string, string> } = {}): TerminalSession | null {
     const known = this.sessions.get(id);
     if (known) return known;
     if (this.sessions.size >= this.max) return null;
-    const session = new TerminalSession(this.spawn, this.cwd, this.shell);
+    const session = new TerminalSession(this.spawn, this.cwd, this.shell, { ...this.env, ...opts.env }, opts.command ?? null);
     this.sessions.set(id, session);
     return session;
   }

@@ -10,7 +10,7 @@ interface Helpers {
 /**
  * The thread's branch for review, with a client token (checked by the caller):
  * - `GET /git/status`: changed-file counts, commits, push state, compare page, whether `gh` works
- * - `GET /git/diff?scope=branch|uncommitted|commit&commit=<sha>&path=<file>&oldPath=<file>&context=<n>`
+ * - `GET /git/diff?scope=branch|uncommitted|commit&commit=<sha>&path=<file>&oldPath=<file>&context=<n>&whitespace=ignore`
  * - `GET /git/pull-request`: the branch's pull request, when `gh` can tell
  * - `POST /git/push`: push the branch to origin (never forced)
  * - `POST /git/pull-request` {title?, body?, draft?}: push, then open one with `gh`, or
@@ -38,6 +38,7 @@ export async function handleGitApi(req: IncomingMessage, res: ServerResponse, pa
           ...(q.get("path") ? { path: q.get("path")! } : {}),
           ...(q.get("oldPath") ? { oldPath: q.get("oldPath")! } : {}),
           ...(context && /^\d+$/.test(context) ? { context: Number(context) } : {}),
+          ...(q.get("whitespace") === "ignore" ? { ignoreWhitespace: true } : {}),
         }),
       );
     }

@@ -44,18 +44,37 @@ export function Timeline({
   onApprove,
   onImplementPlan,
   onLimitWait,
+  onContinueAfterRestart,
 }: {
   items: TimelineItem[];
   onApprove?: ApproveFn;
   onImplementPlan?: (() => void) | undefined;
   /** Ask the runner to try again once the usage limit resets (while connected). */
   onLimitWait?: (() => void) | undefined;
+  /** Carry on after the runner restarted mid-turn (while connected). */
+  onContinueAfterRestart?: (() => void) | undefined;
 }) {
+  // Only the newest cut-short notice offers Continue, and only while nothing was sent since.
+  let restartKey: string | null = null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!;
+    if (it.kind === "user") break;
+    if (it.kind === "error" && it.event.code === "turn_outcome_unknown") {
+      restartKey = it.key;
+      break;
+    }
+  }
   return (
     <ol className="space-y-4">
       {items.map(item => (
         <li key={item.key}>
-          <Item item={item} onApprove={onApprove} onImplementPlan={onImplementPlan} onLimitWait={onLimitWait} />
+          <Item
+            item={item}
+            onApprove={onApprove}
+            onImplementPlan={onImplementPlan}
+            onLimitWait={onLimitWait}
+            onContinue={item.key === restartKey ? onContinueAfterRestart : undefined}
+          />
         </li>
       ))}
     </ol>
@@ -110,11 +129,13 @@ function Item({
   onApprove,
   onImplementPlan,
   onLimitWait,
+  onContinue,
 }: {
   item: TimelineItem;
   onApprove?: ApproveFn | undefined;
   onImplementPlan?: (() => void) | undefined;
   onLimitWait?: (() => void) | undefined;
+  onContinue?: (() => void) | undefined;
 }) {
   switch (item.kind) {
     case "plan":
@@ -180,6 +201,7 @@ function Item({
           <p className="font-medium">{item.event.fatal ? "The thread stopped with an error" : "The agent hit an error"}</p>
           <p className="mt-1 whitespace-pre-wrap break-words">{item.event.message}</p>
           {item.event.code && <p className="mt-1 font-mono text-xs text-red-800/80">{item.event.code}</p>}
+          {onContinue && <ContinueButton onContinue={onContinue} />}
         </div>
       );
   }
@@ -282,6 +304,27 @@ function DiffItem({ event }: { event: EventOf<"file_diff"> }) {
 
 /** When a limit resets, in the reader's own time zone (rendered in the browser). */
 const AGENT_NAMES: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex", opencode: "OpenCode", acp: "The agent" };
+
+/** Continue after a restart cut the turn short: the agent checks what already happened first. */
+function ContinueButton({ onContinue }: { onContinue: () => void }) {
+  const [sent, setSent] = useState(false);
+  return (
+    <p className="mt-3 flex flex-wrap items-center gap-3">
+      <button
+        type="button"
+        className="btn-ghost h-8"
+        disabled={sent}
+        onClick={() => {
+          setSent(true);
+          onContinue();
+        }}
+      >
+        Continue
+      </button>
+      <span className="text-[13px] text-red-900/80">The agent checks what already happened before it repeats anything.</span>
+    </p>
+  );
+}
 
 function LimitItem({ item, onWait }: { item: Extract<TimelineItem, { kind: "limit" }>; onWait?: (() => void) | undefined }) {
   const [sent, setSent] = useState(false);

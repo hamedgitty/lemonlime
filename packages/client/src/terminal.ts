@@ -8,6 +8,8 @@ export interface TerminalClientOptions {
   token: string | (() => Promise<string>);
   /** Which of the thread's terminals (see MAX_TERMINALS); the runner's default when left out. */
   terminal?: string;
+  /** This terminal runs one of the project's scripts (by id); `restart` runs it. */
+  script?: string;
   cols: number;
   rows: number;
   WebSocketImpl?: typeof WebSocket;
@@ -108,6 +110,7 @@ export class TerminalClient {
           token,
           ...this.size,
           ...(this.opts.terminal ? { terminal: this.opts.terminal } : {}),
+          ...(this.opts.script ? { script: this.opts.script } : {}),
           ...(this.shell !== undefined ? { shell: this.shell } : {}),
           ...(this.end !== undefined ? { resumeFrom: this.end } : {}),
         } satisfies TerminalClientMessage),

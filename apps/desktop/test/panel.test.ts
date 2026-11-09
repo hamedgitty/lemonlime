@@ -8,6 +8,7 @@ import {
   moveTab,
   newTerminal,
   openFile,
+  openScript,
   panelBounds,
   PANEL_WIDTH,
   reopenTab,
@@ -37,6 +38,26 @@ describe("panel tabs", () => {
     expect(s.tabs.map(t => (t.kind === "terminal" ? t.n : 0))).toEqual([2, 1]);
     while (s.tabs.length < MAX_TERMINALS) s = newTerminal(s, rand)!;
     expect(newTerminal(s, rand)).toBeNull();
+  });
+
+  it("opens a script's own terminal once, named after the script", () => {
+    let s = openScript(emptyPanel(), { id: "dev", name: "Dev" })!;
+    expect(s.tabs).toEqual([{ kind: "terminal", id: "term:script-dev", terminal: "script-dev", n: 1, script: "dev", label: "Dev" }]);
+    s = openScript({ ...s, active: "changes" }, { id: "dev", name: "Dev" })!;
+    expect(s.tabs).toHaveLength(1);
+    expect(s.active).toBe("term:script-dev");
+    expect(terminalLabel(s.tabs[0] as { n: number; label?: string }, "zsh", "~/code")).toBe("Dev");
+    let full = emptyPanel();
+    for (let i = 0; i < MAX_TERMINALS; i++) full = newTerminal(full, () => String(i))!;
+    expect(openScript(full, { id: "dev", name: "Dev" })).toBeNull();
+  });
+
+  it("opens a file at a line, moving an open tab to the new line", () => {
+    let s = openFile(emptyPanel(), "a.ts", 12);
+    expect(s.tabs).toEqual([{ kind: "file", id: "file:a.ts", path: "a.ts", line: 12 }]);
+    s = openFile({ ...s, active: "changes" }, "a.ts", 40);
+    expect(s.tabs).toEqual([{ kind: "file", id: "file:a.ts", path: "a.ts", line: 40 }]);
+    expect(s.active).toBe("file:a.ts");
   });
 
   it("opens a file once, closes to the neighbour, and reopens the last closed tab", () => {

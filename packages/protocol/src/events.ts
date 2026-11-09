@@ -177,6 +177,17 @@ export const PreviewUpdateEvent = z.object({
   previews: z.array(Preview),
 });
 
+/**
+ * Ports that programs started in this thread (by the agent or in its terminals) are
+ * listening on, found by the runner on its own; sent whenever the list changes. Apps offer
+ * the ones that aren't previews yet ("Open localhost:5173"; see `offer_preview`).
+ */
+export const ListeningPortsEvent = z.object({
+  ...base,
+  type: z.literal("listening_ports"),
+  ports: z.array(z.object({ port: z.number().int().min(1).max(65535), command: z.string().max(80) })).max(50),
+});
+
 /** The thread's model, reasoning or permission mode changed (see `set_options`). */
 export const OptionsChangeEvent = z.object({
   ...base,
@@ -314,6 +325,7 @@ export const ThreadEvent = z.discriminatedUnion("type", [
   ApprovalResultEvent,
   RewindEvent,
   PreviewUpdateEvent,
+  ListeningPortsEvent,
   OptionsChangeEvent,
   TodoSnapshotEvent,
   QuestionRequestEvent,

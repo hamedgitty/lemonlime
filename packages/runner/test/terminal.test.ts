@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import WebSocket from "ws";
 import { branchForThread, parseTerminalServerMessage, signToken, type TerminalServerMessage, type Thread } from "@lemonlime/protocol";
 import { TerminalClient } from "@lemonlime/client";
 import { loadPty, shellEnv, startServer, TerminalPool, TerminalSession, ThreadRunner, type AgentAdapter, type Pty, type SpawnPty } from "../src/index.ts";
+import { runScriptToEnd, shellArgs } from "../src/terminal.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const cleanups: (() => unknown)[] = [];
@@ -32,8 +33,9 @@ function thread(id: string): Thread {
   };
 }
 
-async function boot(spawn: Awaited<ReturnType<typeof loadPty>>, max?: number) {
+async function boot(spawn: Awaited<ReturnType<typeof loadPty>>, max?: number, files: Record<string, string> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "lemonlime-term-"));
+  for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
   const runner = new ThreadRunner({
     thread: thread("term-thread-1"),
     workdir: dir,
@@ -56,7 +58,7 @@ async function boot(spawn: Awaited<ReturnType<typeof loadPty>>, max?: number) {
     () => runner.close(),
     () => server.close(),
   );
-  return server.port;
+  return { port: server.port, runner, dir };
 }
 
 function open(port: number, hello: { resumeFrom?: number; shell?: number; token?: string; terminal?: string } = {}) {
@@ -94,7 +96,7 @@ describe("thread terminal", () => {
   it("runs a real shell in the thread's folder, and picks up where a client left off", async () => {
     const spawn = await loadPty();
     if (!spawn || process.platform === "win32") return; // no prebuilt PTY here
-    const port = await boot(spawn);
+    const { port } = await boot(spawn);
     const a = open(port);
     await a.ready;
     await until(() => a.got.some(m => m.type === "ready"));
@@ -124,7 +126,7 @@ describe("thread terminal", () => {
   it("the app's client resumes after a dropped connection without repeating output", async () => {
     const spawn = await loadPty();
     if (!spawn || process.platform === "win32") return;
-    const port = await boot(spawn);
+    const { port } = await boot(spawn);
     let screen = "";
     let resets = 0;
     const states: string[] = [];
@@ -154,7 +156,7 @@ describe("thread terminal", () => {
   });
 
   it("refuses runner tokens and bad tokens", async () => {
-    const port = await boot(null);
+    const { port } = await boot(null);
     const runnerToken = await signToken({ threadId: "term-thread-1", scope: "runner", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET);
     const a = open(port, { token: runnerToken });
     await a.ready;
@@ -198,7 +200,7 @@ describe("thread terminal", () => {
         kill: () => void (p.killed = true),
       };
     };
-    const port = await boot(spawn, 2);
+    const { port } = await boot(spawn, 2);
     const a = open(port);
     const b = open(port, { terminal: "two" });
     await Promise.all([a.ready, b.ready]);
@@ -245,5 +247,72 @@ describe("thread terminal", () => {
     expect(pool.open("c")).not.toBeNull();
     pool.closeAll();
     expect(pool.size).toBe(0);
+  });
+
+  it("runs a project script only when asked, with the project's paths, and again on restart", async () => {
+    const spawned: { file: string; args: string[]; env: Record<string, string>; exit: (code: number) => void }[] = [];
+    const spawn: SpawnPty = (file, args, o) => {
+      const p = { file, args, env: o.env, exit: (_c: number) => {} };
+      spawned.push(p);
+      return {
+        onData: () => ({ dispose() {} }),
+        onExit: cb => ((p.exit = code => cb({ exitCode: code })), { dispose() {} }),
+        write() {},
+        resize() {},
+        kill() {},
+      };
+    };
+    const project = JSON.stringify({ scripts: [{ name: "Dev", command: "pnpm dev", previewUrl: "http://localhost:5173/" }] });
+    const { port, runner, dir } = await boot(spawn, undefined, { "lemonlime.json": project });
+    // The app lists the scripts, and checks paths the terminal printed, over HTTP.
+    const auth = {
+      authorization: `Bearer ${await signToken({ threadId: "term-thread-1", scope: "client", exp: Math.floor(Date.now() / 1000) + 60 }, SECRET)}`,
+    };
+    const listed = (await (await fetch(`http://127.0.0.1:${port}/project-scripts`, { headers: auth })).json()) as { scripts: { id: string }[] };
+    expect(listed.scripts.map(x => x.id)).toEqual(["dev"]);
+    const exists = await fetch(`http://127.0.0.1:${port}/file-exists?path=./lemonlime.json`, { headers: auth });
+    expect(await exists.json()).toEqual({ path: "lemonlime.json" });
+    expect((await fetch(`http://127.0.0.1:${port}/file-exists?path=nope.ts`, { headers: auth })).status).toBe(404);
+    expect((await fetch(`http://127.0.0.1:${port}/project-scripts`)).status).toBe(401);
+    const a = open(port, { terminal: "script-dev", script: "dev" } as { terminal: string });
+    await a.ready;
+    await until(() => a.got.length > 0);
+    // Connecting doesn't run it.
+    expect(a.got[0]).toMatchObject({ type: "ready", running: false });
+    expect(spawned).toHaveLength(0);
+    a.send({ type: "restart" });
+    await until(() => spawned.length === 1);
+    expect(spawned[0]!.args).toEqual(process.platform === "win32" ? ["-NoLogo", "-Command", "pnpm dev"] : ["-l", "-c", "pnpm dev"]);
+    expect(spawned[0]!.env).toMatchObject({ LEMONLIME_PROJECT_ROOT: dir, LEMONLIME_WORKTREE_PATH: dir, LEMONLIME_THREAD_ID: "term-thread-1" });
+    // Its preview address is offered in the panel's browser.
+    expect(runner.previews).toMatchObject([{ port: 5173, name: "Dev" }]);
+    spawned[0]!.exit(0);
+    await until(() => a.got.some(m => m.type === "exit"));
+    a.send({ type: "restart" });
+    await until(() => spawned.length === 2);
+
+    // A script the project file doesn't have is refused.
+    const b = open(port, { terminal: "script-nope", script: "nope" } as { terminal: string });
+    await b.ready;
+    await until(() => b.got.length > 0);
+    expect(b.got[0]).toMatchObject({ type: "error", code: "unavailable" });
+  });
+
+  it("runs a script to the end, with a time limit", async () => {
+    if (process.platform === "win32") return;
+    const ok = await runScriptToEnd({
+      command: "echo hi-$LEMONLIME_WORKTREE_PATH; exit 0",
+      cwd: tmpdir(),
+      env: { LEMONLIME_WORKTREE_PATH: "w" },
+      timeoutMs: 10_000,
+      shell: "/bin/sh",
+    });
+    expect(ok).toMatchObject({ ok: true, code: 0, timedOut: false, output: "hi-w" });
+    const bad = await runScriptToEnd({ command: "echo nope >&2; exit 3", cwd: tmpdir(), env: {}, timeoutMs: 10_000, shell: "/bin/sh" });
+    expect(bad).toMatchObject({ ok: false, code: 3, output: "nope" });
+    const slow = await runScriptToEnd({ command: "sleep 5", cwd: tmpdir(), env: {}, timeoutMs: 200, shell: "/bin/sh" });
+    expect(slow).toMatchObject({ ok: false, code: null, timedOut: true });
+    expect(shellArgs("cmd.exe", "x", "win32")).toEqual(["/d", "/s", "/c", "x"]);
+    expect(shellArgs("/bin/zsh", null, "darwin")).toEqual(["-l"]);
   });
 });

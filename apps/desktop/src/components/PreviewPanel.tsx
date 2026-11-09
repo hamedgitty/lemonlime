@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Globe, Plus, X } from "lucide-react";
+import { Globe, Plus, Radio, X } from "lucide-react";
 import type { Preview, ThreadEvent } from "@lemonlime/protocol";
 import type { Connection } from "../lib/useThreadSession.ts";
 import { shortAddress } from "../lib/browser.ts";
@@ -11,6 +11,17 @@ import { ICON_BUTTON, cx } from "./ui.tsx";
 const TOKEN_REFRESH_MS = 10 * 60_000;
 
 type View = { kind: "preview"; port: number } | { kind: "page"; url: string } | { kind: "new" };
+
+/** The port of a local address (localhost, 127.0.0.1, [::1]), or null. */
+export function localPort(url: string): number | null {
+  try {
+    const u = new URL(url);
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(u.hostname)) return null;
+    return Number(u.port || (u.protocol === "https:" ? 443 : 80));
+  } catch {
+    return null;
+  }
+}
 
 /** A path typed for a preview: "settings", "/a?b" or a full local address on any port keep just the path. */
 export function previewPath(typed: string): string {
@@ -32,6 +43,8 @@ export function PreviewPanel({
   runnerPath,
   onFindFile,
   findFileKeys,
+  open,
+  onOfferPort,
 }: {
   events: ThreadEvent[];
   mode: "local" | "cloud";
@@ -40,11 +53,21 @@ export function PreviewPanel({
   /** Opens the project's file search (from the new-tab page). */
   onFindFile?: () => void;
   findFileKeys?: string[];
+  /** Open this address (a link clicked elsewhere); each new `n` opens it again. */
+  open?: { url: string; n: number } | null;
+  /** Make a port the runner found listening into a preview. */
+  onOfferPort?: ((port: number) => void) | undefined;
 }) {
   const previews = useMemo(() => {
     const last = [...events].reverse().find(e => e.type === "preview_update");
     return last?.type === "preview_update" ? last.previews : [];
   }, [events]);
+  // Ports programs in the thread started listening on, that aren't previews yet.
+  const found = useMemo(() => {
+    const last = events.findLast(e => e.type === "listening_ports");
+    const ports = last?.type === "listening_ports" ? last.ports : [];
+    return ports.filter(p => !previews.some(x => x.port === p.port));
+  }, [events, previews]);
   const [chosen, setChosen] = useState<View | null>(null);
   const [page, setPage] = useState<string | null>(null);
   // Until something is picked: the first preview, or a new tab while there is none.
@@ -60,10 +83,25 @@ export function PreviewPanel({
     setPage(url);
     setChosen({ kind: "page", url });
   };
+  useEffect(() => {
+    if (!open) return;
+    // Elsewhere a local address means the sandbox's port: show it as that preview (once it's
+    // offered). Here, a preview's own front page is shown as that preview too.
+    const port = localPort(open.url);
+    const front = port !== null && previews.some(p => p.port === port) && new URL(open.url).pathname === "/";
+    if (port && (mode !== "local" || front)) setChosen({ kind: "preview", port });
+    else openPage(open.url);
+    // openPage only sets state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const openFound = (port: number) => {
+    onOfferPort?.(port);
+    setChosen({ kind: "preview", port });
+  };
 
   return (
     <div role="tabpanel" aria-label="Browser" className="flex min-h-0 flex-1 flex-col">
-      {(previews.length > 0 || page) && (
+      {(previews.length > 0 || page || found.length > 0) && (
         <div className="flex min-h-11 items-center gap-1 border-b border-line px-2 py-1.5">
           <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none]">
             {previews.map(p => (
@@ -72,6 +110,19 @@ export function PreviewPanel({
                 <span className="font-mono text-[12px] text-ink-faint">:{p.port}</span>
               </Chip>
             ))}
+            {onOfferPort &&
+              found.map(p => (
+                <button
+                  key={`found-${p.port}`}
+                  type="button"
+                  onClick={() => openFound(p.port)}
+                  title={`${p.command} is listening on port ${p.port}`}
+                  className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-dashed border-line-strong px-2 text-[13px] text-ink-soft hover:bg-cream-deep hover:text-ink"
+                >
+                  <Radio aria-hidden="true" className="size-3.5" />
+                  Open localhost:{p.port}
+                </button>
+              ))}
             {page && (
               <span className={cx("inline-flex h-7 shrink-0 items-center rounded-lg", view.kind === "page" ? "bg-cream-hover" : "")}>
                 <button

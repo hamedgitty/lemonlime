@@ -78,6 +78,8 @@ describe("runner review API", () => {
     expect(r.commit).toBe("abc1234");
     expect(seen).toBe("http://127.0.0.1:7420/git/diff?scope=commit&commit=abc1234&path=a+b.ts&context=20");
     expect(auth).toBe("Bearer tok");
+    await fetchGitDiff(connection, { scope: "branch", ignoreWhitespace: true }, fetchImpl);
+    expect(seen).toBe("http://127.0.0.1:7420/git/diff?scope=branch&whitespace=ignore");
   });
 
   it("says when the runner has no git API, and passes on its errors", async () => {

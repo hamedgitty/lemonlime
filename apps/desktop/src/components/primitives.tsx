@@ -142,6 +142,19 @@ export function MenuChoice<T extends string>({
   );
 }
 
+/** An on/off setting inside a menu, with a check while on. The menu stays open. */
+export function MenuCheck({ checked, onChange, children, icon }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode; icon?: ReactNode }) {
+  return (
+    <BaseMenu.CheckboxItem checked={checked} onCheckedChange={v => onChange(Boolean(v))} closeOnClick={false} className={ITEM}>
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      <BaseMenu.CheckboxItemIndicator keepMounted className="data-[unchecked]:invisible">
+        <Check aria-hidden="true" className="!text-leaf" />
+      </BaseMenu.CheckboxItemIndicator>
+    </BaseMenu.CheckboxItem>
+  );
+}
+
 /** A submenu row ("Organize ›"). */
 export function SubMenu({ icon, label, children }: { icon?: ReactNode; label: ReactNode; children: ReactNode }) {
   return (

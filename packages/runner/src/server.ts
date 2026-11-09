@@ -13,16 +13,19 @@ import {
   parseTerminalClientMessage,
   verifyToken,
   MAX_TOKEN_LIFETIME_SECONDS,
+  PROJECT_FILE,
+  type ResolvedScript,
   type VerifyResult,
   type ServerMessage,
   type TerminalServerMessage,
 } from "@lemonlime/protocol";
 import { TerminalPool, type SpawnPty, type TerminalSession } from "./terminal.ts";
+import { PortWatcher } from "./port-watch.ts";
 import { keysFromSecret, type ThreadKeys } from "./keys.ts";
 import { ATTACHMENT_CHUNK_BYTES } from "./attachments.ts";
 import { capabilitiesFor } from "./capabilities.ts";
 import { listWorkdirFiles, searchFiles } from "./composer.ts";
-import { contentTypeFor, resolveWorkdirFile } from "./files.ts";
+import { contentTypeFor, findWorkdirFile, resolveWorkdirFile } from "./files.ts";
 import { handleGitApi } from "./git-api.ts";
 import type { ThreadRunner } from "./thread-runner.ts";
 import type { Relay } from "./relay.ts";
@@ -41,6 +44,8 @@ export interface ServerOptions {
   ownPorts?: number[];
   /** Relay mode: calls for the control plane wait here for it to collect them (see relay.ts). */
   relay?: Relay;
+  /** Look for ports the thread's programs start listening on, while it's busy (see port-watch.ts). */
+  watchPorts?: boolean;
 }
 
 export interface RunningServer {
@@ -134,6 +139,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
       path === "/capabilities" ||
       path === "/files" ||
       path === "/file" ||
+      path === "/file-exists" ||
+      path === "/project-scripts" ||
       path === "/commands" ||
       path.startsWith("/attachments") ||
       path === "/previews" ||
@@ -176,19 +183,26 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
   const terminalWss = new WebSocketServer({ noServer: true, maxPayload: TERMINAL_FRAME_BYTES });
   const tunnelWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  const terminals = opts.terminal?.spawn ? new TerminalPool(opts.terminal.spawn, opts.terminal.cwd, opts.terminal.max) : null;
+  const terminals = opts.terminal?.spawn ? new TerminalPool(opts.terminal.spawn, opts.terminal.cwd, opts.terminal.max, undefined, runner.scriptEnv) : null;
   http.on("upgrade", (req, socket, head) => {
     const path = new URL(req.url ?? "/", "http://runner").pathname;
     if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
-    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminals));
+    else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminals, watcher));
     else if (path === "/tunnel") tunnelWss.handleUpgrade(req, socket, head, ws => handleTunnel(ws, req, runner, opts));
     else socket.destroy();
   });
+
+  let listenPort = 0;
+  const watcher = opts.watchPorts
+    ? new PortWatcher({ ignore: () => [listenPort, ...(opts.ownPorts ?? [])], onChange: ports => runner.setListeningPorts(ports) })
+    : null;
+  const stopWatching = watcher ? runner.onStatus(s => watcher.busy(s === "running")) : () => {};
 
   return new Promise((resolve, reject) => {
     http.once("error", reject);
     http.listen(opts.port, opts.host, () => {
       const port = (http.address() as AddressInfo).port;
+      listenPort = port;
       resolve({
         port,
         close: () =>
@@ -198,6 +212,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
             wss.close();
             terminalWss.close();
             terminals?.closeAll();
+            stopWatching();
+            watcher?.stop();
             http.close(() => done());
           }),
       });
@@ -333,6 +349,14 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
           if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
         });
         break;
+      case "offer_preview":
+        if (!runner.offerListeningPort(msg.port)) send({ type: "error", code: "bad_request", message: "Nothing is listening on that port any more." });
+        break;
+      case "continue_after_restart": {
+        const r = runner.continueAfterRestart();
+        if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+        break;
+      }
       case "compact":
         if (!runner.compact()) send({ type: "error", code: "bad_request", message: "This agent can't compact its conversation." });
         break;
@@ -411,9 +435,10 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
   ws.on("error", () => ws.terminate());
 }
 
-function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminals: TerminalPool | null): void {
+function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions, terminals: TerminalPool | null, watcher: PortWatcher | null): void {
   let terminal: TerminalSession | null = null;
   let terminalId = DEFAULT_TERMINAL_ID;
+  let script: ResolvedScript | null = null;
   let slowSince: number | null = null;
   const send = (m: TerminalServerMessage) => {
     if (ws.readyState !== ws.OPEN) return;
@@ -459,13 +484,23 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
         return ws.close(1011, "unavailable");
       }
       terminalId = msg.terminal ?? DEFAULT_TERMINAL_ID;
-      terminal = terminals.open(terminalId);
+      // A project script: its command comes from the runner's own copy of the project file, never from the app.
+      if (msg.script) {
+        const found = runner.projectScripts.scripts.find(x => x.id === msg.script);
+        if (!found) {
+          send({ type: "error", code: "unavailable", message: `This project has no script “${msg.script}” any more (see ${PROJECT_FILE}).` });
+          return ws.close(1011, "no such script");
+        }
+        script = found;
+      }
+      terminal = terminals.open(terminalId, script ? { command: script.command } : {});
       if (!terminal) {
         send({ type: "error", code: "limit", message: `A thread can have ${terminals.max} terminals open at once. Close one first.` });
         return ws.close(1008, "too many terminals");
       }
       terminal.resize(msg.cols, msg.rows);
-      terminal.start();
+      // A script runs when asked (restart), never just because an app connected.
+      if (terminal.command === null) terminal.start();
       const { reset, data } = terminal.replay(msg.resumeFrom, msg.shell);
       send({ type: "ready", reset, running: terminal.running, shell: terminal.generation, name: terminal.name });
       if (data) sendOutput(data, terminal.end);
@@ -481,12 +516,22 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
     switch (msg.type) {
       case "input":
         terminal.write(msg.data);
+        // Typing Enter may start a server: look for new ports for a while.
+        if (msg.data.includes("\r")) watcher?.touch();
         break;
       case "resize":
         terminal.resize(msg.cols, msg.rows);
         break;
       case "restart":
+        if (script) {
+          // Pick up edits to the project file since the terminal opened.
+          const now = runner.projectScripts.scripts.find(x => x.id === script!.id);
+          if (now) script = now;
+          if (!terminal.running) terminal.command = script.command;
+          if (script.previewUrl) runner.offerScriptPreview(script.previewUrl, script.name, opts.ownPorts ?? []);
+        }
         terminal.start();
+        watcher?.touch();
         break;
       case "close":
         terminals?.close(terminalId);
@@ -685,6 +730,13 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     });
     res.end(found.data);
     return;
+  }
+  if (path === "/project-scripts" && req.method === "GET") return reply(res, 200, runner.projectScripts);
+  // Whether a path the terminal printed is a file in the thread's folder, for clickable `path:line`.
+  if (path === "/file-exists" && req.method === "GET") {
+    const asked = new URL(req.url ?? "/", "http://runner").searchParams.get("path") ?? "";
+    const found = await findWorkdirFile(runner.workdir, asked);
+    return found ? reply(res, 200, { path: found }) : reply(res, 404, { error: "No such file." });
   }
   if (path === "/commands" && req.method === "GET") return reply(res, 200, { commands: runner.agentCommands });
   if (path.startsWith("/git/")) return handleGitApi(req, res, path, runner.review, { reply, readBody });

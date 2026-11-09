@@ -1,4 +1,4 @@
-import { open, realpath } from "node:fs/promises";
+import { open, realpath, stat } from "node:fs/promises";
 import { extname, isAbsolute, join, relative, sep } from "node:path";
 
 /**
@@ -61,6 +61,40 @@ export async function resolveWorkdirFile(workdir: string, asked: string, maxByte
     return { path: real, data: data.subarray(0, read) };
   } finally {
     await handle.close();
+  }
+}
+
+/**
+ * A file the terminal printed, as a path inside the thread's folder (forward slashes), or
+ * null when it isn't a file there. Relative paths are from the folder; an absolute one must
+ * point inside it. The same folders as for file tabs are off limits.
+ */
+export async function findWorkdirFile(workdir: string, asked: string): Promise<string | null> {
+  if (!asked || asked.length > MAX_PATH_CHARS || asked.includes("\0")) return null;
+  let root: string;
+  try {
+    root = await realpath(workdir);
+  } catch {
+    return null;
+  }
+  let target: string;
+  let shown: string | null = null;
+  if (isAbsolute(asked)) target = asked;
+  else {
+    const parts = relativeParts(asked);
+    if (!parts || offLimits(parts)) return null;
+    target = join(root, ...parts);
+    shown = parts.join("/");
+  }
+  try {
+    const real = await realpath(target);
+    const inside = relative(root, real);
+    if (!inside || inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) return null;
+    if (offLimits(inside.split(sep))) return null;
+    if (!(await stat(real)).isFile()) return null;
+    return shown ?? inside.split(sep).join("/");
+  } catch {
+    return null;
   }
 }
 

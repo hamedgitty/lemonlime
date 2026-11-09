@@ -71,7 +71,7 @@ describe("recent addresses", () => {
 
 describe("find in page and preview paths", async () => {
   const { countMatches, sameOrigin } = await import("../src/components/PanelBrowser.tsx");
-  const { previewPath } = await import("../src/components/PreviewPanel.tsx");
+  const { localPort, previewPath } = await import("../src/components/PreviewPanel.tsx");
 
   it("counts matches ignoring case, without overlaps", () => {
     expect(countMatches("Save the file. SAVE it again.", "save")).toBe(2);
@@ -91,5 +91,12 @@ describe("find in page and preview paths", async () => {
     expect(previewPath("")).toBe("/");
     expect(previewPath("http://localhost:5173/a?b=1")).toBe("/a?b=1");
     expect(previewPath("127.0.0.1:4000")).toBe("/");
+  });
+
+  it("reads the port of a local address", () => {
+    expect(localPort("http://localhost:5173/app")).toBe(5173);
+    expect(localPort("http://127.0.0.1/")).toBe(80);
+    expect(localPort("https://example.com:5173/")).toBeNull();
+    expect(localPort("nope")).toBeNull();
   });
 });

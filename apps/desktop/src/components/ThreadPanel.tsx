@@ -1,6 +1,29 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { FileDiff, FileSearch, FileText, Globe, History, MessagesSquare, Plus, SquareTerminal, X } from "lucide-react";
-import { MAX_TERMINALS } from "@lemonlime/protocol";
+import {
+  Bug,
+  Database,
+  FileDiff,
+  FileSearch,
+  FileText,
+  FlaskConical,
+  Globe,
+  Hammer,
+  History,
+  ListChecks,
+  MessagesSquare,
+  Package,
+  Play,
+  Plus,
+  Rocket,
+  Server,
+  Sparkles,
+  SquareTerminal,
+  Wrench,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { MAX_TERMINALS, type ScriptIcon, type ScriptKeybinding } from "@lemonlime/protocol";
+import type { Script } from "../lib/projectScripts.ts";
 import type { useThreadSession } from "../lib/useThreadSession.ts";
 import {
   activeTab,
@@ -10,6 +33,7 @@ import {
   isBuiltIn,
   moveTab,
   newTerminal,
+  openFile,
   PANEL_WIDTH,
   panelBounds,
   snapPanel,
@@ -28,7 +52,7 @@ import { PreviewPanel } from "./PreviewPanel.tsx";
 import { ReviewPanel } from "./ReviewPanel.tsx";
 import { SideChatPanel } from "./SideChatPanel.tsx";
 import { closeTerminal, TerminalPanel } from "./TerminalPanel.tsx";
-import { Menu, MenuItem, MenuSeparator, Tip } from "./primitives.tsx";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
 
 type Session = ReturnType<typeof useThreadSession>;
@@ -38,6 +62,26 @@ const BUILT_IN: Record<BuiltInTab, { label: string; icon: typeof FileDiff }> = {
   browser: { label: "Browser", icon: Globe },
   side: { label: "Side chat", icon: MessagesSquare },
 };
+
+/** Each icon a project script can pick. */
+const SCRIPT_ICONS: Record<ScriptIcon, LucideIcon> = {
+  play: Play,
+  test: FlaskConical,
+  lint: ListChecks,
+  build: Hammer,
+  server: Server,
+  package: Package,
+  wrench: Wrench,
+  terminal: SquareTerminal,
+  bug: Bug,
+  rocket: Rocket,
+  database: Database,
+  sparkles: Sparkles,
+};
+export const scriptIcon = (icon: ScriptIcon | undefined): LucideIcon => (icon ? SCRIPT_ICONS[icon] : Play);
+
+/** How long to wait for a script's preview address to answer before opening it anyway. */
+const PREVIEW_WAIT_MS = 60_000;
 
 /** Below this width the built-in tabs show only their icons. */
 const COMPACT_BELOW = 560;
@@ -60,6 +104,11 @@ export function ThreadPanel({
   onAddToChat,
   onQuickOpen,
   shortcuts,
+  scripts = [],
+  scriptsError,
+  scriptKeys,
+  scriptRuns = {},
+  onRunScript,
 }: {
   /** Kept mounted but out of sight (a split pane that isn't active), so terminals keep their screen. */
   hidden?: boolean;
@@ -76,6 +125,14 @@ export function ThreadPanel({
   onQuickOpen: () => void;
   /** The keys for quick open and reopen, for menu hints ("" when turned off). */
   shortcuts: { quickOpen: string; reopen: string };
+  /** The project's scripts (lemonlime.json), and what's wrong with the file if it couldn't be read. */
+  scripts?: Script[];
+  scriptsError?: string | undefined;
+  /** The keys of a script shortcut, for menu hints. */
+  scriptKeys?: (id: ScriptKeybinding) => string;
+  /** Runs asked for, by tab id (see TerminalPanel's `run`). */
+  scriptRuns?: Record<string, number>;
+  onRunScript?: (script: Script) => void;
 }) {
   const aside = useRef<HTMLElement>(null);
   const tablist = useRef<HTMLDivElement>(null);
@@ -124,6 +181,53 @@ export function ThreadPanel({
     onState(s => closeTab(s, tab.id));
   };
   const addTerminal = () => onState(s => newTerminal(s) ?? s);
+  // An address to open in the browser tab (from a terminal link, a script's preview); `n` makes each one count.
+  const [browse, setBrowse] = useState<{ url: string; n: number } | null>(null);
+  const openInBrowser = (url: string) => {
+    setBrowse(b => ({ url, n: (b?.n ?? 0) + 1 }));
+    select("browser");
+  };
+  const openFileAt = (path: string, line?: number) => onState(s => openFile(s, path, line));
+  // A script with a preview address: open it in the browser tab once it answers (on this
+  // computer), or straight away through the tunnel (elsewhere, where it can't be checked).
+  const previewWait = useRef<AbortController | null>(null);
+  useEffect(() => () => previewWait.current?.abort(), []);
+  const openScriptPreview = (url: string) => {
+    previewWait.current?.abort();
+    if (mode !== "local") return openInBrowser(url);
+    const ctl = new AbortController();
+    previewWait.current = ctl;
+    void (async () => {
+      const until = Date.now() + PREVIEW_WAIT_MS;
+      while (!ctl.signal.aborted && Date.now() < until) {
+        try {
+          await fetch(url, { mode: "no-cors", signal: ctl.signal, cache: "no-store" });
+          break;
+        } catch {
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+      if (!ctl.signal.aborted) openInBrowser(url);
+    })();
+  };
+  const scriptKeyHint = (s: Script) => {
+    const keys = s.keybinding && scriptKeys ? scriptKeys(s.keybinding) : "";
+    return keys ? { hint: keyCaps(keys).join("") } : {};
+  };
+  const scriptItems =
+    scripts.length > 0 ? (
+      <>
+        <MenuLabel>Project scripts</MenuLabel>
+        {scripts.map(sc => {
+          const Icon = scriptIcon(sc.icon);
+          return (
+            <MenuItem key={sc.id} icon={<Icon />} onSelect={() => onRunScript?.(sc)} {...scriptKeyHint(sc)}>
+              {sc.name}
+            </MenuItem>
+          );
+        })}
+      </>
+    ) : null;
   const atTerminalLimit = terminalCount(state) >= MAX_TERMINALS;
 
   // How many times the agent changed each file, so an open file reloads after a change.
@@ -226,7 +330,7 @@ export function ThreadPanel({
           {state.tabs.length > 0 && <span aria-hidden="true" className="mx-1 h-4 w-px shrink-0 bg-line-strong" />}
           {state.tabs.map((tab, i) => {
             const label = tab.kind === "terminal" ? terminalLabel(tab, termInfo[tab.id]?.name, termInfo[tab.id]?.title) : fileName(tab.path);
-            const Icon = tab.kind === "terminal" ? SquareTerminal : FileText;
+            const Icon = tab.kind === "terminal" ? (tab.script ? scriptIcon(scripts.find(x => x.id === tab.script)?.icon) : SquareTerminal) : FileText;
             return (
               <span
                 key={tab.id}
@@ -268,6 +372,28 @@ export function ThreadPanel({
             );
           })}
         </div>
+        {(scripts.length > 0 || scriptsError) && onRunScript && (
+          <Menu
+            align="end"
+            className="max-w-[20rem]"
+            trigger={
+              <button
+                type="button"
+                aria-label="Run a project script"
+                className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-soft hover:bg-cream-deep data-[popup-open]:bg-cream-deep"
+              >
+                <Play aria-hidden="true" className="size-4" />
+              </button>
+            }
+          >
+            {scriptItems}
+            {scriptsError && (
+              <p role="alert" className="max-w-[18rem] px-2.5 py-1.5 text-[13px] text-danger">
+                {scriptsError}
+              </p>
+            )}
+          </Menu>
+        )}
         <Menu
           align="end"
           trigger={
@@ -286,6 +412,12 @@ export function ThreadPanel({
           <MenuItem icon={<FileSearch />} onSelect={onQuickOpen} {...(shortcuts.quickOpen ? { hint: keyCaps(shortcuts.quickOpen).join("") } : {})}>
             Open a file…
           </MenuItem>
+          {scriptItems && onRunScript && (
+            <>
+              <MenuSeparator />
+              {scriptItems}
+            </>
+          )}
           <MenuSeparator />
           <MenuItem
             icon={<History />}
@@ -306,7 +438,13 @@ export function ThreadPanel({
         </button>
       </div>
       {active === "changes" && (
-        <ReviewPanel connection={session.connection} refreshKey={refreshKey} onAddToChat={onAddToChat} fallback={<ChangesList events={session.events} />} />
+        <ReviewPanel
+          connection={session.connection}
+          refreshKey={refreshKey}
+          onAddToChat={onAddToChat}
+          onOpenFile={path => openFileAt(path)}
+          fallback={<ChangesList events={session.events} />}
+        />
       )}
       {active === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
       {active === "browser" && (
@@ -316,6 +454,8 @@ export function ThreadPanel({
           connection={session.connection}
           onFindFile={onQuickOpen}
           findFileKeys={shortcuts.quickOpen ? keyCaps(shortcuts.quickOpen) : []}
+          open={browse}
+          onOfferPort={session.state === "live" ? session.offerPreview : undefined}
           {...(runnerPath ? { runnerPath } : {})}
         />
       )}
@@ -327,6 +467,7 @@ export function ThreadPanel({
               connection={session.connection}
               path={tab.path}
               version={versions.get(tab.path) ?? 0}
+              line={tab.line}
               onMention={path => onAddToChat(`@${path} `)}
             />
           ) : null;
@@ -345,6 +486,15 @@ export function ThreadPanel({
               active={tab.id === active}
               onName={name => setInfo(tab.id, { name })}
               onTitle={title => setInfo(tab.id, { title })}
+              onAddToChat={onAddToChat}
+              onOpenUrl={openInBrowser}
+              onOpenFile={openFileAt}
+              script={tab.script}
+              run={scriptRuns[tab.id] ?? 0}
+              onRun={() => {
+                const url = scripts.find(x => x.id === tab.script)?.previewUrl;
+                if (url) openScriptPreview(url);
+              }}
             />
           </div>
         );

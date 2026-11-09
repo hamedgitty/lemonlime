@@ -16,7 +16,8 @@ function load(): Promise<Highlighter> {
   return loading;
 }
 
-function render(nodes: HlNode[], key = "h"): ReactNode[] {
+/** Highlighted nodes as React elements (token classes are styled under `.md-code`). */
+export function render(nodes: HlNode[], key = "h"): ReactNode[] {
   return nodes.map((n, i) =>
     n.type === "text" ? (
       n.value

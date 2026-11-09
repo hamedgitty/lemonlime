@@ -528,6 +528,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     terminal: { cwd: workdir, spawn: await loadPty() },
     ownPorts: [port],
     ...(relay ? { relay } : {}),
+    watchPorts: true,
   });
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
   // For the agent's own `lemonlime-runner preview`: where this runner is, and which thread.

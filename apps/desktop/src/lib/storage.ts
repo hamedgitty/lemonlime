@@ -51,6 +51,12 @@ export const LocalThreadMeta = z.object({
   machine: z.string().optional(),
   baseBranch: z.string().default("main"),
   branch: z.string(),
+  /** The thread works on `branch` as it already was (an existing branch, or a pull request's). */
+  existingBranch: z.boolean().optional(),
+  /** The pull request it was started on. */
+  pullRequest: z.object({ number: z.number().int().positive(), url: z.string(), title: z.string() }).optional(),
+  /** Its new branch started from this commit or branch (a fork keeps the code it came from). */
+  startFrom: z.string().optional(),
   /** Last status the runner reported. */
   status: ThreadStatus.default("idle"),
   /** Highest event seq this app has stored for the thread. */

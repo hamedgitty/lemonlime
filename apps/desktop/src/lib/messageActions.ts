@@ -29,8 +29,10 @@ export interface ForkSource {
   /** The thread being forked. */
   title: string;
   branch: string;
-  /** Where the new thread's files start from. */
+  /** Where the new thread's files start from when it starts fresh. */
   baseBranch: string;
+  /** The new thread starts with the earlier thread's code at that point (its branch, or a commit on it). */
+  withCode?: boolean;
 }
 
 /**
@@ -52,7 +54,9 @@ export function forkNote(items: readonly TimelineItem[], from: ForkFrom, source:
   const files = new Map<string, string>();
   for (const it of upTo) if (it.kind === "diff") files.set(it.path, it.change);
 
-  const head = `(Forked in LemonLime from the thread “${source.title}”. This is a new conversation that carries on from the point below. Its files start from ${source.baseBranch}; the earlier thread's changes are on its branch ${source.branch}, not here, unless you bring them over with git.)`;
+  const head = source.withCode
+    ? `(Forked in LemonLime from the thread “${source.title}”. This is a new conversation that carries on from the point below, on a new branch. Its files start where the earlier thread's branch ${source.branch} was at that point, so the changes made by then are already here.)`
+    : `(Forked in LemonLime from the thread “${source.title}”. This is a new conversation that carries on from the point below. Its files start from ${source.baseBranch}; the earlier thread's changes are on its branch ${source.branch}, not here, unless you bring them over with git.)`;
   const fileList = files.size
     ? `## Files the earlier thread had changed by then\n\n${[...files]
         .slice(0, MAX_FILES)
@@ -96,6 +100,19 @@ const quoteBlock = (text: string) =>
     .split("\n")
     .map(l => `> ${l}`)
     .join("\n");
+
+/**
+ * The commit a fork at this message should start from. Each turn commits its work and each
+ * message records the commit its turn began on, so: a message you sent forks from before
+ * its turn, an agent's reply from where the next message began. Null when there's no later
+ * point, so the fork takes the branch as it is now.
+ */
+export function forkCommit(events: readonly ThreadEvent[], seq: number): string | null {
+  const at = events.find(e => e.seq === seq);
+  if (at?.type === "user_message") return at.commit ?? null;
+  for (const e of events) if (e.seq > seq && e.type === "user_message" && e.commit) return e.commit;
+  return null;
+}
 
 /** The forked thread's name. */
 export function forkTitle(title: string): string {

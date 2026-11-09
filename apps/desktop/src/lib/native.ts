@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ask, open } from "@tauri-apps/plugin-dialog";
-import type { AgentKind } from "@lemonlime/protocol";
+import { BranchList, PullRequestLookup, type AgentKind } from "@lemonlime/protocol";
 
 /** Thin wrappers around the Rust commands in src-tauri/src/runner.rs. */
 
@@ -35,6 +35,12 @@ export interface StartLocalRunnerArgs {
   disabledSkills?: string[] | undefined;
   /** false turns the command guard off (--no-command-guard). On when unset. */
   commandGuard?: boolean | undefined;
+  /** Work on this existing branch instead of a new one (--branch). */
+  threadBranch?: string | undefined;
+  /** With threadBranch: it's this pull request's branch (--pull-request). */
+  pullRequest?: number | undefined;
+  /** Start the new branch from this commit or branch instead of the base (--start-from). */
+  startFrom?: string | undefined;
 }
 
 function requireShell(): void {
@@ -72,6 +78,9 @@ export async function startLocalRunner(input: StartLocalRunnerArgs): Promise<Loc
     retryMaxWaitMinutes: args.retryMaxWaitMinutes ?? null,
     disabledSkills: args.disabledSkills?.length ? args.disabledSkills : null,
     commandGuard: args.commandGuard ?? null,
+    threadBranch: args.threadBranch || null,
+    startFrom: args.startFrom || null,
+    pullRequest: args.pullRequest ?? null,
   });
 }
 
@@ -96,6 +105,9 @@ export async function startSshRunner(input: StartLocalRunnerArgs & { host: strin
     retryMaxWaitMinutes: args.retryMaxWaitMinutes ?? null,
     disabledSkills: args.disabledSkills?.length ? args.disabledSkills : null,
     commandGuard: args.commandGuard ?? null,
+    threadBranch: args.threadBranch || null,
+    startFrom: args.startFrom || null,
+    pullRequest: args.pullRequest ?? null,
   });
 }
 
@@ -155,6 +167,24 @@ export interface RepoInfo {
 export async function inspectRepo(path: string): Promise<RepoInfo> {
   requireShell();
   return invoke<RepoInfo>("inspect_repo", { path });
+}
+
+/** The repository's branches, local and on origin, newest first. */
+export async function listBranches(repoPath: string, runnerPath?: string): Promise<BranchList> {
+  requireShell();
+  return BranchList.parse(await invoke("list_branches", { repoPath, runnerPath: runnerPath || null }));
+}
+
+/** A pull request of the repository, from a link or `#123` (needs the GitHub CLI). */
+export async function lookupPullRequest(repoPath: string, reference: string, runnerPath?: string): Promise<PullRequestLookup> {
+  requireShell();
+  return PullRequestLookup.parse(await invoke("lookup_pull_request", { repoPath, reference, runnerPath: runnerPath || null }));
+}
+
+/** Removes a stopped thread's worktree; its history and branch stay. Refused with uncommitted changes. */
+export async function removeThreadWorktree(threadId: string, repoPath: string, runnerPath?: string): Promise<void> {
+  requireShell();
+  await invoke("remove_thread_worktree", { threadId, repoPath, runnerPath: runnerPath || null });
 }
 
 /** Opens the system folder picker. Returns null if the user cancels. */

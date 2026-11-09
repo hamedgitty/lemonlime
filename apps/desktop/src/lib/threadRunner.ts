@@ -25,6 +25,8 @@ export async function startThreadRunner(meta: LocalThreadMeta, runnerPath: strin
     fast: meta.agent.fast,
     workdir: meta.repoPath,
     baseBranch: meta.baseBranch,
+    ...(meta.existingBranch ? { threadBranch: meta.branch, ...(meta.pullRequest ? { pullRequest: meta.pullRequest.number } : {}) } : {}),
+    ...(meta.startFrom && !meta.existingBranch ? { startFrom: meta.startFrom } : {}),
   };
   if (!meta.machine) return startLocalRunner({ ...args, runnerPath });
   const machine = findMachine(meta.machine);

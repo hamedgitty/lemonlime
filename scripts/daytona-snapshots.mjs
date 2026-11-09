@@ -58,9 +58,11 @@ async function api(method, path, body) {
 }
 
 const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+// Names carry the image's version when it has one, so a day can have several sets.
+const version = /:([0-9a-f]{7,40})$/.exec(image)?.[1]?.slice(0, 7);
 const made = {};
 for (const [size, r] of Object.entries(SIZES)) {
-  const name = `lemonlime-${size}-${stamp}`;
+  const name = `lemonlime-${size}-${stamp}${version ? `-${version}` : ""}`;
   console.log(`Creating ${name} from ${image} (${r.cpu} CPU, ${r.memory} GB memory, ${r.disk} GB disk)`);
   const snap = await api("POST", "/snapshots", { name, imageName: image, cpu: r.cpu, memory: r.memory, disk: r.disk });
   const started = Date.now();

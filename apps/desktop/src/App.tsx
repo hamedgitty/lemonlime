@@ -97,6 +97,7 @@ import {
   type SidebarChild,
   type UiPrefs,
 } from "./lib/storage.ts";
+import { applyTheme } from "./lib/theme.ts";
 import { loadComputerAccess, setComputerAccess } from "./lib/computer.ts";
 import { addToInbox, automationRunItems, loadInbox, markAllRead, markRead, markThreadRead, saveInbox, type Inbox } from "./lib/inbox.ts";
 import { computerId, threadSnapshots } from "./lib/phoneBridge.ts";
@@ -308,6 +309,8 @@ export function App() {
       return next;
     });
   }, []);
+
+  useEffect(() => applyTheme(prefs.theme), [prefs.theme]);
 
   // ── ⌘Z: undo the sidebar's last archive, pin or mark as unread ──
   const undoStack = useRef<UndoEntry[]>([]);

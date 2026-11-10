@@ -34,7 +34,7 @@ export function SnoozeDialog({ title, onSnooze, onClose }: { title: string | nul
   return (
     <Dialog.Root open={title !== null} onOpenChange={o => !o && onClose()}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-50 bg-ink/20 transition-opacity duration-[250ms] ease-(--ease-out) data-[ending-style]:opacity-0 data-[ending-style]:duration-150 data-[starting-style]:opacity-0" />
+        <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim/20 transition-opacity duration-[250ms] ease-(--ease-out) data-[ending-style]:opacity-0 data-[ending-style]:duration-150 data-[starting-style]:opacity-0" />
         <Dialog.Popup
           initialFocus={input}
           className="fixed top-[22vh] left-1/2 z-50 w-[min(380px,calc(100vw-32px))] -translate-x-1/2 rounded-2xl border border-line bg-paper p-5 text-ink shadow-pop outline-none transition-[opacity,scale] duration-[250ms] ease-(--ease-out) data-[ending-style]:scale-[0.99] data-[ending-style]:opacity-0 data-[ending-style]:duration-150 data-[starting-style]:scale-[0.96] data-[starting-style]:opacity-0"

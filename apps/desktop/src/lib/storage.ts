@@ -218,6 +218,8 @@ export const UiPrefs = z.object({
   defaultPlace: z.enum(["last", "local", "cloud"]).default("last"),
   /** Offer the highest reasoning levels in the picker. */
   showMaxReasoning: z.boolean().default(false),
+  /** Light or dark, or follow the system (Settings → Appearance). public/theme.js reads it too. */
+  theme: z.enum(["system", "light", "dark"]).catch("system").default("system"),
   /** Fold each finished turn into one line in the timeline. */
   collapseFinished: z.boolean().default(false),
   /** Show each thread's agent icon in the sidebar. */

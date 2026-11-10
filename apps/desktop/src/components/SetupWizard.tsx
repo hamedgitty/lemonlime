@@ -72,7 +72,7 @@ export function SetupWizard(p: SetupWizardProps) {
                     aria-hidden="true"
                     className={cx(
                       "mt-0.5 inline-flex size-6 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold",
-                      isDone ? "bg-lime text-ink" : step === s.id ? "bg-ink text-cream" : "border border-line-strong text-ink-soft",
+                      isDone ? "bg-lime text-on-citrus" : step === s.id ? "bg-ink text-cream" : "border border-line-strong text-ink-soft",
                     )}
                   >
                     {isDone ? <Check className="size-3.5" /> : i + 1}

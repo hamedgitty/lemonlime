@@ -214,7 +214,7 @@ export function Tip({ label, children, side = "top" }: { label: ReactNode; child
       <BaseTooltip.Trigger render={children} />
       <BaseTooltip.Portal>
         <BaseTooltip.Positioner side={side} sideOffset={8} className="z-50">
-          <BaseTooltip.Popup className="rounded-[7px] bg-lime px-2.5 py-1 text-[14px] font-medium text-ink shadow-[0_4px_14px_rgb(23_32_14/0.14)] transition-opacity duration-100 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0">
+          <BaseTooltip.Popup className="rounded-[7px] bg-lime px-2.5 py-1 text-[14px] font-medium text-on-citrus shadow-[0_4px_14px_rgb(23_32_14/0.14)] transition-opacity duration-100 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0">
             {label}
           </BaseTooltip.Popup>
         </BaseTooltip.Positioner>
@@ -264,7 +264,7 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
       aria-label={label}
       className="relative inline-flex h-5 w-[34px] shrink-0 items-center rounded-full border border-control bg-cream-deep transition-colors duration-150 data-[checked]:border-lime-edge data-[checked]:bg-lime data-[disabled]:opacity-50"
     >
-      <BaseSwitch.Thumb className="block size-3.5 translate-x-[2px] rounded-full bg-control transition-transform duration-150 ease-(--ease-out) data-[checked]:translate-x-[16px] data-[checked]:bg-ink" />
+      <BaseSwitch.Thumb className="block size-3.5 translate-x-[2px] rounded-full bg-control transition-transform duration-150 ease-(--ease-out) data-[checked]:translate-x-[16px] data-[checked]:bg-on-citrus" />
     </BaseSwitch.Root>
   );
 }

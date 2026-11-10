@@ -1131,7 +1131,7 @@ function ThreadSessionView({
                     title={a.error ?? a.name}
                     className={cx(
                       "inline-flex h-8 max-w-[260px] items-center gap-2 rounded-lg border bg-paper pr-1 pl-2.5 text-[13px]",
-                      a.state === "failed" ? "border-[#f3c4be] text-danger" : "border-line-strong text-ink",
+                      a.state === "failed" ? "border-danger-line text-danger" : "border-line-strong text-ink",
                     )}
                   >
                     <Paperclip aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />

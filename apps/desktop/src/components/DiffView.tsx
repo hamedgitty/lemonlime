@@ -6,7 +6,7 @@ import { cx } from "./ui.tsx";
 const CHANGE_LABEL = { added: "Added", modified: "Modified", deleted: "Deleted", renamed: "Renamed" } as const;
 const CHANGE_STYLE = {
   added: "bg-lime-soft text-leaf-deep",
-  modified: "bg-lemon-soft text-[#6b5a00]",
+  modified: "bg-lemon-soft text-modified-ink",
   deleted: "bg-danger-soft text-danger",
   renamed: "bg-cream-deep text-ink-soft",
 } as const;

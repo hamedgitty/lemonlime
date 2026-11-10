@@ -102,10 +102,10 @@ export function ShortcutHints({ enabled, overrides }: { enabled: boolean; overri
           style={{ left: h.left, top: h.top }}
           className={
             h.place === "inside"
-              ? "absolute inline-flex -translate-x-full -translate-y-1/2 gap-0.5 rounded-md bg-lime px-1.5 py-0.5 text-[12px] font-medium text-ink shadow-[0_4px_14px_rgb(23_32_14/0.14)]"
+              ? "absolute inline-flex -translate-x-full -translate-y-1/2 gap-0.5 rounded-md bg-lime px-1.5 py-0.5 text-[12px] font-medium text-on-citrus shadow-[0_4px_14px_rgb(23_32_14/0.14)]"
               : h.place === "above"
-                ? "absolute inline-flex -translate-x-1/2 -translate-y-full gap-0.5 rounded-md bg-lime px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-ink shadow-[0_4px_14px_rgb(23_32_14/0.14)]"
-                : "absolute inline-flex -translate-x-1/2 gap-0.5 rounded-md bg-lime px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-ink shadow-[0_4px_14px_rgb(23_32_14/0.14)]"
+                ? "absolute inline-flex -translate-x-1/2 -translate-y-full gap-0.5 rounded-md bg-lime px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-on-citrus shadow-[0_4px_14px_rgb(23_32_14/0.14)]"
+                : "absolute inline-flex -translate-x-1/2 gap-0.5 rounded-md bg-lime px-1.5 py-0.5 text-[12px] font-medium whitespace-nowrap text-on-citrus shadow-[0_4px_14px_rgb(23_32_14/0.14)]"
           }
         >
           {h.keys.map((k, i) => (

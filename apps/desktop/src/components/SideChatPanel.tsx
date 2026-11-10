@@ -153,7 +153,7 @@ export function SideChatPanel({ side, connected }: { side: ThreadSession["side"]
             aria-label="Ask"
             disabled={!connected || !draft.trim() || Boolean(chat?.busy)}
             onClick={() => void ask()}
-            className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-cream-deep text-ink-soft enabled:bg-lime enabled:text-ink disabled:opacity-60"
+            className="inline-flex size-8 shrink-0 items-center justify-center rounded-full bg-cream-deep text-ink-soft enabled:bg-lime enabled:text-on-citrus disabled:opacity-60"
           >
             <ArrowUp aria-hidden="true" className="size-4" />
           </button>

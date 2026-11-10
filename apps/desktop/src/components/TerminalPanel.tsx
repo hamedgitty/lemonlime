@@ -9,22 +9,22 @@ import { quoteTerminal } from "../lib/review.ts";
 import { QUOTE_ITEM, QuoteToolbar } from "./SelectionQuote.tsx";
 import { Button } from "./ui.tsx";
 
-/** The rind tones: terminals are the one dark surface in the app. */
+/** The rind tones: terminals stay dark in both themes. */
 const THEME = {
-  background: "#11190a",
-  foreground: "#dfe6d3",
+  background: "#0f0f0f",
+  foreground: "#e6e6e3",
   cursor: "#a3e635",
-  cursorAccent: "#11190a",
-  selectionBackground: "#3f7a1680",
-  black: "#1b2612",
+  cursorAccent: "#0f0f0f",
+  selectionBackground: "#a3e63540",
+  black: "#1a1a1a",
   red: "#f07a6a",
   green: "#a3e635",
   yellow: "#ffe135",
   blue: "#8cb8ff",
   magenta: "#d7a6ff",
   cyan: "#7fd6c2",
-  white: "#dfe6d3",
-  brightBlack: "#9aa58d",
+  white: "#e6e6e3",
+  brightBlack: "#a1a19c",
   brightRed: "#ff9c8f",
   brightGreen: "#c4f27a",
   brightYellow: "#fff07a",

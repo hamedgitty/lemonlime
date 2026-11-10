@@ -434,7 +434,7 @@ export const Composer = forwardRef<
       className={cx(
         "inline-flex shrink-0 items-center justify-center rounded-full transition-colors duration-150",
         reply ? "size-8" : "size-9",
-        canSend ? "bg-lime text-ink hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
+        canSend ? "bg-lime text-on-citrus hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
       )}
     >
       <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />

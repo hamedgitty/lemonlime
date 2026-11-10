@@ -482,7 +482,7 @@ function WatchToggle({ watch, busy, disabled, onChange }: { watch: PullRequestWa
         onClick={() => onChange(!watch.on)}
         className={cx(
           "inline-flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[13px] font-medium disabled:pointer-events-none disabled:opacity-50",
-          watch.on ? "border-[#c9e89a] bg-lime-soft text-leaf-deep" : "border-line bg-paper text-ink-soft hover:border-line-strong hover:text-ink",
+          watch.on ? "border-lime-line bg-lime-soft text-leaf-deep" : "border-line bg-paper text-ink-soft hover:border-line-strong hover:text-ink",
         )}
       >
         {busy ? <Spinner /> : watch.on ? <Bell aria-hidden="true" className="size-3.5" /> : <BellOff aria-hidden="true" className="size-3.5" />}
@@ -493,7 +493,7 @@ function WatchToggle({ watch, busy, disabled, onChange }: { watch: PullRequestWa
 }
 
 const PR_STYLE = {
-  open: { label: "Open", icon: GitPullRequest, cls: "border-[#c9e89a] bg-lime-soft text-leaf-deep" },
+  open: { label: "Open", icon: GitPullRequest, cls: "border-lime-line bg-lime-soft text-leaf-deep" },
   draft: { label: "Draft", icon: GitPullRequestDraft, cls: "border-line-strong bg-cream-deep text-ink-soft" },
   merged: { label: "Merged", icon: GitMerge, cls: "border-line-strong bg-cream-hover text-ink" },
   closed: { label: "Closed", icon: GitPullRequestClosed, cls: "border-danger/30 bg-danger-soft text-danger" },
@@ -502,7 +502,7 @@ const PR_STYLE = {
 const CHECKS = {
   passing: { label: "Checks passing", icon: Check, cls: "text-leaf" },
   failing: { label: "Checks failing", icon: X, cls: "text-danger" },
-  pending: { label: "Checks running", icon: CircleDashed, cls: "text-[#8A5A00]" },
+  pending: { label: "Checks running", icon: CircleDashed, cls: "text-amber-ink" },
 } as const;
 
 export function PullRequestPill({ pr }: { pr: PullRequestView }) {

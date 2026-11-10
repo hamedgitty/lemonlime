@@ -2,17 +2,20 @@
 
 @theme {
   --color-paper: #ffffff;
-  --color-cream: #fffbea;
-  --color-cream-deep: #fbf3d2;
-  --color-cream-hover: #f3e8bb;
+  /* The page: white here, black in dark mode (see the dark block below). */
+  --color-cream: #ffffff;
+  --color-cream-deep: #f5f5f4;
+  --color-cream-hover: #ebebe9;
   --color-ink: #17200e;
-  --color-ink-soft: #4a5440;
+  --color-ink-soft: #4b5637;
   --color-ink-faint: #636d54;
-  --color-line: #ebe4c6;
-  --color-line-strong: #d9d0a8;
-  --color-control: #8f8a68;
+  --color-line: #e8e8e5;
+  --color-line-strong: #dadad6;
+  --color-control: #8a8a85;
   --color-lemon: #ffe135;
-  --color-lemon-soft: #fff4b0;
+  --color-lemon-soft: #fff6bf;
+  /* Text on solid lemon or lime: always dark, in both themes. */
+  --color-on-citrus: #17200e;
   --color-lemon-2: #ffd60a;
   /* Edges for lemon fills: the hairline round a lemon-soft card, the rim of a lemon button,
      its hover and pressed fills, and the seam between the halves of a split button. */
@@ -23,24 +26,31 @@
   --color-lemon-seam: #d8b900;
   --color-lime: #a3e635;
   --color-lime-soft: #e7f8c6;
+  --color-lime-line: #c9e89a;
   --color-lime-2: #7cc81e;
   --color-lime-edge: #6fa31c;
   --color-leaf: #3f7a16;
   --color-leaf-deep: #2f5c10;
-  --color-rind: #11190a;
-  --color-rind-raised: #1b2612;
-  --color-rind-line: #2a3720;
-  --color-rind-text: #dfe6d3;
-  --color-rind-muted: #9aa58d;
+  /* Terminals and other always-dark surfaces: the same in both themes. */
+  --color-rind: #0f0f0f;
+  --color-rind-raised: #1a1a1a;
+  --color-rind-line: #2a2a2a;
+  --color-rind-text: #e6e6e3;
+  --color-rind-muted: #a1a19c;
   /* Failure text on rind (a terminal block's failed exit). */
   --color-rind-danger: #f2877e;
   --color-danger: #b42318;
   --color-danger-soft: #fdecea;
+  --color-danger-line: #f3c4be;
   --color-amber: #b45309;
   /* Warning text on light fills (5.7:1 on cream). */
   --color-amber-ink: #8a5a00;
+  /* A modified file's mark, on lemon-soft. */
+  --color-modified-ink: #6b5a00;
+  /* Behind dialogs and sheets. */
+  --color-scrim: #17200e;
   /* Status marks: stopped or paused, and failed. */
-  --color-status-idle: #c9c2a0;
+  --color-status-idle: #c4c4bf;
   --color-status-failed: #e5484d;
   /* Error text on the dark rind surfaces (terminal, sidebar). */
   --color-danger-on-rind: #f2877e;
@@ -48,7 +58,7 @@
   --color-diff-add-strong: #2f5c10;
   --color-diff-del: #fde8e6;
   --color-diff-del-strong: #9b1c13;
-  /* Code highlighting: ink and citrus-leaf tones, each at least 4.5:1 on cream. */
+  /* Code highlighting: ink and citrus-leaf tones, each at least 4.5:1 on the page. */
   --color-code-keyword: #3f7a16;
   --color-code-string: #8a5a00;
   --color-code-number: #9b3d12;
@@ -88,6 +98,56 @@
   }
 }
 
+/* Dark mode: black page, light ink. Follows the system unless Settings → Appearance says
+   otherwise (lib/theme.ts sets data-theme on <html>; public/theme.js does it before the
+   first paint). Lemon and lime stay the same; anything written on them uses on-citrus. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-paper: #121212;
+  --color-cream: #000000;
+  --color-cream-deep: #141414;
+  --color-cream-hover: #1f1f1f;
+  --color-ink: #f4f4f1;
+  --color-ink-soft: #c8cbc2;
+  --color-ink-faint: #9da195;
+  --color-line: #242424;
+  --color-line-strong: #333333;
+  --color-control: #6e6e6a;
+  --color-lemon-soft: rgb(255 225 53 / 0.14);
+  --color-lemon-line: rgb(255 225 53 / 0.32);
+  --color-lime-soft: rgb(163 230 53 / 0.14);
+  --color-lime-line: rgb(163 230 53 / 0.32);
+  --color-leaf: #a3e635;
+  --color-leaf-deep: #bef264;
+  --color-danger: #f97066;
+  --color-danger-soft: rgb(240 68 56 / 0.14);
+  --color-danger-line: rgb(240 68 56 / 0.4);
+  --color-amber: #f5a524;
+  --color-amber-ink: #f0b54a;
+  --color-modified-ink: #ffe680;
+  --color-scrim: #000000;
+  --color-status-idle: #4a4a47;
+  --color-status-failed: #f97066;
+  --color-diff-add: rgb(163 230 53 / 0.12);
+  --color-diff-add-strong: #bef264;
+  --color-diff-del: rgb(240 68 56 / 0.14);
+  --color-diff-del-strong: #ff9c8f;
+  --color-code-keyword: #a3e635;
+  --color-code-string: #f0c674;
+  --color-code-number: #f7a072;
+  --color-code-tag: #ff9c8f;
+  --color-code-function: #f4f4f1;
+  --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.05), 0 4px 16px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.08), 0 18px 48px rgb(0 0 0 / 0.7);
+}
+:root:not([data-theme="dark"]) {
+  color-scheme: light;
+}
+/* The logo's pith takes the page colour, so the slice reads the same on white and black. */
+svg [fill="#FFFBEA" i] {
+  fill: var(--color-cream);
+}
+
 @layer base {
   html,
   body,
@@ -109,7 +169,7 @@
   }
   ::selection {
     background: var(--color-lemon);
-    color: var(--color-ink);
+    color: var(--color-on-citrus);
   }
   :focus-visible {
     outline: 2px solid var(--color-leaf);

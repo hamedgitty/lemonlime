@@ -90,7 +90,7 @@ export function QuickOpen({
   return (
     <Dialog.Root open={open} onOpenChange={o => onOpenChange(o)}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-50 bg-ink/20" />
+        <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim/20" />
         <Dialog.Popup
           initialFocus={input}
           finalFocus={returnTo}

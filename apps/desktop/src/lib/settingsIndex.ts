@@ -105,6 +105,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   on("projects", "Archived threads", "restore unarchive archive", "archived"),
   on("projects", "Export chats", "export markdown json download", "export"),
   // Appearance
+  on("appearance", "Theme", "dark mode light mode black white system appearance colour color"),
   on("appearance", "Sidebar", "show hide nav skills plugins automations search"),
   on("appearance", "Show each thread's agent", "agent icons sidebar"),
   on("appearance", "List subagents under their thread", "subagents children sidebar"),

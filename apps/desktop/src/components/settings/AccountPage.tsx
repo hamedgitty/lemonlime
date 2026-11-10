@@ -75,7 +75,7 @@ function AccountTab({ ctx }: { ctx: SettingsCtx }) {
   return (
     <>
       <div
-        className={cx("mb-6 flex items-center gap-3 rounded-xl border px-4 py-3", connected ? "border-[#cfe9a6] bg-lime-soft" : "border-line bg-cream-deep")}
+        className={cx("mb-6 flex items-center gap-3 rounded-xl border px-4 py-3", connected ? "border-lime-line bg-lime-soft" : "border-line bg-cream-deep")}
       >
         <Cloud aria-hidden="true" className={cx("size-5", connected ? "text-leaf" : "text-ink-faint")} />
         <p className="min-w-0 flex-1 text-[14px]">

@@ -26,7 +26,7 @@ export function SentImages({ images }: { images: { id: string; name: string }[] 
       </ul>
       <Dialog.Root open={open !== null} onOpenChange={o => !o && setOpen(null)}>
         <Dialog.Portal>
-          <Dialog.Backdrop className="fixed inset-0 z-50 bg-ink/40 transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
+          <Dialog.Backdrop className="fixed inset-0 z-50 bg-scrim/40 transition-opacity duration-200 data-[ending-style]:opacity-0 data-[starting-style]:opacity-0" />
           <Dialog.Popup className="fixed top-1/2 left-1/2 z-50 flex max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-line bg-paper p-2 text-ink shadow-pop outline-none transition-[opacity,scale] duration-200 ease-(--ease-out) data-[ending-style]:scale-[0.99] data-[ending-style]:opacity-0 data-[ending-style]:duration-150 data-[starting-style]:scale-[0.96] data-[starting-style]:opacity-0">
             <Dialog.Title className="sr-only">{open?.name ?? "Image"}</Dialog.Title>
             {open && <img src={open.src} alt={open.name} className="max-h-[calc(100vh-120px)] max-w-full rounded-xl object-contain" />}
@@ -77,7 +77,7 @@ function Thumb({ id, name, load, onOpen }: { id: string; name: string; load: Loa
       onClick={() => src && onOpen(src)}
       aria-label={`Open ${name}`}
       title={name}
-      className="block size-20 overflow-hidden rounded-lg border border-[#e9d76a] bg-paper/70 outline-offset-2 hover:border-[#d9c445]"
+      className="block size-20 overflow-hidden rounded-lg border border-lemon-line bg-paper/70 outline-offset-2 hover:border-lemon-edge"
     >
       {src && <img src={src} alt="" className="size-full object-cover" draggable={false} />}
     </button>

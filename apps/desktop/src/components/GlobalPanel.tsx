@@ -15,20 +15,20 @@ export type PanelTab =
   { id: string; kind: "terminal"; title: string } | { id: string; kind: "browser"; title: string; url: string } | { id: string; kind: "new"; title: string };
 
 const TERM_THEME = {
-  background: "#11190a",
-  foreground: "#dfe6d3",
+  background: "#0f0f0f",
+  foreground: "#e6e6e3",
   cursor: "#a3e635",
-  cursorAccent: "#11190a",
-  selectionBackground: "#3f7a1680",
-  black: "#1b2612",
+  cursorAccent: "#0f0f0f",
+  selectionBackground: "#a3e63540",
+  black: "#1a1a1a",
   red: "#f07a6a",
   green: "#a3e635",
   yellow: "#ffe135",
   blue: "#8cb8ff",
   magenta: "#d7a6ff",
   cyan: "#7fd6c2",
-  white: "#dfe6d3",
-  brightBlack: "#9aa58d",
+  white: "#e6e6e3",
+  brightBlack: "#a1a19c",
   brightWhite: "#ffffff",
 };
 

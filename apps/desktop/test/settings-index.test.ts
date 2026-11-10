@@ -17,8 +17,7 @@ describe("settings search", () => {
     expect(hits.map(h => `${h.page}:${h.tab}`)).toEqual(["agents:defaults", "cloud:environment"]);
     expect(findSettings("microphone")[0]).toMatchObject({ page: "general", tab: "general", title: "Microphone" });
     expect(findSettings("dim panes")[0]).toMatchObject({ page: "appearance", title: "Dim inactive panes in split view" });
-    // The app is light only, so there's no colour option to find.
-    expect(findSettings("dark")).toEqual([]);
+    expect(findSettings("dark mode")[0]).toMatchObject({ page: "appearance", title: "Theme" });
   });
 
   it("needs every word, and puts title matches first", () => {

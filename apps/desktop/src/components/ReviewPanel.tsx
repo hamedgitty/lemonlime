@@ -80,7 +80,7 @@ const STATUS_LABEL: Record<ReviewFile["status"], string> = {
 };
 const STATUS_STYLE: Record<ReviewFile["status"], string> = {
   added: "bg-lime-soft text-leaf-deep",
-  modified: "bg-lemon-soft text-[#6b5a00]",
+  modified: "bg-lemon-soft text-modified-ink",
   deleted: "bg-danger-soft text-danger",
   renamed: "bg-cream-deep text-ink-soft",
   copied: "bg-cream-deep text-ink-soft",
@@ -836,7 +836,7 @@ function UnifiedRow({
   code?: ReactNode | undefined;
 }) {
   return (
-    <tr className={cx(LINE_BG[line.kind], picked && "outline-2 -outline-offset-2 outline-[#e9c900]")}>
+    <tr className={cx(LINE_BG[line.kind], picked && "outline-2 -outline-offset-2 outline-lemon-edge")}>
       <LineNo n={line.oldNo} line={line} picked={picked} onPick={onPick} />
       <LineNo n={line.newNo} line={line} picked={picked} onPick={onPick} />
       <td aria-hidden="true" className={cx("w-4 pl-1.5 align-top select-none", LINE_FG[line.kind])}>
@@ -877,7 +877,7 @@ function SplitRowView({
             LINE_BG[l.kind],
             hl?.has(l) ? "text-ink" : LINE_FG[l.kind],
             which === "left" && "border-r border-line/70",
-            picked && "outline-2 -outline-offset-2 outline-[#e9c900]",
+            picked && "outline-2 -outline-offset-2 outline-lemon-edge",
           )}
         >
           <span className="sr-only">{l.kind === "add" ? "Added: " : l.kind === "del" ? "Removed: " : ""}</span>

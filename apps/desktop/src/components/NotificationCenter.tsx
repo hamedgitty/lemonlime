@@ -46,7 +46,7 @@ export function NotificationCenter({
           {unread > 0 && (
             <span
               aria-hidden="true"
-              className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-lime px-1 text-[12px] font-semibold text-ink tabular-nums"
+              className="absolute -top-0.5 -right-0.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-lime px-1 text-[12px] font-semibold text-on-citrus tabular-nums"
             >
               {unread > 9 ? "9+" : unread}
             </span>

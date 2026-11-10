@@ -20,6 +20,8 @@ services:
       LEMONLIME_DOCKER_PUBLIC_URL: ${LEMONLIME_PUBLIC_URL}/sandbox
       # Runners reach the dashboard through the proxy's sandbox-only port, never directly.
       LEMONLIME_RUNNER_CONTROL_PLANE_URL: http://proxy:8080
+      # Every request comes through the one proxy below, which says who the caller is.
+      LEMONLIME_TRUSTED_PROXIES: "1"
     volumes:
       - lemonlime-data:/data
       # Lets the dashboard start sandbox containers. Anything with this socket controls

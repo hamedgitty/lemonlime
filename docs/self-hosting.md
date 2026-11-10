@@ -38,9 +38,10 @@ reads `apps/web/.env.local`. On Workers, plain settings go under `vars` in
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `LEMONLIME_PUBLIC_URL` | yes | Public URL of the control plane. Better Auth uses it as its base URL and trusted origin; runners send heartbeats to `<url>/api/runner/heartbeat`, so sandboxes must be able to reach it. |
-| `BETTER_AUTH_SECRET` | yes (secret) | Signs session cookies. `openssl rand -base64 32`. Changing it signs everyone out. Only a development run whose `LEMONLIME_PUBLIC_URL` is a localhost address (or unset) works without it; anywhere else sign-in refuses to start until it is set. |
-| `LEMONLIME_TOKEN_SECRET` | yes (secret) | Master secret, at least 16 characters (`openssl rand -hex 32`). Each thread's secret is derived from it. Changing it invalidates every running sandbox's tokens. |
-| `LEMONLIME_CRON_SECRET` | Node | Bearer secret for `POST /api/cron/sweep`. Not needed on Workers. |
+| `BETTER_AUTH_SECRET` | yes (secret) | Signs session cookies. `openssl rand -base64 32`. Changing it signs everyone out. Only a development run whose `LEMONLIME_PUBLIC_URL` is set to a localhost address works without it; anywhere else sign-in refuses to start until it is set. The placeholder from `.env.example` counts as not set. |
+| `LEMONLIME_TOKEN_SECRET` | yes (secret) | Master secret, at least 16 characters (`openssl rand -hex 32`). Each thread's secret is derived from it. Changing it invalidates every running sandbox's tokens. A production run refuses the placeholder from `.env.example`. |
+| `LEMONLIME_CRON_SECRET` | Node | Bearer secret for `POST /api/cron/sweep`. Not needed on Workers. A production run refuses the placeholder from `.env.example`. |
+| `LEMONLIME_TRUSTED_PROXIES` | no | Node only. How many reverse proxies stand in front of the app (usually `1`). `X-Forwarded-For` is only believed when this is set; see [Signing in](#signing-in). |
 | `LEMONLIME_DATABASE_URL` | no | Node only. libSQL URL of the SQLite database, default `file:./data/lemonlime.db` (relative to `apps/web`). |
 | `LEMONLIME_EMAIL_FROM` | yes | Sender of every email (sign-in codes, invites), e.g. `LemonLime <sign-in@example.com>`. |
 | `LEMONLIME_SUPPORT_EMAIL` | no | An address people can write to, shown at the bottom of every email, e.g. `help@example.com`. |
@@ -58,8 +59,11 @@ that need them, with a message naming the variable.
 
 People sign in with a **one-time code**: they enter their email, receive a
 6-digit code (valid for 10 minutes) and type it in. The first sign-in creates
-the account and a personal workspace. Codes are stored hashed and a code stops
-working after 5 wrong attempts.
+the account and a personal workspace. A code stops working after 5 wrong attempts.
+Asking again while a code is still waiting sends the same code and gives it another
+10 minutes, so nobody can cancel the code in someone's inbox by asking for another.
+For that, waiting codes are stored encrypted with `BETTER_AUTH_SECRET`; changing the
+secret makes them unreadable, and people ask for a new one.
 
 Rate limits are counted in the database (table `rate_limit`), so they hold across
 every Worker isolate or Node process:
@@ -80,12 +84,14 @@ A request for a code that is over either hourly limit changes nothing: the code 
 sent keeps working. Counting per client first means someone asking again and again for
 another person's address uses up only their own share, not that person's.
 
-On Workers the client IP comes from `CF-Connecting-IP`. On Node it comes from
-`X-Forwarded-For`, and only when that header holds exactly one address, because a list
-could have been started by the client. Make sure your proxy overwrites the header with
-the client's address rather than adding to whatever the client sent. Requests without a
-usable address are all counted as one client. The same goes for calls to an automation's
-webhook.
+On Workers the client IP comes from `CF-Connecting-IP`. On Node, anyone can send
+`X-Forwarded-For`, so it is only believed when `LEMONLIME_TRUSTED_PROXIES` says how many
+reverse proxies stand in front of the app (usually `1`). Each proxy adds the address it
+heard from to the end of that header, so with one proxy the last entry is the client, and
+with two it is the one before that. Without the setting, the client is wherever the
+connection came from. Only `pnpm --filter @lemonlime/web serve` and the Docker image can
+see that; under plain `next start`, every request is counted as one client. So are
+requests without a usable address. The same goes for calls to an automation's webhook.
 
 Email is sent with the first transport that is configured:
 
@@ -174,8 +180,8 @@ file. Run a single instance per database file.
 
 Long-running requests: creating or resuming a sandbox waits for the provider,
 which can take tens of seconds, so allow at least 2 minutes per request if your
-host has a timeout. Put the app behind a reverse proxy that sets
-`X-Forwarded-For`, so sign-in rate limits apply per client.
+host has a timeout. Behind a reverse proxy, set `LEMONLIME_TRUSTED_PROXIES`
+(see [Signing in](#signing-in)), so sign-in rate limits apply per client.
 
 ### Scheduling the sweep
 
@@ -255,8 +261,23 @@ credentials. Outbound mail ports are closed too. If you set up by hand, run it a
 after `docker compose up -d`. Sandbox containers also run with no extra Linux
 capabilities, `no-new-privileges` and a limit of 1024 processes.
 
-The dashboard container has the host's Docker socket so it can start sandboxes, which
-gives it full control of Docker on the host: use a machine dedicated to LemonLime.
+The dashboard container has the host's Docker socket so it can start sandboxes, and its
+process runs as root inside the container. That socket is full control of Docker on the
+host, which amounts to root on the host whichever user holds it: someone who found a flaw in
+the dashboard, or in something it depends on, could start a container that mounts the
+host's disk. So:
+
+- Use a machine dedicated to LemonLime, with nothing else on it worth taking.
+- Keep the dashboard reachable only through the proxy, as the compose file does.
+- With Daytona or E2B the dashboard never calls Docker: take the socket line out of
+  `compose.yaml` and the risk is gone.
+- With the Docker provider, a rootless Docker daemon makes the socket worth one
+  unprivileged user instead of root, and a filtering proxy in front of the socket can let
+  through only what the provider uses (`docker run`, `inspect`, `image inspect`, `port`,
+  `start`, `stop` and `rm`). Neither is set up by the compose file.
+
+Running the dashboard as another user inside its container wouldn't change this while it
+can still use the socket, so the image doesn't.
 `LEMONLIME_HTTP_PORT` and `LEMONLIME_HTTPS_PORT` change the ports Caddy listens on.
 
 ## Database
@@ -274,6 +295,7 @@ migrations in `packages/db/migrations/`, in the format
 | `threads` | One row per thread: agent, repo, branch, mode, status, sandbox id, runner URL, latest seq, idle and running times, first prompt. |
 | `sandbox_runs` | Neutral audit log: one row per stretch of sandbox running time, with its end reason. |
 | `access_tokens` | Personal access tokens for the desktop app. Only SHA-256 hashes are stored. |
+| `desktop_approvals` | Sign-in links the desktop app opened that were already approved, so one link makes one token. Hashes only, deleted after a day. |
 | `pending_messages` | Messages sent to a thread while its sandbox was paused, waiting for the runner. |
 | `secrets` | Workspace secrets passed to sandboxes, encrypted (AES-256-GCM). |
 | `agent_credentials` | Agent sign-ins saved from a sandbox, encrypted, so the next sandbox starts signed in. |
@@ -285,7 +307,9 @@ migrations in `packages/db/migrations/`, in the format
 SQLite has no row-level security. Every query made on behalf of a person goes
 through `apps/web/src/lib/access.ts`, which checks that they belong to the
 workspace (threads) or own the row (tokens). Threads in other workspaces are
-reported as not found.
+reported as not found. Everyone in a workspace can read its threads. Only the person
+who started a thread can direct its agent or reach its sandbox, until they share it
+with the workspace.
 
 ## Health checks and logs
 
@@ -355,6 +379,8 @@ so overlapping sweeps never start it twice. The prompt waits in the new thread's
 and the runner picks it up when it starts, with nobody watching. If the usage policy says
 no at that moment, the run is recorded as skipped and the automation stays on. Schedule,
 time zone, agent, model, thinking level and repository are checked when it is saved.
+Its runs get every workspace secret unless it names the ones they need (`secretNames`:
+a list of names, or `null` for all of them).
 
 A schedule that is switched on can run at most once every 5 minutes. When the clocks
 change in its time zone, a schedule for particular hours still runs once a day: a time
@@ -544,6 +570,9 @@ agent is mid-turn, the CPU in use and the busiest program. The runner measures t
 inside the sandbox, so a policy can use them to notice runaway or unwanted work but
 shouldn't treat them as proof.
 
+A link a plugin hands back with a denial or a notice (`actionUrl`) is shown only when
+it starts with `https://`, or with `http://` for an address on this computer.
+
 A plugin can also listen for `events`: `onUserCreated` after someone's first sign-in
 (with their new workspace), `onThreadCreated` after each thread is created, and
 `onSchedule` about once a minute with the sweep, for periodic work such as reminder
@@ -569,7 +598,8 @@ name to confirm; personal access tokens can't delete accounts or workspaces.
 Some things are never kept: GitHub sign-in hands over tokens, but LemonLime never stores
 them (repositories go through the GitHub App, with tokens that last an hour). The sweep
 also deletes expired sessions and sign-in codes, rate-limit counters older than a day,
-and invitations a month after they were accepted or expired.
+invitations a month after they were accepted or expired, and personal access tokens
+nobody has used for 90 days.
 
 Plugin emails can use the app's own layout: `renderEmail` from `@lemonlime/plugins`, with
 `services.emailBrand()` for this deployment's name, logo and links.
@@ -578,7 +608,8 @@ Plugin emails can use the app's own layout: `renderEmail` from `@lemonlime/plugi
 
 People create personal access tokens under **Settings** and paste one, with the
 control plane URL, into the desktop app. The app sends it as
-`Authorization: Bearer <token>`. Revoking a token signs that app out.
+`Authorization: Bearer <token>`. Revoking a token signs that app out. A token that
+goes 90 days without being used stops working.
 
 ## API summary
 

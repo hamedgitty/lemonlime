@@ -32,9 +32,9 @@ lemonlime-runner cleanup --thread <id> --source-repo <path>
   --pull-request <n>       With --branch: it's pull request <n>'s branch (forks too)
   --port <n>               Port to listen on (default: 7420, env LEMONLIME_RUNNER_PORT)
   --host <addr>            Interface to bind (default: 127.0.0.1; use 0.0.0.0 in sandboxes)
-  --data-dir <path>        Where history is stored (default: <workdir>/.lemonlime, or
-                           ~/.lemonlime/threads/<thread> with --source-repo)
-  --control-plane <url>    Send heartbeats to this control plane
+  --data-dir <path>        Where history is stored (default: ~/.lemonlime/threads/<thread>,
+                           outside the folder the agent works in)
+  --control-plane <url>    Send heartbeats to this control plane (https, or see below)
   --instructions-file <path>   Your own instructions, added to every turn (at most 32 KB)
   --strip-coauthors        Remove Co-authored-by trailers from the agent's commits
   --branch-prefix <prefix> Name the thread's branch <prefix><thread> (default: agent/)
@@ -51,6 +51,30 @@ lemonlime-runner cleanup --thread <id> --source-repo <path>
 get the same settings through `LEMONLIME_INSTRUCTIONS`, `LEMONLIME_STRIP_COAUTHORS=1`,
 `LEMONLIME_RETRY_MAX_WAIT` and `LEMONLIME_USER_SKILLS_<n>` (see "Workspace cloud
 settings" in [self-hosting.md](self-hosting.md)).
+
+### Where a thread's data is kept
+
+History, the saved queue and the rest of what the runner remembers about a thread live in
+`~/.lemonlime/threads/<thread>` (under `$LEMONLIME_HOME` when that is set), outside the
+folder the agent works in, so the agent editing files there can't change them. A thread
+whose history already sits in `<workdir>/.lemonlime` carries on using that folder: it
+counts only when the history there names this thread and the thread has no folder of its
+own yet, so a `.lemonlime` folder that came with a repository is never picked up.
+`--data-dir` puts it somewhere else.
+
+In a cloud sandbox the agent runs as the same user as the runner, so the folder is out of
+the checkout (and out of commits and diffs) but not out of reach of a shell command.
+
+### The control plane's address
+
+`--control-plane` must be an `https://` address, because the runner sends tokens there.
+Plain `http://` is accepted only for this computer (`localhost`, a name ending in
+`.localhost`, `127.0.0.1` or `[::1]`), for a container's name on the same Docker network
+(a name with no dots, like `http://web:3000`), and for an address on a private network
+(`10.x.x.x`, `172.16.x.x` to `172.31.x.x`, `192.168.x.x`, an IPv6 address starting `fc` or
+`fd`, or a name ending in `.internal`, `.local` or `.home.arpa`, which covers
+`host.docker.internal`). Anything else stops the runner before it listens, with a message
+that says the rule.
 
 ### Your instructions
 
@@ -106,6 +130,7 @@ Environment:
 | --- | --- |
 | `LEMONLIME_THREAD_SECRET` | The thread's own secret. Client tokens must be signed with it. Required, unless `--secret-stdin` is given. Prefer `--secret-stdin`: see [Tokens](#tokens) for what the agent can read. |
 | `LEMONLIME_HOME` | Where local worktrees and history live. Default `~/.lemonlime`. |
+| `LEMONLIME_TRUST_REPO_GIT_CONFIG` | Set to `1` to let programs named in the repository's own git config run when the runner calls git. See [Git settings the agent can write](#git-settings-the-agent-can-write). |
 
 ### Threads on your other machines (SSH)
 
@@ -161,7 +186,17 @@ sandbox's. Your instructions and thread settings go along as flags (instructions
 
 ## Endpoints
 
-- `GET /healthz` → `{ ok, threadId, status, latestSeq, idleSince }`
+- `GET /healthz` → `{ ok, threadId, version }` for anyone who asks, which is all a
+  provider waiting for the runner to start needs. The rest (`status`, `latestSeq`,
+  `idleSince`, the agent, its version and account, waiting approvals, a usage limit) is
+  added only for an app on the same computer as a runner that isn't in a sandbox, or for
+  a request with `Authorization: Bearer <client or runner token>`.
+- `GET /capabilities` → what the thread's agent can do. No token.
+- Answers given without a token carry no header that lets a web page elsewhere read them.
+  A runner that listens on this computer only (the default `--host`) also refuses, with
+  403, a request whose `Host` isn't `127.0.0.1`, `localhost` or `[::1]`, so a page that
+  points its own name at this computer gets nothing. A request with no `Host` at all
+  isn't from a browser and is answered.
 - `GET /ws` → WebSocket. First message must be `hello` with a `client` token.
   See `packages/protocol/src/wire.ts` for every message.
 
@@ -176,6 +211,13 @@ sandbox's. Your instructions and thread settings go along as flags (instructions
   acknowledged as a `duplicate` and never starts a second turn. `RunnerClient` resends
   unacknowledged messages after a reconnect for this reason.
 - Every `send_message` gets an `ack` with `started`, `queued` or `duplicate`.
+- A `user_message` event that nobody typed says so in `from`: `"subagent"` for a
+  subagent's report, `"runner"` for the runner carrying the thread on (a pull request
+  watch waking the agent, carrying on after a usage limit or a restart, `/compact`). The
+  runner sets it itself. A message that arrives from a client never has it, whatever the
+  client sends, so apps can trust it to tell people's messages from the rest. A message
+  waiting in the queue keeps its mark until it starts, across a restart too, and loses
+  it when a person rewrites the queued text.
 - If the runner stops in the middle of a turn, it never runs that message again. On
   restart it commits whatever the agent left behind, records an error with code
   `turn_outcome_unknown`, then carries on with the queue. The apps show a Continue button
@@ -202,8 +244,8 @@ when they point inside the folder.
 
 `GET /file?path=<relative path>` (client token) returns one file from the working folder
 for the app's file tabs, up to 20 MB. The path must be relative and stay inside the
-working folder once symlinks are followed; `..`, absolute paths, `.git` and the runner's
-own `.lemonlime` folder are refused.
+working folder once symlinks are followed; `..`, absolute paths, `.git` and a
+`.lemonlime` folder at the top (where a thread's data may be kept) are refused.
 
 `GET /folder?dir=<relative path>` (client token) lists one folder for the app's Files tab:
 its sub-folders, then its files, each by name, up to 2,000 entries. It is built from the
@@ -295,13 +337,56 @@ carries on after a restart, and stops when the pull request is merged or closed.
 text; bigger files say they were shortened. Working-tree diffs use a scratch index, so
 the agent's own index is never touched.
 
-Every git call the runner makes turns off `core.fsmonitor`, hooks and bare-repository
-discovery, refuses a remote whose address is a command (`ext::`), never runs an external
-diff or textconv filter, has a time limit, and refuses branch names, refs and paths that
-start with `-`. Settings people rely on still apply to those calls: credential helpers,
-the ssh command, commit signing and content filters (large-file storage is one). The
-agent can edit the repository's config, so a program named there for one of those still
-runs when the runner commits, fetches or pushes.
+### Git settings the agent can write
+
+The agent can edit the repository's own config (`.git/config`, and a worktree's), and
+git lets a config name programs to run. So every git call the runner itself makes (its
+commits, diffs, fetches, pushes, merges, and the history it keeps for going back) is run
+so that the repository's own config can't start a program or send anything somewhere
+else:
+
+- Hooks are off for all of them, and so are `core.fsmonitor` and bare-repository
+  discovery. The runner's own commits and merges also pass `--no-verify`. Hooks still
+  run for commits the agent makes itself, in its own shell.
+- A setting that names a program is taken from your own git config (global or system)
+  and never from the repository's: the ssh command, credential helpers, the askpass
+  program, editors and pagers, the signing program, key and whether to sign, merge
+  drivers, content filters, the proxy command and the programs run on the other end of
+  a fetch or push. With nothing in your own config, git's default is used. Commits are
+  signed when your config asks for it, with your key.
+- Large-file storage keeps working: its standard filter lines are let through.
+- Diffs never run an external diff tool or a textconv filter.
+- A remote whose address is a command (`ext::`) is refused.
+- Fetching and pushing are refused, with a message that says why, while the repository's
+  own config rewrites addresses (`url.<base>.insteadOf` or `pushInsteadOf`). Move the
+  setting to your own config with `git config --global` to keep it.
+- How far to trust a server is yours to set as well: whether its certificate is checked
+  (`http.sslVerify`) and whether redirects are followed (`http.followRedirects`) come
+  from your own config, or git's default, for one address or for all. Fetching and
+  pushing are refused while the repository's own config names the certificates to trust
+  (`http.sslCAInfo` or `http.sslCAPath`) and yours doesn't.
+- Every call has a time limit, and branch names, refs and paths that start with `-` are
+  refused.
+
+If a repository really does depend on a program named in its own config, start the
+runner with `LEMONLIME_TRUST_REPO_GIT_CONFIG=1`. That turns off the second, sixth and
+seventh points; the rest stay.
+
+What this doesn't cover:
+
+- The config is read just before each call, so a change made between the reading and
+  the call is missed.
+- A submodule has a config of its own, which isn't read. The runner fills submodules
+  once, when it makes a thread's folder, and a program named in a submodule's own config
+  would run then.
+- The remote's address is the repository's to set, so the agent can point `origin`
+  somewhere else, and a push from the app then goes there.
+- Other settings that don't name a program still apply, `http.proxy` among them. A proxy
+  set there sees which servers an https fetch or push goes to, not what is sent.
+- Programs are found on `PATH`. In a sandbox the agent can put a stand-in `git-lfs` or
+  `ssh` there.
+- Your own git config is trusted. In a sandbox the agent runs as the runner's user and
+  can edit that too, so there this is a guard against a careless agent, not a wall.
 
 ## Previews
 
@@ -311,7 +396,10 @@ thread's secret and offers the port; a `preview_update` event lists what's on of
 this computer the apps open `http://localhost:<port>` directly. For a cloud thread the
 desktop app runs the runner in `tunnel` mode: it listens on 127.0.0.1 only, refuses
 requests whose Host or Origin isn't that address (so other sites can't reach it through
-DNS rebinding), and carries each connection to the sandbox over the runner's `/tunnel`
+DNS rebinding), takes a request that names no page (`Origin: null`, which a browser
+sends for a sandboxed frame or a form with no referrer) only when the browser also says
+it came from the preview's own address (`Sec-Fetch-Site: same-origin`) and it isn't a
+WebSocket, and carries each connection to the sandbox over the runner's `/tunnel`
 socket, which takes a client token and only offered ports. HTTP, WebSockets and
 server-sent events all pass through as bytes; there is no public URL.
 
@@ -445,6 +533,17 @@ agent plugins listed in `<dir>/plugins.json` are added too: skills for every age
 commands and subagents for Claude Code, MCP servers for Claude Code and Codex. Plugin
 hooks are never run. See [Agent plugins](plugins.md).
 
+Skills and plugin files are copied into folders the agent can write to, so the copying
+never follows a link out of the thread's folder. If a folder on the way (`.claude`,
+`.claude/skills`, …) is a link to somewhere outside the thread's folder, that skill or
+plugin part is left out and the runner says so (a skill in its log, a plugin in the
+thread). A link that stays inside the thread's folder is followed, because repositories
+do keep such links. A link standing where a file is about to be written is removed
+first, never written through. Inside a skill, a link is kept only when it points at
+something in the same skill. What this doesn't close: a folder could be swapped for a
+link between the check and the copy, which takes an agent that is already running in
+the thread.
+
 ## Approvals
 
 At autonomy `edits` (the default for local threads) agents edit files freely but ask
@@ -493,6 +592,13 @@ control plane, which keeps it encrypted for the user's next sandboxes.
 - **Sign-in and updates.** `auth_required` and `agent_outdated` errors carry the
   agent's own words plus the command that fixes it, such as `claude auth login` or
   `codex update`.
+- **Very long threads.** The runner holds only the newest part of a thread's history in
+  memory (about 10,000 events, fewer when they are large). Nothing is ever removed from
+  the file on disk: older events are read back from it when an app asks for them, so
+  resuming from any `seq` still works.
+- **Errors nobody caught.** Once the runner is serving, an unexpected error is written
+  to its log and it keeps running; before that, it stops. `SIGTERM` and `SIGINT` stop
+  it cleanly.
 
 ## Tokens
 
@@ -528,8 +634,27 @@ Whether the agent can go and find the secret depends on how the runner got it:
   runner, so it can ask the keeper for a runner token too; it still can't make a token that
   opens the thread as the user.
 
-Without the agent-user setting, a sandbox's runner gets the secret in its environment, so the
-second case applies to it.
+The Docker provider uses a keeper unless it is told not to; Daytona and E2B use one only
+when asked. Without one, a sandbox's runner gets the secret in its environment, so the
+second case applies to it. [Keeper mode](sandboxes.md#keeper-mode-keeping-the-thread-secret-from-the-agent)
+says what a keeper does and doesn't protect.
+
+A token's scope says what it opens:
+
+- `client`: the thread as its user. Everything in this document that wants a token takes
+  this one unless it says otherwise.
+- `phone`: the thread's WebSocket only, for a phone reaching a thread that runs on the
+  user's computer. It may send `send_message`, `interrupt`, `approve`, `answer_question`,
+  `edit_queue`, `set_options` (never full access), `limit_action`, `compact`,
+  `continue_after_restart` and `ping`. Every other message is refused (`bad_request`),
+  so a message type added later stays off phones until it is listed. Going back in the
+  thread, side chats, offering a preview, signing the agent in and answering the agent's
+  requests for the computer are not on the list. The terminal, files, uploads, downloads
+  and previews don't take a phone token at all.
+- `runner`: the runner talking to the control plane, and the agent's own tools talking
+  to the runner (signed with the agent key).
+- `relay`: the control plane collecting what a sandbox that can't reach it has kept for
+  it (see [sandboxes](sandboxes.md)).
 
 ## Idle pausing
 

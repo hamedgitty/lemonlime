@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
-import { user, workspaceInvites, workspaceMembers, workspaces, type Db, type WorkspaceRole } from "@lemonlime/db";
+import { automations, user, workspaceInvites, workspaceMembers, workspaces, type Db, type WorkspaceRole } from "@lemonlime/db";
 import { userWorkspaceIds } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { inviteEmail } from "./email.ts";
@@ -203,9 +203,11 @@ export async function acceptInvite(ctx: AppContext, o: { userId: string; token: 
     if (found.reason === "used") throw new HttpError(410, "This invitation has already been used.");
     throw new HttpError(404, "This invitation doesn't exist or was withdrawn.");
   }
-  const [me] = await ctx.db.select({ email: user.email }).from(user).where(eq(user.id, o.userId));
+  const [me] = await ctx.db.select({ email: user.email, emailVerified: user.emailVerified }).from(user).where(eq(user.id, o.userId));
   if (!me?.email || normalizeEmail(me.email) !== found.email)
     throw new HttpError(403, "This invitation was sent to a different email address. Sign in with that address to accept it.");
+  // An account can carry an address nobody has shown they own. The invitation is for whoever reads that inbox.
+  if (!me.emailVerified) throw new HttpError(403, "Confirm your email address first: sign out, then sign in with a code sent to it.");
   if (!(await memberRole(ctx.db, o.userId, found.workspaceId))) {
     await checkSeat(ctx, o.userId, found.workspaceId, found.inviteId);
     await ctx.db.insert(workspaceMembers).values({ workspaceId: found.workspaceId, userId: o.userId, role: "member" }).onConflictDoNothing();
@@ -214,9 +216,13 @@ export async function acceptInvite(ctx: AppContext, o: { userId: string; token: 
   return found.workspaceId;
 }
 
+/** Why an automation stopped when the person it runs as left its workspace. */
+export const AUTOMATION_CREATOR_LEFT = "The person who set this up is no longer in this workspace.";
+
 /**
  * Remove someone from a workspace. Owners can remove members; anyone can leave. A
  * workspace always keeps an owner, and nobody leaves their own personal workspace.
+ * Automations they set up there are switched off: those run as them.
  */
 export async function removeMember(ctx: AppContext, o: { userId: string; workspaceId: string; memberId: string }): Promise<void> {
   const myRole = await memberRole(ctx.db, o.userId, o.workspaceId);
@@ -236,6 +242,10 @@ export async function removeMember(ctx: AppContext, o: { userId: string; workspa
     if (owners.length <= 1) throw new HttpError(400, "A workspace needs at least one owner.");
   }
   await ctx.db.delete(workspaceMembers).where(and(eq(workspaceMembers.workspaceId, o.workspaceId), eq(workspaceMembers.userId, o.memberId)));
+  await ctx.db
+    .update(automations)
+    .set({ enabled: false, nextRunAt: null, pausedReason: AUTOMATION_CREATOR_LEFT })
+    .where(and(eq(automations.workspaceId, o.workspaceId), eq(automations.createdBy, o.memberId), eq(automations.enabled, true)));
 }
 
 /** Withdraw an invitation that hasn't been accepted. Owners only. */

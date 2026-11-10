@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BACKGROUND_KEEP_AWAKE_MS, DRAIN_TIMEOUT_MS, IDLE_PAUSE_AFTER_MS } from "@lemonlime/protocol";
-import { RUNNER_SILENCE_PAUSE_MS, decideSweep, runtimeSeconds, sweepVerdict, type SweepThread } from "../src/lib/sweep.ts";
+import { RUNNER_SILENCE_PAUSE_MS, decideSweep, runSteps, runtimeSeconds, sweepVerdict, type SweepThread } from "../src/lib/sweep.ts";
 
 const NOW = Date.parse("2026-01-01T12:00:00.000Z");
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -115,5 +115,29 @@ describe("runtimeSeconds", () => {
     expect(runtimeSeconds(ago(90_500), NOW)).toBe(90);
     expect(runtimeSeconds(new Date(NOW + 5000).toISOString(), NOW)).toBe(0);
     expect(runtimeSeconds("not a date", NOW)).toBe(0);
+  });
+});
+
+describe("runSteps", () => {
+  it("keeps going when one job fails, and names the job that failed", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const order: string[] = [];
+    const { results, failed } = await runSteps({
+      first: async () => (order.push("first"), 1),
+      broken: async () => {
+        order.push("broken");
+        throw new Error("no database");
+      },
+      last: async () => (order.push("last"), "done"),
+    });
+    expect(order).toEqual(["first", "broken", "last"]);
+    expect(results).toEqual({ first: 1, broken: null, last: "done" });
+    expect(failed).toEqual(["broken"]);
+    expect(log).toHaveBeenCalledOnce();
+    log.mockRestore();
+  });
+
+  it("reports nothing failed when every job works", async () => {
+    expect(await runSteps({ a: async () => "x" })).toEqual({ results: { a: "x" }, failed: [] });
   });
 });

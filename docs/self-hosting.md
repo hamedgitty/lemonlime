@@ -38,7 +38,7 @@ reads `apps/web/.env.local`. On Workers, plain settings go under `vars` in
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `LEMONLIME_PUBLIC_URL` | yes | Public URL of the control plane. Better Auth uses it as its base URL and trusted origin; runners send heartbeats to `<url>/api/runner/heartbeat`, so sandboxes must be able to reach it. |
-| `BETTER_AUTH_SECRET` | yes (secret) | Signs session cookies. `openssl rand -base64 32`. Changing it signs everyone out. |
+| `BETTER_AUTH_SECRET` | yes (secret) | Signs session cookies. `openssl rand -base64 32`. Changing it signs everyone out. Only a development run whose `LEMONLIME_PUBLIC_URL` is a localhost address (or unset) works without it; anywhere else sign-in refuses to start until it is set. |
 | `LEMONLIME_TOKEN_SECRET` | yes (secret) | Master secret, at least 16 characters (`openssl rand -hex 32`). Each thread's secret is derived from it. Changing it invalidates every running sandbox's tokens. |
 | `LEMONLIME_CRON_SECRET` | Node | Bearer secret for `POST /api/cron/sweep`. Not needed on Workers. |
 | `LEMONLIME_DATABASE_URL` | no | Node only. libSQL URL of the SQLite database, default `file:./data/lemonlime.db` (relative to `apps/web`). |
@@ -69,12 +69,23 @@ every Worker isolate or Node process:
 | Any sign-in request, per client IP | 100 a minute |
 | Asking for a code, per client IP | 3 a minute |
 | Entering a code, per client IP | 10 a minute |
-| Codes emailed to one address, whatever the IP | 5 an hour (extra requests send nothing, and look the same) |
+| Codes one client IP can have emailed to one address | 5 an hour (extra requests send nothing, and look the same) |
+| Codes emailed to one address, whatever the IP | 20 an hour (the same) |
 | New personal access tokens, per user | 10 an hour |
 | New threads, and sandbox starts/resumes, per user | 30 a minute each |
+| Messages sent through `POST /api/threads/:id/messages`, per user | 60 a minute |
+| Messages waiting for one thread | 50 |
 
-On Node, the client IP comes from `X-Forwarded-For`; make sure your proxy overwrites
-that header rather than passing on whatever the client sent.
+A request for a code that is over either hourly limit changes nothing: the code already
+sent keeps working. Counting per client first means someone asking again and again for
+another person's address uses up only their own share, not that person's.
+
+On Workers the client IP comes from `CF-Connecting-IP`. On Node it comes from
+`X-Forwarded-For`, and only when that header holds exactly one address, because a list
+could have been started by the client. Make sure your proxy overwrites the header with
+the client's address rather than adding to whatever the client sent. Requests without a
+usable address are all counted as one client. The same goes for calls to an automation's
+webhook.
 
 Email is sent with the first transport that is configured:
 
@@ -193,8 +204,11 @@ For example, a crontab entry:
 ```
 
 A systemd timer or a Kubernetes CronJob works just as well. The response lists
-what was checked and paused. (On Workers the cron trigger runs the same sweep
-directly; you do not need this route there.)
+what was checked and paused. Each of the sweep's jobs (pausing sandboxes, starting
+automations, auto-delete, cleanup) runs even if another one fails; when any did, the
+answer is a 500 that still carries the others' results and names the failed jobs in
+`failed`, and the details are in the server log. (On Workers the cron trigger runs the
+same sweep directly; you do not need this route there.)
 
 ## C. Docker Compose on one server
 
@@ -342,6 +356,18 @@ and the runner picks it up when it starts, with nobody watching. If the usage po
 no at that moment, the run is recorded as skipped and the automation stays on. Schedule,
 time zone, agent, model, thinking level and repository are checked when it is saved.
 
+A schedule that is switched on can run at most once every 5 minutes. When the clocks
+change in its time zone, a schedule for particular hours still runs once a day: a time
+that comes round twice runs the first time only, and a time that is skipped runs at the
+first minute after the gap.
+
+An automation runs as the person who set it up, with their agent sign-in. Everyone in the
+workspace can see it and its runs; only that person or a workspace owner can change it,
+delete it or manage its webhook. When that person leaves the workspace or is removed, their
+automations there are switched off, and can't be switched back on: set them up again
+instead. A run that can't start is recorded as failed with a short reason; the details
+stay in the server log.
+
 Run listings (`recentRuns` and `GET /api/automations/:id/runs`) include `reviewedAt`, the
 thread's `threadStatus`, and a `summary`: the start of the agent's last message, read
 from stored history. Anyone in the workspace can mark a run reviewed with
@@ -387,7 +413,8 @@ sandbox is paused:
   language servers and git doesn't.
 - **Messages while paused:** `POST /api/threads/:id/messages` saves the message, then
   wakes the sandbox; the runner picks it up when it starts. The apps do this when you
-  send to a paused thread.
+  send to a paused thread. Sending too fast, or to a thread that already has 50 messages
+  waiting, gets a 429 and saves nothing.
 
 ## GitHub App
 
@@ -420,8 +447,8 @@ require a pull request, block force pushes and deletion); thread branches
 
 Then generate a private key and set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL
 name), `GITHUB_APP_PRIVATE_KEY` (the PEM; newlines may be written as `\n`),
-`GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. People connect it under
-**Settings → GitHub**.
+`GITHUB_APP_CLIENT_ID` and `GITHUB_APP_CLIENT_SECRET`. A workspace's owners connect and
+disconnect it under **Settings → GitHub**; other members see what is connected.
 
 ## Secrets
 
@@ -564,15 +591,15 @@ All bodies are JSON and validated with the schemas in `packages/protocol`.
 | `GET /api/threads/:id` | session or token | The thread, plus a fresh endpoint and token while its sandbox runs. |
 | `POST /api/threads/:id/pause` | session or token | Pause the sandbox. |
 | `POST /api/threads/:id/resume` | session or token | Resume the sandbox (402 if the usage policy declines). |
-| `DELETE /api/threads/:id` | session or token | Close the thread and delete its sandbox. With `?forever=1`, also delete its stored history and the thread (its starter or a workspace owner). |
+| `DELETE /api/threads/:id` | session or token | Close the thread and delete its sandbox (its starter or a workspace owner). With `?forever=1`, also delete its stored history and the thread. |
 | `GET /api/account/export` | session | Download everything kept about the signed-in person as JSON. |
 | `GET /api/account` | session or token | What deleting this account would delete. |
 | `DELETE /api/account` | session | Delete the account (body `{ confirm: "<email>" }`). |
 | `DELETE /api/workspaces/:id` | session | Delete a team workspace, owners only (body `{ confirm: "<name>" }`). |
-| `POST /api/runner/heartbeat` | runner token | Runner status (`RunnerHeartbeat` → `HeartbeatResponse`). |
+| `POST /api/runner/heartbeat` | runner token | Runner status (`RunnerHeartbeat` → `HeartbeatResponse`). A runner can report that it is starting, idle or working, nothing else. |
 | `POST /api/cron/sweep` | cron secret | Pause idle and disallowed sandboxes (Node deployments). |
 | `GET/POST /api/tokens`, `DELETE /api/tokens/:id` | session (create), session or token (list, revoke) | Personal access tokens. The raw value is returned once, on create. |
-| `GET/POST /api/automations`, `PATCH/DELETE /api/automations/:id`, `GET /api/automations/:id/runs` | session or token | Scheduled prompts that start cloud threads (see "Automations"). |
+| `GET/POST /api/automations`, `PATCH/DELETE /api/automations/:id`, `GET /api/automations/:id/runs` | session or token (members read; whoever set it up or an owner changes) | Scheduled prompts that start cloud threads (see "Automations"). |
 | `PATCH /api/automations/:id/runs/:runId`, `POST /api/automations/runs/review-all` | session or token | Mark automation runs reviewed. |
 | `GET/PUT /api/workspace/settings`, `GET/PUT /api/workspace/skills` | session or token (members read, owners change) | Workspace cloud settings (see "Workspace cloud settings"). |
 | `GET /api/health` | — | Health for uptime monitors: 200 or 503 with the failing check. |

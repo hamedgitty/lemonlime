@@ -11,7 +11,7 @@ export default async function AutomationsPage() {
   const ctx = await getAppContext();
   const user = await requirePageUser(ctx, "/automations");
   const workspaceId = await pageWorkspace(ctx.db, user.userId);
-  const list = await listAutomations(ctx, workspaceId);
+  const list = await listAutomations(ctx, workspaceId, user.userId);
   return (
     <main className="mx-auto max-w-3xl space-y-8 px-5 py-10">
       <div>

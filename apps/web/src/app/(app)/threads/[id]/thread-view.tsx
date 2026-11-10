@@ -44,7 +44,16 @@ const INITIAL_PROMPT_ID = "initial-prompt";
  * One thread, live. A cloud thread connects to its sandbox; a thread on one of your own
  * computers (`computer` set, phone access on) connects through the phone bridge.
  */
-export function ThreadView({ initial, computer: initialComputer }: { initial: ThreadResponse; computer?: ComputerSummary }) {
+export function ThreadView({
+  initial,
+  computer: initialComputer,
+  canSignIn = false,
+}: {
+  initial: ThreadResponse;
+  computer?: ComputerSummary;
+  /** Whether this person started the thread: only they can sign its agent in. */
+  canSignIn?: boolean;
+}) {
   const router = useRouter();
   const id = initial.thread.id;
   const [computer, setComputer] = useState<ComputerSummary | null>(initialComputer ?? null);
@@ -118,6 +127,11 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
         setEvents(eventsRef.current);
         if (event.type === "status_change") setThread(t => ({ ...t, status: event.to }));
         if (event.type === "options_change") setOptions(event.options);
+      },
+      // The runner's history started over: what is on screen belongs to the old one.
+      onReset: () => {
+        eventsRef.current = [];
+        setEvents([]);
       },
       onWelcome: (runnerThread, _latestSeq, current) => {
         setThread(t => ({ ...t, status: runnerThread.status }));
@@ -262,7 +276,14 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
     setBusy(null);
     if (res.ok) apply(res.data);
     else if (res.denied) setDenied(res.denied);
-    else setActionError(res.message);
+    else {
+      // Sent too fast, or too many already waiting: it wasn't saved, so hand the words back.
+      if (res.status === 429) {
+        setPending(p => p.filter(m => m.clientMsgId !== clientMsgId));
+        setDraft(d => (d ? `${text}\n\n${d}` : text));
+      }
+      setActionError(res.message);
+    }
   }
 
   function onComposerKey(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -398,7 +419,12 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
           </div>
         )}
 
-        {isCloud && conn === "live" && (showSignIn || needsSignIn) && (
+        {isCloud && conn === "live" && needsSignIn && !canSignIn && (
+          <p role="status" className="mt-3 text-sm text-muted">
+            The agent isn&apos;t signed in. Only the person who started this thread can sign it in.
+          </p>
+        )}
+        {isCloud && conn === "live" && canSignIn && (showSignIn || needsSignIn) && (
           <SignInPanel
             agentLabel={AGENT_LABELS[thread.agent.kind] ?? "the agent"}
             update={login}
@@ -417,7 +443,7 @@ export function ThreadView({ initial, computer: initialComputer }: { initial: Th
             }}
           />
         )}
-        {isCloud && conn === "live" && !showSignIn && !needsSignIn && (thread.agent.kind === "claude-code" || thread.agent.kind === "codex") && (
+        {isCloud && conn === "live" && canSignIn && !showSignIn && !needsSignIn && (thread.agent.kind === "claude-code" || thread.agent.kind === "codex") && (
           <button type="button" className="mt-3 text-sm text-muted underline-offset-2 hover:text-ink hover:underline" onClick={() => setShowSignIn(true)}>
             Sign the agent in to your account
           </button>

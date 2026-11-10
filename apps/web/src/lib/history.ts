@@ -229,6 +229,27 @@ export async function addPendingMessage(ctx: AppContext, threadId: string, msg: 
     .onConflictDoNothing();
 }
 
+/** The most messages that can wait for one thread. */
+export const PENDING_MESSAGES_MAX = 50;
+
+/**
+ * Like `addPendingMessage`, for messages people send: when the thread already has as many
+ * waiting as it may, nothing is saved and the answer is false. Sending one that is already
+ * waiting again is still fine.
+ */
+export async function addPendingMessageIfRoom(ctx: AppContext, threadId: string, msg: PendingMessage): Promise<boolean> {
+  if ((await countPendingMessages(ctx, threadId)) >= PENDING_MESSAGES_MAX) {
+    const [waiting] = await ctx.db
+      .select({ id: pendingMessages.id })
+      .from(pendingMessages)
+      .where(and(eq(pendingMessages.threadId, threadId), eq(pendingMessages.clientMsgId, msg.clientMsgId)))
+      .limit(1);
+    return Boolean(waiting);
+  }
+  await addPendingMessage(ctx, threadId, msg);
+  return true;
+}
+
 export async function listPendingMessages(ctx: AppContext, threadId: string): Promise<PendingMessage[]> {
   const rows = await ctx.db.select().from(pendingMessages).where(eq(pendingMessages.threadId, threadId)).orderBy(pendingMessages.id);
   return rows.map(r => ({ clientMsgId: r.clientMsgId, text: r.text, ...(r.check ? { check: r.check } : {}) }));

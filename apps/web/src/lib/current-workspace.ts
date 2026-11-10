@@ -17,7 +17,12 @@ async function chosenOrDefault(db: Db, userId: string, chosen: string | null | u
 function cookieValue(header: string | null, name: string): string | null {
   for (const part of header?.split(";") ?? []) {
     const [k, ...v] = part.trim().split("=");
-    if (k === name) return decodeURIComponent(v.join("="));
+    if (k !== name) continue;
+    try {
+      return decodeURIComponent(v.join("="));
+    } catch {
+      return null; // a damaged cookie is the same as no choice
+    }
   }
   return null;
 }

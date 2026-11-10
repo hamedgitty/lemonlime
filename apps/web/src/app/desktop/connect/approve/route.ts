@@ -23,8 +23,9 @@ export const POST = route(async request => {
   if (origin && origin !== new URL(publicUrl).origin) throw new HttpError(403, "This request didn't come from this site.");
   const user = await requireUser(ctx, request);
   if (user.via !== "session") throw new HttpError(403, "Connect the desktop app from the web dashboard.");
-  const form = await request.formData();
-  const state = String(form.get("state") ?? "");
+  // Anything that isn't this site's form is the same as a form with no state.
+  const form = await request.formData().catch(() => null);
+  const state = String(form?.get("state") ?? "");
   if (!STATE.test(state)) throw new HttpError(400, "That sign-in link is not valid. Start again from the app.");
   await enforce(ctx.db, `tokens:${user.userId}`, LIMITS.tokensPerUser, "new tokens");
 

@@ -1,3 +1,4 @@
+import { getIP } from "better-auth/api";
 import { sql } from "drizzle-orm";
 import { rateLimit, type Db } from "@lemonlime/db";
 import { HttpError } from "./errors.ts";
@@ -10,16 +11,34 @@ export interface Limit {
 
 /** Limits for the app's own endpoints. Better Auth's routes are limited in better-auth.ts. */
 export const LIMITS = {
-  /** Sign-in codes emailed to one address. */
+  /** Sign-in codes one caller can have emailed to one address... */
   signInCodesPerEmail: { max: 5, windowSeconds: 60 * 60 },
+  /** ...and the codes emailed to one address, whoever asked. */
+  signInCodesPerEmailFromAnyone: { max: 20, windowSeconds: 60 * 60 },
   /** Personal access tokens one user can create. */
   tokensPerUser: { max: 10, windowSeconds: 60 * 60 },
   /** Threads one user can create, and cloud sandboxes one user can start or resume. */
   threadsPerUser: { max: 30, windowSeconds: 60 },
   sandboxStartsPerUser: { max: 30, windowSeconds: 60 },
+  /** Messages one user can send to threads whose agent isn't connected to them live. */
+  messagesPerUser: { max: 60, windowSeconds: 60 },
   /** Phone bridge links one user's desktop apps can open or renew (a few per computer each 15 minutes). */
   phoneLinks: { max: 30, windowSeconds: 60 },
 } satisfies Record<string, Limit>;
+
+/** The header that carries the caller's address: the platform's on Workers, the proxy's on Node. */
+export function addressHeaders(runtime: "workers" | "node"): string[] {
+  return runtime === "workers" ? ["cf-connecting-ip"] : ["x-forwarded-for"];
+}
+
+/**
+ * Where a request came from, for counting. A header that lists several addresses could
+ * have been started by the caller, so it isn't believed; callers that can't be told apart
+ * share "unknown". IPv6 addresses count by network, so one network is one caller.
+ */
+export function callerAddress(runtime: "workers" | "node", request: Request | Headers): string {
+  return getIP(request, { advanced: { ipAddress: { ipAddressHeaders: addressHeaders(runtime) } } }) ?? "unknown";
+}
 
 /**
  * Count one request against `key` and say whether it is allowed. Fixed windows, stored

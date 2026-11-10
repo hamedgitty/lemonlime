@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { EmailNotConfiguredError, createEmailSender, emailBrand, parseAddress, signInCodeEmail } from "../src/lib/email.ts";
+import { EmailNotConfiguredError, createEmailSender, emailBrand, inviteEmail, parseAddress, signInCodeEmail } from "../src/lib/email.ts";
 
 const message = signInCodeEmail(emailBrand("https://app.example.com"), "ada@example.com", "123456", 10);
 
@@ -67,5 +67,36 @@ describe("createEmailSender", () => {
     expect(message.text).toContain("123456");
     expect(message.html).toContain("123456");
     expect(message.text).toContain("10 minutes");
+  });
+});
+
+describe("inviteEmail", () => {
+  const invite = (inviter: string, workspace = "Acme") =>
+    inviteEmail(emailBrand("https://app.example.com"), { to: "bob@example.com", inviter, workspace, link: "https://app.example.com/invite/abc", days: 7 });
+
+  it("names the inviter and the workspace", () => {
+    const email = invite("Ada Lovelace");
+    expect(email.subject).toBe("Ada Lovelace invited you to Acme on LemonLime");
+    expect(email.html).toMatch(/<strong[^>]*>Ada Lovelace<\/strong> invited you to the <strong[^>]*>Acme<\/strong> workspace/);
+    expect(email.text).toContain("Ada Lovelace invited you to the Acme workspace");
+    expect(email.text).toContain("Accept the invitation: https://app.example.com/invite/abc");
+  });
+
+  it("shows a name as plain text, so it can't add a link, formatting or new lines", () => {
+    const name = "Security team** [Confirm your account](https://bad.example/login) <img src=x>";
+    const email = invite(name, "[Free credit](https://bad.example)");
+    const links = [...email.html.matchAll(/href="([^"]+)"/g)].map(m => m[1]);
+    expect(links.filter(l => !l!.startsWith("https://app.example.com") && !l!.startsWith("https://lemonlime.dev") && !l!.startsWith("https://fonts."))).toEqual(
+      [],
+    );
+    expect(email.html).not.toContain("<img src=x>");
+    expect(email.html).toContain("Security team** [Confirm your account](https://bad.example/login) &lt;img src=x&gt;</strong>");
+    expect(email.text).toContain(`${name} invited you to the [Free credit](https://bad.example) workspace`);
+    expect(email.text).not.toContain("Confirm your account (https://bad.example/login)");
+
+    const spread = invite("Ada\r\nBcc: everyone@example.com\n\nPay   now");
+    expect(spread.subject).toBe("Ada Bcc: everyone@example.com Pay now invited you to Acme on LemonLime");
+    expect(invite("x".repeat(500)).subject.length).toBeLessThan(140);
+    expect(invite("  ").subject).toBe("Someone invited you to Acme on LemonLime");
   });
 });

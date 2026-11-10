@@ -4,14 +4,16 @@ import {
   appJwt,
   githubAppConfig,
   linkInstallation,
+  listInstallations,
   openPullRequest,
   parseGitHubRepo,
   signInstallState,
   tokenForThread,
+  unlinkInstallation,
   verifyInstallState,
 } from "../src/lib/github.ts";
 import { createThread, getThreadRow } from "../src/lib/threads.ts";
-import { addUser, createTestApp, TEST_ENV } from "./helpers.ts";
+import { addTeam, addUser, createTestApp, TEST_ENV } from "./helpers.ts";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const PKCS1 = privateKey.export({ type: "pkcs1", format: "pem" }).toString();
@@ -72,6 +74,35 @@ describe("GitHub app", () => {
     const forged = Buffer.from(JSON.stringify({ w: "ws-2", u: "user-1", exp: 9e9 })).toString("base64url");
     expect(await verifyInstallState("secret", `${forged}.${sig}`, 1100)).toBeNull();
     expect(payload).toBeTruthy();
+    // Text that was never ours is refused, not an error.
+    for (const junk of ["", "no-dot", "%%%.###", `${payload}.not base64!`, `{}.${sig}`])
+      expect(await verifyInstallState("secret", junk, 1100), junk).toBeNull();
+  });
+
+  it("lets only a workspace's owners connect or disconnect GitHub", async () => {
+    const { ctx, db } = await createTestApp();
+    const cfg = githubAppConfig(VARS)!;
+    const owner = await addUser(db, "owner@example.com");
+    const member = await addUser(db, "member@example.com");
+    const outsider = await addUser(db, "outsider@example.com");
+    const workspaceId = await addTeam(db, owner.userId, [member.userId]);
+    const calls = fakeGitHub({
+      "POST /login/oauth/access_token": [200, { access_token: "ghu_user" }],
+      "GET /user/installations?per_page=100": [200, { installations: [{ id: 777, account: { login: "acme", id: 50, type: "Organization" } }] }],
+      "GET /user/memberships/orgs/acme": [200, { role: "admin", state: "active" }],
+    });
+    const link = (userId: string) => linkInstallation(ctx, cfg, { workspaceId, userId, installationId: "777", code: "c" });
+
+    await expect(link(member.userId)).rejects.toMatchObject({ status: 403, message: "Only the workspace's owners can do that." });
+    await expect(link(outsider.userId)).rejects.toMatchObject({ status: 403 });
+    expect(calls).toEqual([]); // refused before GitHub is asked anything
+    expect(await link(owner.userId)).toEqual({ accountLogin: "acme" });
+
+    await expect(unlinkInstallation(ctx, member.userId, workspaceId, "777")).rejects.toMatchObject({ status: 403 });
+    await expect(unlinkInstallation(ctx, outsider.userId, workspaceId, "777")).rejects.toMatchObject({ status: 403 });
+    expect(await listInstallations(ctx, workspaceId)).toEqual([{ id: "777", accountLogin: "acme" }]);
+    await unlinkInstallation(ctx, owner.userId, workspaceId, "777");
+    expect(await listInstallations(ctx, workspaceId)).toEqual([]);
   });
 
   it("only links installations the person can manage, to one workspace", async () => {

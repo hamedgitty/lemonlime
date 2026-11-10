@@ -1,7 +1,7 @@
 import { readWebhookBody, triggerWebhook, WEBHOOK_LIMITS } from "@/lib/automations.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError, json, route } from "@/lib/http.ts";
-import { enforce } from "@/lib/rate-limit.ts";
+import { callerAddress, enforce } from "@/lib/rate-limit.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -15,12 +15,7 @@ type Ctx = { params: Promise<{ id: string; token: string }> };
 export const POST = route(async (request: Request, { params }: Ctx) => {
   const ctx = await getAppContext();
   const { id, token } = await params;
-  const address =
-    request.headers
-      .get(ctx.runtime === "workers" ? "cf-connecting-ip" : "x-forwarded-for")
-      ?.split(",")[0]
-      ?.trim() || "unknown";
-  await enforce(ctx.db, `automation-hook-ip:${address}`, WEBHOOK_LIMITS.perAddress, "webhook calls");
+  await enforce(ctx.db, `automation-hook-ip:${callerAddress(ctx.runtime, request)}`, WEBHOOK_LIMITS.perAddress, "webhook calls");
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(id) || !/^[A-Za-z0-9_-]{1,100}$/.test(token)) throw new HttpError(404, "No webhook here.");
   const run = await triggerWebhook(ctx, id, token, await readWebhookBody(request));
   return json({ ok: run.status === "started", status: run.status, ...(run.threadId ? { threadId: run.threadId } : {}) }, run.status === "started" ? 202 : 200);

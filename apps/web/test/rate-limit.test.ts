@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { createAuth } from "../src/lib/better-auth.ts";
-import { enforce, hit } from "../src/lib/rate-limit.ts";
+import { verification } from "@lemonlime/db";
+import { allowSignInCode, createAuth } from "../src/lib/better-auth.ts";
+import { callerAddress, enforce, hit, LIMITS } from "../src/lib/rate-limit.ts";
 import { createTestApp, TEST_ENV } from "./helpers.ts";
 
 describe("rate limits", () => {
@@ -48,13 +49,61 @@ describe("rate limits", () => {
     expect((await sendCode(auth, "else@example.com", "203.0.113.8")).status).toBe(200);
   });
 
-  it("limits sign-in codes per email address, whatever the IP", async () => {
-    const { ctx, emails } = await createTestApp();
+  it("limits the sign-in codes one caller can have sent to an address, without locking its owner out", async () => {
+    const { ctx, db, emails } = await createTestApp();
     const auth = createAuth(ctx);
-    const statuses = [];
-    for (let i = 0; i < 6; i++) statuses.push((await sendCode(auth, "Target@Example.com", `198.51.100.${i}`)).status);
-    // Every answer looks the same (no hint about the address), but only 5 emails go out.
-    expect(statuses).toEqual([200, 200, 200, 200, 200, 200]);
-    expect(emails).toHaveLength(5);
+    const stranger = "203.0.113.50";
+    // The stranger has used up their share of codes for someone else's address.
+    for (let i = 0; i < LIMITS.signInCodesPerEmail.max; i++) expect(await allowSignInCode(ctx, "Target@Example.com", stranger)).toBe(true);
+
+    // One more from them: the answer looks the same, but no code is made or sent.
+    const refused = await sendCode(auth, "target@example.com", stranger);
+    expect(refused.status).toBe(200);
+    expect(await refused.json()).toEqual({ success: true });
+    expect(emails).toHaveLength(0);
+    expect(await db.select().from(verification)).toHaveLength(0);
+
+    // The owner, asking from somewhere else, still gets a code.
+    const sent = await sendCode(auth, "target@example.com", "198.51.100.9");
+    expect(sent.status).toBe(200);
+    expect(await sent.json()).toEqual({ success: true });
+    expect(emails).toHaveLength(1);
+    const [code] = await db.select().from(verification);
+    expect(code).toBeDefined();
+
+    // The stranger asking again doesn't replace the code the owner was just sent.
+    expect((await sendCode(auth, "target@example.com", stranger)).status).toBe(200);
+    expect(emails).toHaveLength(1);
+    expect(await db.select().from(verification)).toEqual([code]);
+  });
+
+  it("limits the sign-in codes sent to one address, however many callers ask", async () => {
+    const { ctx, db, emails } = await createTestApp();
+    const auth = createAuth(ctx);
+    const allowed = [];
+    for (let i = 0; i < LIMITS.signInCodesPerEmailFromAnyone.max + 5; i++) allowed.push(await allowSignInCode(ctx, "target@example.com", `198.51.100.${i}`));
+    expect(allowed.filter(Boolean)).toHaveLength(LIMITS.signInCodesPerEmailFromAnyone.max);
+    expect(allowed.slice(-5)).toEqual([false, false, false, false, false]);
+
+    const res = await sendCode(auth, "target@example.com", "192.0.2.77");
+    expect(res.status).toBe(200);
+    expect(emails).toHaveLength(0);
+    expect(await db.select().from(verification)).toHaveLength(0);
+    // Other addresses are not affected.
+    expect(await allowSignInCode(ctx, "other@example.com", "192.0.2.77")).toBe(true);
+  });
+
+  it("tells callers apart by the address the platform or proxy reports", () => {
+    const from = (runtime: "workers" | "node", headers: Record<string, string>) => callerAddress(runtime, new Headers(headers));
+    expect(from("workers", { "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "198.51.100.1" })).toBe("203.0.113.7");
+    expect(from("node", { "x-forwarded-for": "203.0.113.7" })).toBe("203.0.113.7");
+    // A list of addresses could have been started by the caller, so it isn't believed.
+    const listed = from("node", { "x-forwarded-for": "198.51.100.1, 203.0.113.7" });
+    expect(listed).not.toBe("198.51.100.1");
+    expect(listed).toBe(from("node", { "x-forwarded-for": "192.0.2.1, 203.0.113.9" }));
+    expect(from("node", { "x-forwarded-for": "not an address" })).toBe(listed);
+    // One IPv6 network is one caller.
+    expect(from("node", { "x-forwarded-for": "2001:db8:1:2::1" })).toBe(from("node", { "x-forwarded-for": "2001:db8:1:2:aaaa:bbbb:cccc:dddd" }));
+    expect(from("node", { "x-forwarded-for": "2001:db8:1:2::1" })).not.toBe(from("node", { "x-forwarded-for": "2001:db8:1:3::1" }));
   });
 });

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { z } from "zod";
+import { bearerToken } from "./access-tokens.ts";
 import { HttpError } from "./errors.ts";
 
 export { HttpError, PolicyDeniedError, policyDeniedBody } from "./errors.ts";
@@ -36,12 +37,31 @@ export function requireSameSite(request: Request): void {
   if (site && site !== "same-origin" && site !== "none") throw new HttpError(403, "That request came from another site.");
 }
 
+const CHANGES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * True when a request that changes something relies on the browser's sign-in cookie, and
+ * the browser says a page on another site sent it. Requests that carry a token instead (the
+ * desktop app, runners, scheduled jobs) or no cookie at all are never refused here: they
+ * hold nothing of the user's that another site could borrow.
+ */
+export function isFromAnotherSite(request: Request): boolean {
+  if (!CHANGES.has(request.method.toUpperCase())) return false;
+  if (!request.headers.get("cookie") || bearerToken(request.headers.get("authorization"))) return false;
+  const site = request.headers.get("sec-fetch-site");
+  return Boolean(site) && site !== "same-origin" && site !== "none";
+}
+
 type Handler<C> = (request: Request, context: C) => Promise<Response>;
 
-/** Turn thrown HttpErrors into JSON responses and anything else into a logged 500. */
+/**
+ * Turn thrown HttpErrors into JSON responses and anything else into a logged 500. Changes
+ * asked for by another site with the user's cookie are refused before the handler runs.
+ */
 export function route<C>(handler: Handler<C>): Handler<C> {
   return async (request, context) => {
     try {
+      if (isFromAnotherSite(request)) throw new HttpError(403, "That request came from another site.");
       return await handler(request, context);
     } catch (err) {
       if (err instanceof HttpError) {

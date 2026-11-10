@@ -29,7 +29,8 @@ export const PATCH = route<Context>(async (request, { params }) => {
 
 /**
  * Close the thread and destroy its sandbox. With `?forever=1`, also delete its stored
- * history and the thread itself (the person who started it or a workspace owner).
+ * history and the thread itself. Either way, only the person who started it or a
+ * workspace owner may.
  */
 export const DELETE = route<Context>(async (request, { params }) => {
   const ctx = await getAppContext();

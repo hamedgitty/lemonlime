@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 import { githubInstallations, threads, type ThreadRow } from "@lemonlime/db";
 import type { AppContext } from "./context.ts";
 import { HttpError } from "./errors.ts";
+import { requireOwner } from "./members.ts";
 
 /**
  * GitHub App integration: people install the app on the repositories they choose, and
@@ -129,10 +130,22 @@ export async function verifyInstallState(
 ): Promise<{ workspaceId: string; userId: string } | null> {
   const [payload, sig] = state.split(".");
   if (!payload || !sig) return null;
-  const raw = Uint8Array.from(atob(sig.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0));
+  const sigText = fromB64url(sig);
+  const claimsText = fromB64url(payload);
+  if (sigText === null || claimsText === null) return null;
+  const raw = Uint8Array.from(sigText, c => c.charCodeAt(0));
   if (!(await crypto.subtle.verify("HMAC", await hmacKey(secret), raw, new TextEncoder().encode(payload)))) return null;
-  const claims = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))) as { w: string; u: string; exp: number };
+  const claims = JSON.parse(claimsText) as { w: string; u: string; exp: number };
   return claims.exp > nowSec ? { workspaceId: claims.w, userId: claims.u } : null;
+}
+
+/** Reads base64url text, or gives null when it isn't base64url (so not something we signed). */
+function fromB64url(text: string): string | null {
+  try {
+    return atob(text.replace(/-/g, "+").replace(/_/g, "/"));
+  } catch {
+    return null;
+  }
 }
 
 // ─── GitHub API ─────────────────────────────────────────────────────────────
@@ -162,13 +175,15 @@ export function installUrl(cfg: GitHubAppConfig, state: string): string {
  * administers it: GitHub's redirect carries an installation id anyone could change, so we
  * exchange the OAuth `code` for their token and look the id up in their own list. Being in
  * that list isn't enough (read-only org members are), so they must also own the account
- * the app is installed on, or be an admin of that organization.
+ * the app is installed on, or be an admin of that organization. On our side, they must be
+ * an owner of the workspace: what is connected here is shared with everyone in it.
  */
 export async function linkInstallation(
   ctx: AppContext,
   cfg: GitHubAppConfig,
   opts: { workspaceId: string; userId: string; installationId: string; code: string },
 ): Promise<{ accountLogin: string }> {
+  await requireOwner(ctx.db, opts.userId, opts.workspaceId);
   const tokenRes = await fetch(`${cfg.webUrl}/login/oauth/access_token`, {
     method: "POST",
     headers: { accept: "application/json", "content-type": "application/json", "user-agent": "LemonLime" },
@@ -211,7 +226,9 @@ export async function listInstallations(ctx: AppContext, workspaceId: string): P
     .where(eq(githubInstallations.workspaceId, workspaceId));
 }
 
-export async function unlinkInstallation(ctx: AppContext, workspaceId: string, installationId: string): Promise<void> {
+/** Disconnect an installation from a workspace. Only the workspace's owners can. */
+export async function unlinkInstallation(ctx: AppContext, userId: string, workspaceId: string, installationId: string): Promise<void> {
+  await requireOwner(ctx.db, userId, workspaceId);
   await ctx.db.delete(githubInstallations).where(and(eq(githubInstallations.id, installationId), eq(githubInstallations.workspaceId, workspaceId)));
 }
 

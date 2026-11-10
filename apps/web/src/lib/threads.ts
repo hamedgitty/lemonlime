@@ -1,5 +1,6 @@
 import { and, eq, isNotNull, isNull, lt, ne } from "drizzle-orm";
 import {
+  RUNNER_STATUSES,
   Thread,
   branchForThread,
   newThreadId,
@@ -15,13 +16,15 @@ import { sandboxRuns, systemStatus, threads, workspaceSettings, type ThreadRow }
 import { getThreadForUser, listThreadsForUser } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
-import { countPendingMessages } from "./history.ts";
+import { addPendingMessageIfRoom, countPendingMessages } from "./history.ts";
 import { credentialsForSandbox } from "./agent-credentials.ts";
 import { secretsForSandbox } from "./secrets.ts";
 import { RUNNER_PORT, buildRunnerLaunch, validateCloudLaunch } from "./runner-command.ts";
 import { decideSweep, runtimeSeconds, type EndReason, type SweepThread } from "./sweep.ts";
 import { issueClientToken, threadSecret } from "./tokens.ts";
 import { githubAppConfig, tokenForThread } from "./github.ts";
+import { memberRole } from "./members.ts";
+import { enforce, LIMITS } from "./rate-limit.ts";
 import { relayEnabled } from "./relay.ts";
 import { sandboxSettings } from "./workspace-settings.ts";
 
@@ -96,7 +99,7 @@ export function getThreadRow(ctx: AppContext, id: string): Promise<ThreadRow | n
  */
 export async function getLiveRunnerThread(ctx: AppContext, id: string): Promise<ThreadRow> {
   const row = await getRow(ctx, id);
-  if (!row || row.mode !== "cloud" || !LIVE_STATUSES.has(row.status)) throw new HttpError(404, "Thread not found.");
+  if (!row || row.mode !== "cloud" || !LIVE_STATUSES.has(row.status) || isWaking(row)) throw new HttpError(404, "Thread not found.");
   return row;
 }
 
@@ -115,6 +118,15 @@ export async function listThreads(ctx: AppContext, userId: string, workspaceId: 
 }
 
 const LIVE_STATUSES = new Set<Thread["status"]>(["provisioning", "idle", "running"]);
+
+/**
+ * A resume marks the thread "provisioning" before it wakes the sandbox, so a second resume
+ * at the same moment can tell one is under way. Until it finishes the sandbox isn't running.
+ */
+const isWaking = (row: ThreadRow): boolean => row.status === "provisioning" && !row.runningSince && Boolean(row.sandboxId);
+
+/** How long one resume may take. After this another request may try again (the first one probably died). */
+const RESUME_TAKES_AT_MOST_MS = 2 * 60 * 1000;
 
 /** A fresh WebSocket endpoint and client token, when the thread's cloud runner is reachable. */
 export async function endpointFor(ctx: AppContext, row: ThreadRow, userId: string): Promise<RunnerEndpoint | null> {
@@ -230,31 +242,55 @@ export async function createThread(ctx: AppContext, userId: string, workspaceId:
     .values({ ...base, status: "provisioning", sandboxProvider: provider.name })
     .returning();
 
-  const launch = await launchFor(ctx, inserted!, { withSecrets: true });
+  // The thread now exists. Whatever goes wrong from here, it must not be left "provisioning",
+  // and a sandbox that was made must not be left running with nothing keeping track of it.
   let info;
   try {
     info = await provider.create({
       threadId: id,
       size: req.sandboxSize,
-      runner: launch,
+      runner: await launchFor(ctx, inserted!, { withSecrets: true }),
       labels: { "lemonlime.workspace": workspaceId, "lemonlime.runner-port": String(RUNNER_PORT) },
     });
   } catch (err) {
-    await updateRow(ctx, id, { status: "failed" });
-    throw new HttpError(502, `Could not start the sandbox: ${err instanceof Error ? err.message : String(err)}`);
+    await markFailed(ctx, id);
+    if (err instanceof HttpError) throw err;
+    // The provider's own words stay in the log: they can name hosts, images or accounts.
+    console.error(`[lemonlime] could not start the sandbox for thread ${id}:`, err);
+    throw new HttpError(502, COULD_NOT_START);
   }
 
-  const now = new Date().toISOString();
-  const row = await updateRow(ctx, id, {
-    sandboxId: info.id,
-    runnerUrl: info.runnerUrl,
-    runningSince: now,
-    idleSince: now,
-    lastHeartbeatAt: null,
-  });
+  let row: ThreadRow;
+  try {
+    const now = new Date().toISOString();
+    row = await updateRow(ctx, id, {
+      sandboxId: info.id,
+      runnerUrl: info.runnerUrl,
+      runningSince: now,
+      idleSince: now,
+      lastHeartbeatAt: null,
+    });
+  } catch (err) {
+    console.error(`[lemonlime] could not record the sandbox for thread ${id}; removing it:`, err);
+    await provider.destroy(info.id).catch(e => console.error(`[lemonlime] could not remove sandbox ${info.id}:`, e));
+    await markFailed(ctx, id);
+    throw new HttpError(502, COULD_NOT_START);
+  }
   await notify("onSandboxStarted", () => usagePolicy.onSandboxStarted(runningSandbox(row)));
   await threadCreated(ctx, row, userId);
   return threadResponse(ctx, row, userId);
+}
+
+const COULD_NOT_START = "Could not start the sandbox. Try again in a moment.";
+const COULD_NOT_RESUME = "Could not resume the sandbox. Try again in a moment.";
+
+/** Mark a thread whose sandbox never started. Never throws: the caller is already reporting an error. */
+async function markFailed(ctx: AppContext, id: string): Promise<void> {
+  await ctx.db
+    .update(threads)
+    .set({ status: "failed" })
+    .where(eq(threads.id, id))
+    .catch(err => console.error(`[lemonlime] could not mark thread ${id} as failed:`, err));
 }
 
 /** Tell the deployment's plugin; it must never stop a thread being created. */
@@ -348,11 +384,40 @@ export async function pauseThread(ctx: AppContext, userId: string, id: string): 
   return threadResponse(ctx, await endRun(ctx, row, "user"), userId);
 }
 
+/**
+ * Save a message for a cloud thread whose agent the sender isn't connected to, and wake
+ * its sandbox if it is paused; the runner picks the message up from here. Sending the same
+ * `clientMsgId` again is harmless. The limits are counted before anything is saved or
+ * started. If the usage policy won't start the sandbox, the message stays saved and the
+ * error says why.
+ */
+export async function queueMessage(ctx: AppContext, userId: string, id: string, msg: { clientMsgId: string; text: string }): Promise<ThreadResponse> {
+  const row = await getThreadRowForUser(ctx, userId, id);
+  if (row.mode !== "cloud") throw new HttpError(409, "Local threads take messages through the desktop app.");
+  if (row.status === "stopped" || !row.sandboxId) throw new HttpError(409, "This thread's sandbox no longer exists.");
+  await enforce(ctx.db, `messages:${userId}`, LIMITS.messagesPerUser, "messages");
+  if (!row.runningSince) await enforce(ctx.db, `sandbox-starts:${userId}`, LIMITS.sandboxStartsPerUser, "sandbox starts");
+  // People's messages never carry a check script; only automations set one.
+  if (!(await addPendingMessageIfRoom(ctx, row.id, { clientMsgId: msg.clientMsgId, text: msg.text }))) {
+    throw new HttpError(429, "Too many messages are waiting for this thread. Let the agent catch up, then send it again.");
+  }
+  if (row.runningSince) return threadResponse(ctx, row, userId);
+  return resumeThread(ctx, userId, row.id);
+}
+
+/**
+ * Wake a paused thread's sandbox. Only one request at a time does the waking: the others
+ * get the thread as it is ("provisioning", no endpoint yet) and can ask again shortly.
+ */
 export async function resumeThread(ctx: AppContext, userId: string, id: string): Promise<ThreadResponse> {
   const row = await getThreadRowForUser(ctx, userId, id);
   if (row.mode !== "cloud") throw new HttpError(409, "Local threads run on your computer and cannot be resumed here.");
   if (row.runningSince) return threadResponse(ctx, row, userId); // already running
   if (!row.sandboxId || row.status === "stopped") throw new HttpError(409, "This thread's sandbox no longer exists.");
+  const sandboxId = row.sandboxId;
+  // Another request is waking it right now.
+  const takingOver = isWaking(row);
+  if (takingOver && Date.now() - Date.parse(row.updatedAt) < RESUME_TAKES_AT_MOST_MS) return threadResponse(ctx, row, userId);
 
   const { usagePolicy } = ctx.plugin;
   const decision = await usagePolicy.canStartSandbox({
@@ -363,27 +428,80 @@ export async function resumeThread(ctx: AppContext, userId: string, id: string):
   });
   if (!decision.allow) throw new PolicyDeniedError(decision);
 
+  // Claim the resume: the update only applies if the thread is still as it was read, so of
+  // two requests at the same moment exactly one goes on to wake the sandbox.
+  const [claimed] = await ctx.db
+    .update(threads)
+    .set({ status: "provisioning" })
+    .where(
+      and(
+        eq(threads.id, row.id),
+        eq(threads.status, row.status),
+        isNull(threads.runningSince),
+        // Taking over a resume that died changes nothing but the time, so that is what tells two takers apart.
+        ...(takingOver ? [eq(threads.updatedAt, row.updatedAt)] : []),
+      ),
+    )
+    .returning();
+  if (!claimed) return threadResponse(ctx, await currentRow(ctx, row.id), userId);
+
+  // Give the claim back, so the thread can be resumed again after a failure.
+  const before = takingOver ? "paused" : row.status;
+  const release = () =>
+    ctx.db
+      .update(threads)
+      .set({ status: before })
+      .where(and(eq(threads.id, row.id), eq(threads.status, "provisioning"), isNull(threads.runningSince)))
+      .catch(err => console.error(`[lemonlime] could not put thread ${row.id} back after a failed resume:`, err));
+
   let info;
   try {
-    info = await ctx.sandbox().resume(row.sandboxId, await launchFor(ctx, row));
+    info = await ctx.sandbox().resume(sandboxId, await launchFor(ctx, row));
   } catch (err) {
-    throw new HttpError(502, `Could not resume the sandbox: ${err instanceof Error ? err.message : String(err)}`);
+    await release();
+    if (err instanceof HttpError) throw err;
+    console.error(`[lemonlime] could not resume the sandbox for thread ${row.id}:`, err);
+    throw new HttpError(502, COULD_NOT_RESUME);
   }
 
-  const now = new Date().toISOString();
-  const updated = await updateRow(ctx, row.id, {
-    status: "provisioning",
-    sandboxId: info.id,
-    runnerUrl: info.runnerUrl,
-    runningSince: now,
-    idleSince: now,
-    lastHeartbeatAt: null,
-    background: null,
-    drainRequestedAt: null,
-    drainedAt: null,
-  });
-  await notify("onSandboxStarted", () => usagePolicy.onSandboxStarted(runningSandbox(updated)));
-  return threadResponse(ctx, updated, userId);
+  let updated: ThreadRow | undefined;
+  try {
+    const now = new Date().toISOString();
+    [updated] = await ctx.db
+      .update(threads)
+      .set({
+        status: "provisioning",
+        sandboxId: info.id,
+        runnerUrl: info.runnerUrl,
+        runningSince: now,
+        idleSince: now,
+        lastHeartbeatAt: null,
+        background: null,
+        drainRequestedAt: null,
+        drainedAt: null,
+      })
+      .where(and(eq(threads.id, row.id), eq(threads.status, "provisioning"), isNull(threads.runningSince)))
+      .returning();
+  } catch (err) {
+    console.error(`[lemonlime] could not record the resumed sandbox for thread ${row.id}; pausing it again:`, err);
+    await ctx
+      .sandbox()
+      .pause(info.id)
+      .catch(e => console.error(`[lemonlime] could not pause sandbox ${info.id}:`, e));
+    await release();
+    throw new HttpError(502, COULD_NOT_RESUME);
+  }
+  // The thread changed while its sandbox woke (it was closed, say): report it as it is now.
+  if (!updated) return threadResponse(ctx, await currentRow(ctx, row.id), userId);
+  const started = updated;
+  await notify("onSandboxStarted", () => usagePolicy.onSandboxStarted(runningSandbox(started)));
+  return threadResponse(ctx, started, userId);
+}
+
+async function currentRow(ctx: AppContext, id: string): Promise<ThreadRow> {
+  const row = await getRow(ctx, id);
+  if (!row) throw new HttpError(404, "Thread not found.");
+  return row;
 }
 
 /** Give the thread a new title (members of its workspace only). */
@@ -394,12 +512,29 @@ export async function renameThread(ctx: AppContext, userId: string, id: string, 
   return threadResponse(ctx, await updateRow(ctx, row.id, { title: clean }), userId);
 }
 
+/** Close a thread and remove its sandbox. The person who started it or a workspace owner may. */
 export async function deleteThread(ctx: AppContext, userId: string, id: string): Promise<ThreadResponse> {
   const row = await getThreadRowForUser(ctx, userId, id);
+  if (row.createdBy !== userId && (await memberRole(ctx.db, userId, row.workspaceId)) !== "owner") {
+    throw new HttpError(403, "Only the person who started this thread or a workspace owner can close it.");
+  }
   if (row.mode !== "cloud") {
     return threadResponse(ctx, await updateRow(ctx, row.id, { status: "stopped" }), userId);
   }
   return threadResponse(ctx, await endRun(ctx, row, "user", { destroy: true }), userId);
+}
+
+/**
+ * The person who started a cloud thread is about to sign its agent in. The sign-in its
+ * sandbox then saves (so their next sandboxes start signed in) is only accepted for a while
+ * after this. The login is saved to that person's account, so nobody else may ask: not
+ * another member of the workspace, and not an owner.
+ */
+export async function requestAgentSignIn(ctx: AppContext, userId: string, id: string): Promise<void> {
+  const row = await getThreadRowForUser(ctx, userId, id);
+  if (row.mode !== "cloud") throw new HttpError(400, "Only cloud threads sign in inside a sandbox.");
+  if (row.createdBy !== userId) throw new HttpError(403, "Only the person who started this thread can sign its agent in.");
+  await ctx.db.update(threads).set({ signInRequestedAt: new Date().toISOString() }).where(eq(threads.id, row.id));
 }
 
 // ─── Runner heartbeats ──────────────────────────────────────────────────────
@@ -407,12 +542,15 @@ export async function deleteThread(ctx: AppContext, userId: string, id: string):
 /** Record a heartbeat. The caller has verified the runner token for `hb.threadId`. */
 export async function recordHeartbeat(ctx: AppContext, hb: RunnerHeartbeat): Promise<HeartbeatResponse> {
   const row = await getRow(ctx, hb.threadId);
-  if (!row) throw new HttpError(404, "Thread not found.");
+  // Only cloud threads have a runner that reports here.
+  if (!row || row.mode !== "cloud") throw new HttpError(404, "Thread not found.");
+  // A runner only ever says it is starting, idle or working. Pausing, closing and failing are decided here.
+  if (!(RUNNER_STATUSES as readonly string[]).includes(hb.status)) throw new HttpError(400, "A runner can't report that status.");
   const latestSeq = Math.max(row.latestSeq, hb.latestSeq);
   const now = new Date().toISOString();
 
   // The control plane already paused or stopped this sandbox: keep our state and ask the runner to stop.
-  if (row.mode === "cloud" && !row.runningSince) {
+  if (!row.runningSince) {
     await updateRow(ctx, row.id, { latestSeq, lastHeartbeatAt: now });
     return { action: "shutdown", pendingMessages: 0 };
   }

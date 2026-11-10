@@ -16,6 +16,7 @@ import { closeInactiveThreads, sweepRunningSandboxes } from "./src/lib/threads.t
 import { runPluginSchedule } from "./src/lib/plugin-schedule.ts";
 import { pruneOldRecords } from "./src/lib/retention.ts";
 import { runDueAutomations } from "./src/lib/automations.ts";
+import { runSteps } from "./src/lib/sweep.ts";
 import { bridgePath, type DurableObjectNamespaceLike } from "./src/lib/phone-bridge.ts";
 
 export { PhoneBridge } from "./src/lib/phone-bridge-worker.ts";
@@ -58,17 +59,21 @@ export default {
           if (relayed && !relayed.ok) console.error(`[lemonlime] relay failed: HTTP ${relayed.status}`);
         }
         const app = createWorkersContext(env);
-        const result = await sweepRunningSandboxes(app);
-        if (result.paused.length || result.errors.length) {
-          console.log(`[lemonlime] sweep: checked ${result.checked}, paused ${result.paused.length}, errors ${result.errors.length}`, result);
+        // Each job runs even if an earlier one failed; a failure is logged with the job's name.
+        const { results } = await runSteps({
+          sandboxes: () => sweepRunningSandboxes(app),
+          automations: () => runDueAutomations(app),
+          autoDelete: () => closeInactiveThreads(app),
+          plugin: () => runPluginSchedule(app),
+          // Expired sessions, sign-in codes, rate-limit counters and old invitations.
+          cleanup: () => pruneOldRecords(app),
+        });
+        const { sandboxes, automations: auto, autoDelete: closed } = results;
+        if (sandboxes && (sandboxes.paused.length || sandboxes.errors.length)) {
+          console.log(`[lemonlime] sweep: checked ${sandboxes.checked}, paused ${sandboxes.paused.length}, errors ${sandboxes.errors.length}`, sandboxes);
         }
-        const auto = await runDueAutomations(app).catch(err => (console.error("[lemonlime] automations failed:", err), null));
         if (auto && (auto.started.length || auto.skipped.length || auto.failed.length)) console.log("[lemonlime] automations:", auto);
-        const closed = await closeInactiveThreads(app).catch(err => (console.error("[lemonlime] auto-delete failed:", err), null));
         if (closed && (closed.closed.length || closed.errors.length)) console.log("[lemonlime] auto-delete:", closed);
-        await runPluginSchedule(app);
-        // Expired sessions, sign-in codes, rate-limit counters and old invitations.
-        await pruneOldRecords(app).catch(err => console.error("[lemonlime] cleanup failed:", err));
       })().catch(err => {
         // A rejected waitUntil promise is dropped without a trace; say why the sweep didn't run.
         console.error("[lemonlime] sweep failed:", err);

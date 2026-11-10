@@ -16,16 +16,19 @@ import {
   RepoRef,
   runOutcome,
   SandboxSize,
+  SHORTEST_SCHEDULE_GAP_MINUTES,
+  shortestGapMinutes,
   webhookContext,
   type RunOutcome,
   type Thread,
 } from "@lemonlime/protocol";
-import { userWorkspaceIds } from "./access.ts";
+import { isWorkspaceMember, userWorkspaceIds } from "./access.ts";
 import { safeEqual } from "./access-tokens.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
 import { enforce } from "./rate-limit.ts";
 import { addPendingMessage, threadEnding } from "./history.ts";
+import { AUTOMATION_CREATOR_LEFT, memberRole } from "./members.ts";
 import { validateCloudLaunch } from "./runner-command.ts";
 import { createThread, endRun, getThreadRow } from "./threads.ts";
 
@@ -65,6 +68,11 @@ export const AutomationPatch = z
   .partial();
 export type AutomationPatch = z.infer<typeof AutomationPatch>;
 
+/** Said when a schedule would run more often than automations may. */
+export const SCHEDULE_TOO_OFTEN = `A schedule can run at most once every ${SHORTEST_SCHEDULE_GAP_MINUTES} minutes.`;
+
+const runsTooOften = (schedule: string) => shortestGapMinutes(schedule) < SHORTEST_SCHEDULE_GAP_MINUTES;
+
 /** Checked when an automation is saved, so a bad one fails now rather than at 3am. */
 export function validateAutomation(input: AutomationInput): void {
   if (input.schedule) {
@@ -73,6 +81,8 @@ export function validateAutomation(input: AutomationInput): void {
     } catch (err) {
       throw new HttpError(400, err instanceof Error ? err.message : String(err));
     }
+    // Each run is a new thread and sandbox. (Not checked while it is off, so one saved before this rule can still be paused.)
+    if (input.enabled && runsTooOften(input.schedule)) throw new HttpError(400, SCHEDULE_TOO_OFTEN);
   }
   if (!isValidTimeZone(input.timezone)) throw new HttpError(400, `"${input.timezone}" isn't a time zone LemonLime knows, e.g. Europe/London.`);
   const caps = AGENT_CAPABILITIES[input.agent.kind];
@@ -115,16 +125,42 @@ export async function createAutomation(
   return publicAutomation(row!);
 }
 
+/** The automation, for anyone in its workspace to look at. Others are told it doesn't exist. */
 async function ownAutomation(ctx: AppContext, userId: string, id: string) {
   const [row] = await ctx.db.select().from(automations).where(eq(automations.id, id));
   if (!row || !(await userWorkspaceIds(ctx.db, userId)).includes(row.workspaceId)) throw new HttpError(404, "Automation not found.");
   return row;
 }
 
-export async function updateAutomation(ctx: AppContext, userId: string, id: string, patch: AutomationPatch): Promise<PublicAutomation> {
+/** Whether this person may change or delete the automation: whoever set it up, or a workspace owner. */
+export async function canManageAutomation(ctx: AppContext, userId: string, a: { createdBy: string | null; workspaceId: string }): Promise<boolean> {
+  const role = await memberRole(ctx.db, userId, a.workspaceId);
+  return role === "owner" || (role !== null && a.createdBy === userId);
+}
+
+/**
+ * The automation, for changing it. It runs as the person who set it up (their agent sign-in,
+ * their usage), so other members can look at it but not change what it does.
+ */
+async function manageAutomation(ctx: AppContext, userId: string, id: string) {
   const row = await ownAutomation(ctx, userId, id);
-  const merged = AutomationInput.parse({ ...row, ...patch });
+  if (!(await canManageAutomation(ctx, userId, row))) {
+    throw new HttpError(403, "Only the person who set this automation up or a workspace owner can change it.");
+  }
+  return row;
+}
+
+/** Whether the person an automation runs as is still in its workspace. */
+const creatorStillHere = async (ctx: AppContext, a: { createdBy: string | null; workspaceId: string }) =>
+  Boolean(a.createdBy) && (await isWorkspaceMember(ctx.db, a.createdBy!, a.workspaceId));
+
+export async function updateAutomation(ctx: AppContext, userId: string, id: string, patch: AutomationPatch): Promise<PublicAutomation> {
+  const row = await manageAutomation(ctx, userId, id);
+  const parsed = AutomationInput.safeParse({ ...row, ...patch });
+  if (!parsed.success) throw new HttpError(400, `That change isn't valid: ${parsed.error.issues[0]?.message ?? "check what you entered"}`);
+  const merged = parsed.data;
   validateAutomation(merged);
+  if (merged.enabled && !(await creatorStillHere(ctx, row))) throw new HttpError(409, `${AUTOMATION_CREATOR_LEFT} Set it up again to run it.`);
   // Turning it back on starts the count of failures afresh; any change clears why it stopped
   // itself once it's on again, and pausing by hand needs no reason.
   const resumed = merged.enabled && !row.enabled;
@@ -154,7 +190,7 @@ export const webhookPath = (id: string, token: string) => `/api/automations/${en
  * once) and return it. It is shown this once; only its hash is kept.
  */
 export async function rotateWebhook(ctx: AppContext, userId: string, id: string): Promise<{ token: string; path: string }> {
-  await ownAutomation(ctx, userId, id);
+  await manageAutomation(ctx, userId, id);
   const token = WEBHOOK_TOKEN_PREFIX + randomBytes(32).toString("base64url");
   await ctx.db
     .update(automations)
@@ -164,7 +200,7 @@ export async function rotateWebhook(ctx: AppContext, userId: string, id: string)
 }
 
 export async function removeWebhook(ctx: AppContext, userId: string, id: string): Promise<void> {
-  await ownAutomation(ctx, userId, id);
+  await manageAutomation(ctx, userId, id);
   await ctx.db.update(automations).set({ webhookTokenHash: null }).where(eq(automations.id, id));
 }
 
@@ -222,7 +258,7 @@ export async function triggerWebhook(ctx: AppContext, id: string, token: string,
 }
 
 export async function deleteAutomation(ctx: AppContext, userId: string, id: string): Promise<void> {
-  await ownAutomation(ctx, userId, id);
+  await manageAutomation(ctx, userId, id);
   await ctx.db.delete(automations).where(eq(automations.id, id));
 }
 
@@ -296,9 +332,19 @@ export async function reviewAllRuns(ctx: AppContext, workspaceId: string): Promi
   return { reviewed: updated.length };
 }
 
-export async function listAutomations(ctx: AppContext, workspaceId: string): Promise<(PublicAutomation & { recentRuns: RunWithResult[] })[]> {
+/**
+ * The workspace's automations with their last few runs. Given who is looking, each also says
+ * whether that person may change it (`canManage`).
+ */
+export async function listAutomations(
+  ctx: AppContext,
+  workspaceId: string,
+  viewerId?: string,
+): Promise<(PublicAutomation & { recentRuns: RunWithResult[]; canManage?: boolean })[]> {
   const rows = await ctx.db.select().from(automations).where(eq(automations.workspaceId, workspaceId)).orderBy(automations.createdAt);
   if (!rows.length) return [];
+  const role = viewerId ? await memberRole(ctx.db, viewerId, workspaceId) : null;
+  const manages = (r: AutomationRow) => (viewerId ? { canManage: role === "owner" || (role !== null && r.createdBy === viewerId) } : {});
   const runs = await ctx.db
     .select()
     .from(automationRuns)
@@ -314,7 +360,7 @@ export async function listAutomations(ctx: AppContext, workspaceId: string): Pro
     ctx,
     rows.flatMap(r => runs.filter(x => x.automationId === r.id).slice(0, 5)),
   );
-  return rows.map(r => ({ ...publicAutomation(r), recentRuns: recent.filter(x => x.automationId === r.id) }));
+  return rows.map(r => ({ ...publicAutomation(r), ...manages(r), recentRuns: recent.filter(x => x.automationId === r.id) }));
 }
 
 export async function listAutomationRuns(ctx: AppContext, userId: string, id: string, limit = 50): Promise<RunWithResult[]> {
@@ -365,9 +411,16 @@ async function startRun(
     await ctx.db.insert(automationRuns).values({ automationId: a.id, scheduledFor: opts.scheduledFor, status, trigger: opts.trigger, ...extra });
     return { status, threadId: extra.threadId ?? null };
   };
-  if (!a.createdBy) return record("failed", { detail: "The person who set this up no longer has an account." });
+  // It runs as the person who set it up. Once they have left, it stops rather than go on
+  // using their agent sign-in in a workspace they are no longer part of.
+  const runAs = a.createdBy;
+  if (!runAs || !(await creatorStillHere(ctx, a))) {
+    const detail = runAs ? AUTOMATION_CREATOR_LEFT : "The person who set this up no longer has an account.";
+    await ctx.db.update(automations).set({ enabled: false, nextRunAt: null, pausedReason: detail }).where(eq(automations.id, a.id));
+    return record("failed", { detail });
+  }
   try {
-    const { thread } = await createThread(ctx, a.createdBy, a.workspaceId, {
+    const { thread } = await createThread(ctx, runAs, a.workspaceId, {
       title: a.name,
       agent: a.agent,
       repo: a.repo,
@@ -382,7 +435,10 @@ async function startRun(
     return await record("started", { threadId: thread.id });
   } catch (err) {
     if (err instanceof PolicyDeniedError) return record("skipped", { detail: err.message });
-    return record("failed", { detail: err instanceof Error ? err.message : String(err) });
+    // Our own errors are written to be read. Anything else stays in the log: it can name hosts or accounts.
+    if (err instanceof HttpError) return record("failed", { detail: err.message });
+    console.error(`[lemonlime] automation ${a.id} could not start a run:`, err);
+    return record("failed", { detail: "Something went wrong starting this run." });
   }
 }
 
@@ -426,7 +482,9 @@ export async function runDueAutomations(ctx: AppContext, nowMs: number = Date.no
     .limit(25);
   const out: AutomationSweep = { started: [], skipped: [], failed: [], paused: [] };
   for (const a of due) {
-    const following = next(a.schedule, a.timezone, now);
+    // One saved before schedules had a shortest gap still keeps to it.
+    const from = a.schedule && runsTooOften(a.schedule) ? new Date(nowMs + SHORTEST_SCHEDULE_GAP_MINUTES * 60_000 - 1) : now;
+    const following = next(a.schedule, a.timezone, from);
     const claimed = await ctx.db
       .update(automations)
       .set({ nextRunAt: following, lastRunAt: now.toISOString() })

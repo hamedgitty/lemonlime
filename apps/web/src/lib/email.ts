@@ -9,7 +9,7 @@
  * The sender address comes from `LEMONLIME_EMAIL_FROM`, e.g. `LemonLime <sign-in@example.com>`.
  */
 
-import { renderEmail, type EmailBrand } from "@lemonlime/plugins";
+import { literalText, renderEmail, type EmailBrand } from "@lemonlime/plugins";
 
 export interface EmailMessage {
   to: string;
@@ -142,20 +142,39 @@ export function signInCodeEmail(brand: EmailBrand, to: string, code: string, min
   };
 }
 
-/** The invitation to join a workspace. */
+/** The longest a person's or workspace's name is shown in an email. */
+const NAME_MAX = 80;
+
+/** A name somebody typed, tidied for an email: one line, and not too long. */
+function tidyName(name: string): string {
+  const oneLine = [
+    ...name
+      .replace(/[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+  ];
+  return oneLine.length > NAME_MAX ? `${oneLine.slice(0, NAME_MAX - 1).join("")}…` : oneLine.join("");
+}
+
+/**
+ * The invitation to join a workspace. The inviter and workspace names are whatever those
+ * people typed, so they are shown as plain text: a name can't add a link or formatting.
+ */
 export function inviteEmail(brand: EmailBrand, o: { to: string; inviter: string; workspace: string; link: string; days: number }): EmailMessage {
+  const inviter = tidyName(o.inviter) || "Someone";
+  const workspace = tidyName(o.workspace) || "a workspace";
   return {
     to: o.to,
     ...renderEmail(
       {
-        subject: `${o.inviter} invited you to ${o.workspace} on ${brand.name}`,
-        preview: `Join the workspace to share coding agent threads with ${o.inviter}.`,
-        title: `Join ${o.workspace}`,
+        subject: `${inviter} invited you to ${workspace} on ${brand.name}`,
+        preview: `Join the workspace to share coding agent threads with ${inviter}.`,
+        title: `Join ${workspace}`,
         intro: [
-          `**${o.inviter}** invited you to the **${o.workspace}** workspace on ${brand.name}, where your team runs coding agents and shares their threads.`,
+          `**${literalText(inviter)}** invited you to the **${literalText(workspace)}** workspace on ${brand.name}, where your team runs coding agents and shares their threads.`,
         ],
         button: { label: "Accept the invitation", url: o.link },
-        note: `The link works for ${o.days} days, and only for ${o.to}. If you weren't expecting this, you can ignore it.`,
+        note: `The link works for ${o.days} days, and only for ${literalText(o.to)}. If you weren't expecting this, you can ignore it.`,
         reason: `You're getting this because someone in a ${brand.name} workspace invited this address.`,
       },
       brand,

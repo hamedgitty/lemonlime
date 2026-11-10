@@ -2,7 +2,15 @@
 
 import Link from "next/link";
 import { useMemo, useState, type FormEvent } from "react";
-import { AGENT_CAPABILITIES, nextRun, parseSchedule, type AgentKind, type ReasoningLevel } from "@lemonlime/protocol";
+import {
+  AGENT_CAPABILITIES,
+  nextRun,
+  parseSchedule,
+  SHORTEST_SCHEDULE_GAP_MINUTES,
+  shortestGapMinutes,
+  type AgentKind,
+  type ReasoningLevel,
+} from "@lemonlime/protocol";
 import { apiFetch } from "@/lib/api-client.ts";
 import { timeAgo } from "@/components/status-pill.tsx";
 
@@ -31,6 +39,8 @@ export interface AutomationInfo {
   /** Why it turned itself off; null when on or paused by hand. */
   pausedReason?: string | null;
   hasWebhook?: boolean;
+  /** False when someone else set it up and the viewer isn't a workspace owner: they can look, not change. */
+  canManage?: boolean;
   nextRunAt: string | null;
   recentRuns?: Run[];
 }
@@ -84,8 +94,11 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
 
   const preview = useMemo(() => {
     try {
-      parseSchedule(form.schedule);
-      const next = nextRun(form.schedule, new Date(), zone);
+      const schedule = parseSchedule(form.schedule);
+      if (shortestGapMinutes(schedule) < SHORTEST_SCHEDULE_GAP_MINUTES) {
+        return { ok: false as const, text: `A schedule can run at most once every ${SHORTEST_SCHEDULE_GAP_MINUTES} minutes.` };
+      }
+      const next = nextRun(schedule, new Date(), zone);
       return { ok: true as const, text: next ? `Next: ${when(next.toISOString(), zone)} (${zone})` : "That schedule never comes round." };
     } catch (e) {
       return { ok: false as const, text: e instanceof Error ? e.message : String(e) };
@@ -112,7 +125,7 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
     });
     setBusy(false);
     if (!res.ok) return setError(res.message);
-    setList(l => [...l, { ...res.data.automation, recentRuns: [] }]);
+    setList(l => [...l, { ...res.data.automation, canManage: true, recentRuns: [] }]);
     set({ name: "", prompt: "", checkScript: "" });
   }
 
@@ -186,21 +199,26 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
                         : "Paused"}
                   </p>
                 </div>
-                <button type="button" className="btn-ghost h-8" onClick={() => makeWebhook(a)}>
-                  {a.hasWebhook ? "New webhook URL" : "Add a webhook"}
-                </button>
-                {a.hasWebhook && (
-                  <button type="button" className="btn-ghost h-8" onClick={() => removeWebhook(a)}>
-                    Turn off webhook
-                  </button>
+                {a.canManage !== false && (
+                  <>
+                    <button type="button" className="btn-ghost h-8" onClick={() => makeWebhook(a)}>
+                      {a.hasWebhook ? "New webhook URL" : "Add a webhook"}
+                    </button>
+                    {a.hasWebhook && (
+                      <button type="button" className="btn-ghost h-8" onClick={() => removeWebhook(a)}>
+                        Turn off webhook
+                      </button>
+                    )}
+                    <button type="button" className="btn-ghost h-8" onClick={() => toggle(a)}>
+                      {a.enabled ? "Pause" : "Resume"}
+                    </button>
+                    <button type="button" className="btn-danger h-8" onClick={() => remove(a)}>
+                      Delete
+                    </button>
+                  </>
                 )}
-                <button type="button" className="btn-ghost h-8" onClick={() => toggle(a)}>
-                  {a.enabled ? "Pause" : "Resume"}
-                </button>
-                <button type="button" className="btn-danger h-8" onClick={() => remove(a)}>
-                  Delete
-                </button>
               </div>
+              {a.canManage === false && <p className="mt-2 text-sm text-muted">Only the person who set this up or a workspace owner can change it.</p>}
               {newHook?.id === a.id && (
                 <div className="mt-4 rounded-lg border border-line px-3 py-3 text-sm">
                   <label htmlFor={`hook-${a.id}`} className="label">

@@ -9,9 +9,20 @@ const RESULT: Record<string, { text: string; ok: boolean }> = {
   taken: { text: "That GitHub installation is already connected to another workspace.", ok: false },
   expired: { text: "That link expired or was started by someone else. Try connecting again.", ok: false },
   missing: { text: "GitHub didn't send everything back. Try connecting again.", ok: false },
+  owners: { text: "Only the workspace's owners can connect GitHub.", ok: false },
 };
 
-export function GitHubSection({ enabled, initial, result }: { enabled: boolean; initial: { id: string; accountLogin: string }[]; result: string | null }) {
+export function GitHubSection({
+  enabled,
+  initial,
+  result,
+  canManage,
+}: {
+  enabled: boolean;
+  initial: { id: string; accountLogin: string }[];
+  result: string | null;
+  canManage: boolean;
+}) {
   const [list, setList] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const message = result ? RESULT[result] : undefined;
@@ -50,16 +61,22 @@ export function GitHubSection({ enabled, initial, result }: { enabled: boolean; 
           {list.map(i => (
             <li key={i.id} className="flex items-center gap-4 px-4 py-3">
               <p className="min-w-0 flex-1 truncate font-medium">{i.accountLogin}</p>
-              <button type="button" className="btn-danger h-8" onClick={() => disconnect(i.id, i.accountLogin)}>
-                Disconnect
-              </button>
+              {canManage && (
+                <button type="button" className="btn-danger h-8" onClick={() => disconnect(i.id, i.accountLogin)}>
+                  Disconnect
+                </button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <a href="/api/github/install" className="btn-primary inline-flex h-10 items-center">
-        {list.length ? "Add repositories" : "Connect GitHub"}
-      </a>
+      {canManage ? (
+        <a href="/api/github/install" className="btn-primary inline-flex h-10 items-center">
+          {list.length ? "Add repositories" : "Connect GitHub"}
+        </a>
+      ) : (
+        <p className="text-sm text-muted">Only the workspace&apos;s owners can connect or disconnect GitHub.</p>
+      )}
     </div>
   );
 }

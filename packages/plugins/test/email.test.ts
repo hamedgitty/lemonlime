@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderEmail, type EmailBrand } from "../src/index.ts";
+import { literalText, renderEmail, type EmailBrand } from "../src/index.ts";
 
 const brand: EmailBrand = {
   name: "LemonLime",
@@ -52,6 +52,32 @@ describe("renderEmail", () => {
     expect(email.text).toContain("Questions? Write to help@example.com");
     expect(email.text).not.toMatch(/<strong|<a |\*\*/);
     expect(email.text).not.toMatch(/\n{3,}/);
+  });
+
+  it("shows text someone else typed as it is, never as bold or a link", () => {
+    const name = "[Reset your password](https://bad.example/x) **now** <b>";
+    const typed = renderEmail(
+      {
+        subject: "Hi",
+        preview: "Hi",
+        title: "Hi",
+        intro: [`**${literalText(name)}** invited you. See [the docs](https://example.com/docs).`],
+        details: [{ label: "From", value: literalText(name) }],
+        note: `Sent by ${literalText(name)}.`,
+        reason: `Because ${literalText(name)} asked.`,
+      },
+      brand,
+    );
+    expect(typed.html).not.toContain('href="https://bad.example');
+    expect(typed.html).toMatch(/<strong[^>]*>\[Reset your password\]\(https:\/\/bad\.example\/x\) \*\*now\*\* &lt;b&gt;<\/strong> invited you\./);
+    expect(typed.html).toContain('href="https://example.com/docs"');
+    expect(typed.html).not.toMatch(/[\uE000-\uE004]/);
+    expect(typed.text).toContain(`${name} invited you. See the docs (https://example.com/docs).`);
+    expect(typed.text).toContain(`From: ${name}`);
+    expect(typed.text).toContain(`Sent by ${name}.`);
+    expect(typed.text).not.toMatch(/[\uE000-\uE004]/);
+    // Without it, the same name would have become a link.
+    expect(renderEmail({ subject: "Hi", preview: "Hi", title: "Hi", intro: [name] }, brand).html).toContain('href="https://bad.example/x"');
   });
 
   it("leaves out what isn't given", () => {

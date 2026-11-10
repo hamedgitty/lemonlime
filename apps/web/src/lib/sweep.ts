@@ -119,3 +119,25 @@ export function runtimeSeconds(startedAtIso: string, endMs: number): number {
   if (Number.isNaN(start)) return 0;
   return Math.max(0, Math.floor((endMs - start) / 1000));
 }
+
+type Steps = Record<string, () => Promise<unknown>>;
+
+/**
+ * Runs the jobs of one sweep in order. A job that fails is logged and named in `failed`
+ * (its result is null), and the jobs after it still run: one broken job must not stop
+ * sandboxes being paused or automations starting.
+ */
+export async function runSteps<S extends Steps>(steps: S): Promise<{ results: { [K in keyof S]: Awaited<ReturnType<S[K]>> | null }; failed: string[] }> {
+  const results: Record<string, unknown> = {};
+  const failed: string[] = [];
+  for (const [name, step] of Object.entries(steps)) {
+    try {
+      results[name] = await step();
+    } catch (err) {
+      console.error(`[lemonlime] sweep: ${name} failed:`, err);
+      results[name] = null;
+      failed.push(name);
+    }
+  }
+  return { results: results as { [K in keyof S]: Awaited<ReturnType<S[K]>> | null }, failed };
+}

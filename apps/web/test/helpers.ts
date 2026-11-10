@@ -1,4 +1,4 @@
-import { user, type Db } from "@lemonlime/db";
+import { user, workspaceMembers, workspaces, type Db } from "@lemonlime/db";
 import { createLocalDb } from "@lemonlime/db/local";
 import { defaultPlugin, type ResolvedPlugin, type UsagePolicy } from "@lemonlime/plugins";
 import type { CreateSandboxOptions, RunnerLaunch, SandboxInfo, SandboxProvider } from "@lemonlime/sandbox";
@@ -85,4 +85,13 @@ export async function addUser(db: Db, email: string): Promise<{ userId: string; 
   await db.insert(user).values({ id: userId, name: "", email, emailVerified: true, updatedAt: new Date() });
   const workspaceId = await createPersonalWorkspace(db, userId, email);
   return { userId, workspaceId };
+}
+
+/** A team workspace owned by one person, with the others in it as members. */
+export async function addTeam(db: Db, ownerId: string, memberIds: string[] = []): Promise<string> {
+  const id = `ws-${crypto.randomUUID()}`;
+  await db.insert(workspaces).values({ id, name: "Acme", personal: false, createdBy: ownerId });
+  await db.insert(workspaceMembers).values({ workspaceId: id, userId: ownerId, role: "owner" });
+  for (const userId of memberIds) await db.insert(workspaceMembers).values({ workspaceId: id, userId, role: "member" });
+  return id;
 }

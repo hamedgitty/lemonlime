@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { workspaceInvites } from "@lemonlime/db";
+import { user, workspaceInvites } from "@lemonlime/db";
 import { requestWorkspace, WORKSPACE_COOKIE } from "../src/lib/current-workspace.ts";
 import { acceptInvite, findInvite, inviteMember, listMembers, listWorkspaces, removeMember, revokeInvite } from "../src/lib/members.ts";
 import { addUser, createTestApp } from "./helpers.ts";
@@ -40,6 +40,24 @@ describe("workspace members", () => {
       [bob.workspaceId, true, "owner"],
       [owner.workspaceId, false, "member"],
     ]);
+  });
+
+  it("waits until the invited address is confirmed", async () => {
+    const { ctx, db, emails } = await createTestApp();
+    const owner = await addUser(db, "owner@example.com");
+    const bob = await addUser(db, "bob@example.com");
+    await db.update(user).set({ emailVerified: false }).where(eq(user.id, bob.userId));
+    await inviteMember(ctx, { userId: owner.userId, workspaceId: owner.workspaceId, email: "bob@example.com" });
+    const token = tokenFrom(emails.at(-1)!.text);
+
+    await expect(acceptInvite(ctx, { userId: bob.userId, token })).rejects.toMatchObject({
+      status: 403,
+      message: expect.stringContaining("Confirm your email"),
+    });
+    expect((await listMembers(db, owner.workspaceId)).members).toHaveLength(1);
+
+    await db.update(user).set({ emailVerified: true }).where(eq(user.id, bob.userId));
+    expect(await acceptInvite(ctx, { userId: bob.userId, token })).toBe(owner.workspaceId);
   });
 
   it("refuses unknown, withdrawn and expired links, and replaces an earlier invite to the same address", async () => {
@@ -132,6 +150,8 @@ describe("workspace members", () => {
     // A cookie for a workspace you've left falls back quietly instead of locking you out.
     await removeMember(ctx, { userId: bob.userId, workspaceId: owner.workspaceId, memberId: bob.userId });
     expect(await requestWorkspace(db, bob.userId, req(owner.workspaceId))).toBe(bob.workspaceId);
+    // So does a cookie that got damaged.
+    expect(await requestWorkspace(db, bob.userId, req("%E0%A4%A"))).toBe(bob.workspaceId);
     expect(await db.select().from(workspaceInvites).where(eq(workspaceInvites.email, "bob@example.com"))).toHaveLength(1);
   });
 });

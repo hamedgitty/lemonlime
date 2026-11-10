@@ -1,16 +1,17 @@
-import { requireWorkspaceMember } from "@/lib/access.ts";
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError } from "@/lib/errors.ts";
 import { linkInstallation, requireGitHub, verifyInstallState } from "@/lib/github.ts";
 import { route } from "@/lib/http.ts";
+import { memberRole } from "@/lib/members.ts";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GitHub sends people back here after installing the app (the app's "Setup URL", with
  * "Request user authorization during installation" turned on). Links the installation
- * to the workspace that started it, after checking the person can really manage it.
+ * to the workspace that started it, after checking the person owns that workspace and can
+ * really manage the installation.
  */
 export const GET = route(async request => {
   const ctx = await getAppContext();
@@ -24,7 +25,7 @@ export const GET = route(async request => {
   const user = await requireUser(ctx, request);
   const claims = await verifyInstallState(ctx.config.tokenSecret(), state);
   if (!claims || claims.userId !== user.userId) return back("expired");
-  await requireWorkspaceMember(ctx.db, user.userId, claims.workspaceId);
+  if ((await memberRole(ctx.db, user.userId, claims.workspaceId)) !== "owner") return back("owners");
   try {
     await linkInstallation(ctx, cfg, { workspaceId: claims.workspaceId, userId: user.userId, installationId, code });
   } catch (err) {

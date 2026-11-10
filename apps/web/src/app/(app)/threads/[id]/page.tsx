@@ -18,7 +18,8 @@ async function load(id: string) {
     if (err instanceof HttpError && err.status === 404) notFound();
     throw err;
   }
-  return threadResponse(ctx, row, user.userId);
+  // A sign-in is saved to the account of the person who started the thread, so only they are offered it.
+  return { initial: await threadResponse(ctx, row, user.userId), canSignIn: row.createdBy === user.userId };
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -28,6 +29,6 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ThreadPage({ params }: Props) {
   const { id } = await params;
-  const initial = await load(id);
-  return <ThreadView initial={initial} />;
+  const { initial, canSignIn } = await load(id);
+  return <ThreadView initial={initial} canSignIn={canSignIn} />;
 }

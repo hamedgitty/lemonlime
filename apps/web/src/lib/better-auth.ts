@@ -1,11 +1,12 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { emailOTP } from "better-auth/plugins";
 import { account, rateLimit, session, user, verification } from "@lemonlime/db";
 import { createPersonalWorkspace } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { signInCodeEmail } from "./email.ts";
-import { hit, LIMITS } from "./rate-limit.ts";
+import { addressHeaders, callerAddress, hit, LIMITS } from "./rate-limit.ts";
 
 /** Sign-in codes are 6 digits and valid for 10 minutes. */
 export const SIGN_IN_CODE_LENGTH = 6;
@@ -24,13 +25,43 @@ export function githubEnabled(vars: AppContext["vars"]): boolean {
   return Boolean(vars.GITHUB_CLIENT_ID && vars.GITHUB_CLIENT_SECRET);
 }
 
+/** True for an address only this computer can reach (localhost, 127.0.0.1, [::1], *.localhost). */
+function isThisComputer(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
 function authSecret(ctx: AppContext): string | undefined {
   const secret = ctx.vars.BETTER_AUTH_SECRET;
-  if (!secret && ctx.production) {
+  // Without it Better Auth signs sessions with a built-in secret anyone can look up. That
+  // is fine for trying things out on this computer, and nowhere else.
+  const reachable = Boolean(ctx.vars.LEMONLIME_PUBLIC_URL) && !isThisComputer(ctx.vars.LEMONLIME_PUBLIC_URL!);
+  if (!secret && (ctx.production || reachable)) {
     throw new Error("BETTER_AUTH_SECRET is not set. Generate one with: openssl rand -base64 32");
   }
-  // In development Better Auth falls back to a built-in secret and warns.
   return secret || undefined;
+}
+
+const SEND_CODE_PATH = "/email-otp/send-verification-otp";
+/** Longer than any real email address. */
+const EMAIL_MAX = 254;
+
+/**
+ * Counts one request for a sign-in code and says whether to send it. Counted for the
+ * address and the caller together first, so someone asking again and again for another
+ * person's address uses up only their own share and can't lock that person out. Then for
+ * the address whoever asks, so many callers together can't flood one inbox.
+ */
+export async function allowSignInCode(ctx: AppContext, email: string, caller: string): Promise<boolean> {
+  const address = email.trim().toLowerCase();
+  if (address.length > EMAIL_MAX) return false;
+  const fromCaller = await hit(ctx.db, `sign-in-code:${address}:from:${caller}`, LIMITS.signInCodesPerEmail);
+  if (!fromCaller.ok) return false;
+  return (await hit(ctx.db, `sign-in-code:${address}`, LIMITS.signInCodesPerEmailFromAnyone)).ok;
 }
 
 /**
@@ -69,7 +100,21 @@ export function createAuth(ctx: AppContext) {
     // Client IP for rate limiting. On Workers, Cloudflare sets cf-connecting-ip; on Node,
     // put the app behind a proxy that sets x-forwarded-for.
     advanced: {
-      ipAddress: { ipAddressHeaders: ctx.runtime === "workers" ? ["cf-connecting-ip"] : ["x-forwarded-for"] },
+      ipAddress: { ipAddressHeaders: addressHeaders(ctx.runtime) },
+    },
+    hooks: {
+      // Runs before a new sign-in code is made. Over the limit, the request stops here: the
+      // code already sent keeps working, nothing is emailed, and the answer looks the same
+      // as when a code was sent, so it says nothing about the address.
+      before: createAuthMiddleware(async c => {
+        if (c.path !== SEND_CODE_PATH) return;
+        const { email, type } = (c.body ?? {}) as { email?: unknown; type?: unknown };
+        if (typeof email !== "string" || type !== "sign-in") return;
+        const caller = callerAddress(ctx.runtime, c.request ?? c.headers ?? new Headers());
+        if (await allowSignInCode(ctx, email, caller)) return;
+        console.warn("Skipped a sign-in code: too many for this address in the last hour.");
+        return c.json({ success: true });
+      }),
     },
     socialProviders: githubEnabled(ctx.vars) ? { github: { clientId: ctx.vars.GITHUB_CLIENT_ID!, clientSecret: ctx.vars.GITHUB_CLIENT_SECRET! } } : {},
     plugins: [
@@ -80,13 +125,7 @@ export function createAuth(ctx: AppContext) {
         storeOTP: "hashed",
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== "sign-in") return; // only sign-in codes are used
-          // Per address too, so nobody can flood one inbox from many IPs. Better Auth sends
-          // in the background and answers the same either way, so this reveals nothing.
-          const limit = await hit(ctx.db, `sign-in-code:${email.trim().toLowerCase()}`, LIMITS.signInCodesPerEmail);
-          if (!limit.ok) {
-            console.warn("Skipped a sign-in code: too many for this address in the last hour.");
-            return;
-          }
+          // How many codes one address gets is limited before this point (see `hooks` above).
           await ctx.email.send(signInCodeEmail(ctx.config.emailBrand(), email, otp, SIGN_IN_CODE_TTL_SECONDS / 60));
         },
       }),

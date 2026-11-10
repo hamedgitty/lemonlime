@@ -78,7 +78,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           Install the LemonLime app on the repositories you choose. Cloud threads then clone them, push their branch after every turn, and open pull requests,
           each with a token that only works on that repository and expires within the hour.
         </p>
-        <GitHubSection enabled={githubEnabled} initial={installations} result={githubResult} />
+        <GitHubSection enabled={githubEnabled} initial={installations} result={githubResult} canManage={isOwner} />
       </section>
 
       <section aria-labelledby="cloud-heading" className="card p-6">

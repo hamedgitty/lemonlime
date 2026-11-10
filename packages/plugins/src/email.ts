@@ -36,7 +36,10 @@ export interface EmailContent {
   title: string;
   /** An optional picture under the logo: an absolute URL to a 1040×400 PNG. Decorative. */
   art?: string;
-  /** Paragraphs before the code, details and button. Plain text; `**bold**` and `[label](https://…)` are allowed. */
+  /**
+   * Paragraphs before the code, details and button. Plain text; `**bold**` and
+   * `[label](https://…)` are allowed. Wrap anything a person typed in `literalText`.
+   */
   intro: string[];
   /** A one-time code, shown large. */
   code?: string;
@@ -82,6 +85,21 @@ const inline = (s: string) =>
     .replace(/\*\*(.+?)\*\*/g, `<strong style="color:${C.ink};font-weight:600">$1</strong>`)
     .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, `<a href="$2" style="color:${C.leaf};text-decoration:underline">$1</a>`);
 const plain = (s: string) => s.replace(/\*\*(.+?)\*\*/g, "$1").replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, "$1 ($2)");
+
+// The characters `**bold**` and `[label](https://…)` are written with, and stand-ins for
+// them that the two never match. The stand-ins are swapped back once the email is built.
+const MARKS = "*[]()";
+const STAND_IN = 0xe000;
+const restore = (s: string) => s.replace(/[\uE000-\uE004]/g, c => MARKS[c.charCodeAt(0) - STAND_IN]!);
+
+/**
+ * Text that somebody else chose, like a person's or a workspace's name, for use inside
+ * `intro`, `outro`, `details`, `note` or `reason`. It is shown exactly as typed: never as
+ * bold or as a link, whatever it contains.
+ */
+export function literalText(text: string): string {
+  return text.replace(/[*[\]()]/g, c => String.fromCharCode(STAND_IN + MARKS.indexOf(c)));
+}
 
 function paragraphs(list: string[] | undefined, top = 0): string {
   return (list ?? []).map((p, i) => `<p style="margin:${i === 0 ? top : 14}px 0 0;font:400 16px/1.6 ${SANS};color:${C.ink2}">${inline(p)}</p>`).join("");
@@ -193,5 +211,5 @@ ${links ? `<p style="margin:0 0 8px">${links}</p>` : ""}${content.reason ? `<p s
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  return { subject: content.subject, html, text: `${text}\n` };
+  return { subject: restore(content.subject), html: restore(html), text: `${restore(text)}\n` };
 }

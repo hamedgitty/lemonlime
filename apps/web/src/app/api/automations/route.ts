@@ -7,12 +7,15 @@ import { enforce } from "@/lib/rate-limit.ts";
 
 export const dynamic = "force-dynamic";
 
-/** The workspace's automations, each with its last few runs. `?workspace=` picks the workspace. */
+/**
+ * The workspace's automations, each with its last few runs and whether the caller may change
+ * it (`canManage`). `?workspace=` picks the workspace.
+ */
 export const GET = route(async request => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
   const workspaceId = await requestWorkspace(ctx.db, user.userId, request);
-  return json({ automations: await listAutomations(ctx, workspaceId) });
+  return json({ automations: await listAutomations(ctx, workspaceId, user.userId) });
 });
 
 /** Create one. The schedule, agent and repository are checked now, not when it first runs. */

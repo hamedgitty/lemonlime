@@ -240,6 +240,9 @@ describe.skipIf(process.platform === "win32")("settings in the repository's own 
     rmSync(marker);
 
     // Large-file storage as it installs itself into a repository, with a stand-in program.
+    // A machine that has the real one set up for everybody would talk to the stand-in in a
+    // way it doesn't understand, so the machine-wide git settings are left out.
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
     const bin = tempDir();
     const lfsRan = join(bin, "lfs-ran");
     writeFileSync(join(bin, "git-lfs"), `#!/bin/sh\ntouch "${lfsRan}"\ncat\n`);

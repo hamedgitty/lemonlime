@@ -16,6 +16,7 @@ import {
   Power,
   RotateCw,
   Server,
+  Users,
   X,
 } from "lucide-react";
 import { useMachines } from "../lib/machines.ts";
@@ -37,12 +38,12 @@ import {
   type ThreadStatus,
 } from "@lemonlime/protocol";
 import { fetchAttachmentImage, runnerHttpBase } from "@lemonlime/client";
-import { buildTimeline, waitingOnYou, withoutQueued, type TimelineItem } from "../lib/timeline.ts";
+import { buildTimeline, personTexts, waitingOnYou, withoutQueued, type TimelineItem } from "../lib/timeline.ts";
 import { latestSubagents } from "../lib/steps.ts";
 import { editSendPlan, forkCommit, forkNote, forkTitle, rewindLanded, startEdit, type EditDraft } from "../lib/messageActions.ts";
 import { useThreadSession, type Connection, type SessionState, type SessionTarget } from "../lib/useThreadSession.ts";
 import { useAttachments } from "../lib/useAttachments.ts";
-import { sendBlocker } from "../lib/composerSend.ts";
+import { sendBlocker, undelivered, unsent } from "../lib/composerSend.ts";
 import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
 import { FileLinksContext, LinkMenuContext, type FileLinks } from "../lib/markdown.tsx";
 import { useStableCallback, useStableRows, useStableValue } from "../lib/stable.ts";
@@ -52,10 +53,13 @@ import { uniquePrompts } from "../lib/promptHistory.ts";
 import { COMPUTER_LEVELS, type ComputerLevel } from "../lib/computer.ts";
 import type { ThreadEntry } from "../lib/threads.ts";
 import { summarize } from "../lib/threads.ts";
+import { SHARE_HELP, SHARE_LABEL, readOnly, threadAccess } from "../lib/threadAccess.ts";
 import { AGENT_LABELS, STATUS_LABELS, repoName } from "../lib/format.ts";
 import { CloudError, type CloudApi } from "../lib/cloud.ts";
 import { confirmAction } from "../lib/native.ts";
 import { Timeline } from "./Timeline.tsx";
+import { HistorySkeleton } from "./HistorySkeleton.tsx";
+import { ReadOnlyThread } from "./ReadOnlyThread.tsx";
 import type { LimitActions } from "./LimitRow.tsx";
 import { limitChoices, listAccounts, threadsOnSameLimit } from "../lib/accounts.ts";
 import { localRunnerStatuses, type AgentInstall } from "../lib/system.ts";
@@ -79,7 +83,7 @@ import { fetchProjectScripts, scriptForShortcut, setFocusedScripts, type Script 
 import { keysFor } from "../lib/shortcuts.ts";
 import { betterTitle } from "../lib/threadTitle.ts";
 import { ContextMeter, ModelPicker, PermissionPicker, QuestionCard, TodoCard } from "./AgentLoop.tsx";
-import { MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx";
+import { MenuCheck, MenuChoice, MenuItem, MenuLabel, MenuSeparator, SubMenu, Tip } from "./primitives.tsx";
 import { RenameField, ThreadMenu, type AppThreadMenu, type ThreadMenuHandlers } from "./ThreadMenu.tsx";
 import { childRowKey, REVEAL_CHILD_EVENT, rememberPullRequest, removeThreadText, takeRevealChild } from "../lib/threadMenu.ts";
 import { flashItem } from "../lib/findInThread.ts";
@@ -178,7 +182,22 @@ export function ThreadView(props: ThreadViewProps) {
       fallback={(details, retry) => <PartFailed what="This thread" details={details} onRetry={retry} />}
     >
       <LinkMenuContext.Provider value={linkMenu}>
-        <ThreadSessionView {...props} target={target} />
+        {entry.mode === "cloud" && readOnly(entry) ? (
+          // Someone else's thread: read from what the control plane stored, with no runner behind it.
+          <ReadOnlyThread
+            thread={entry.thread}
+            api={cloudApi!}
+            threadMenu={props.threadMenu}
+            paneControls={props.paneControls}
+            active={props.active}
+            foldFinished={props.foldFinished}
+            unreadAfterSeq={props.unreadAfterSeq}
+            onWaiting={props.onWaiting}
+            onChildren={props.onChildren}
+          />
+        ) : (
+          <ThreadSessionView {...props} target={target} />
+        )}
       </LinkMenuContext.Provider>
     </ErrorBoundary>
   );
@@ -300,7 +319,7 @@ function ThreadSessionView({
     };
   const implementPlan = useStableCallback(() => {
     session.setOptions({ permission: modeAfterPlan(threadOptions) });
-    session.send(IMPLEMENT_PLAN_PROMPT);
+    session.send(IMPLEMENT_PLAN_PROMPT, [], { onFailed: sayUnsent });
   });
   // The runner says the installed agent is older than the version LemonLime is tested with.
   const outdated = useMemo(() => {
@@ -518,10 +537,11 @@ function ThreadSessionView({
     () => ({ commands: suggestions.commands, onCommandsOpen: suggestions.refreshCommands, searchFiles: suggestions.searchFiles }),
     [suggestions.commands, suggestions.refreshCommands, suggestions.searchFiles],
   );
+  // What people typed here; a subagent's report or the runner's own "continue" is not theirs.
+  const userTexts = useMemo(() => personTexts(session.events), [session.events]);
   // Earlier prompts, for Up and Down in the composer.
-  const prompts = useMemo(() => uniquePrompts(session.events.flatMap(e => (e.type === "user_message" ? [e.text] : []))), [session.events]);
+  const prompts = useMemo(() => uniquePrompts(userTexts), [userTexts]);
   // "hi" as a first message makes a poor title: a later message that says more names it.
-  const userTexts = useMemo(() => session.events.flatMap(e => (e.type === "user_message" ? [e.text] : [])), [session.events]);
   useEffect(() => {
     if (!onAutoTitle) return;
     const better = betterTitle(summary.title, userTexts);
@@ -530,10 +550,16 @@ function ThreadSessionView({
   }, [userTexts.length, summary.title]);
   /** A message that was taken but couldn't be delivered goes back in the box, ahead of anything typed since. */
   const giveBack = (text: string, err: unknown) => {
-    const typed = messageBox()?.value ?? "";
-    composerRef.current?.fill(typed.trim() ? `${text}\n\n${typed}` : text);
-    if (err instanceof CloudError && err.denial) setDenial(err.denial);
-    else setActionError(`Couldn't send your message, so it's back in the message box. ${err instanceof Error ? err.message : String(err)}`);
+    const back = undelivered(text, messageBox()?.value ?? "", err);
+    composerRef.current?.fill(back.box);
+    if (back.denial) setDenial(back.denial);
+    else setActionError(back.notice);
+  };
+  /** Something sent at the press of a button couldn't go: say why. The button is still there to press again. */
+  const sayUnsent = (err: unknown) => {
+    const why = unsent(err);
+    if (why.denial) setDenial(why.denial);
+    else setActionError(why.notice);
   };
   /** Sends the message with its files; false (the text stays in the composer) when it can't go. */
   const sendWithFiles = (text: string): boolean => {
@@ -588,7 +614,7 @@ function ThreadSessionView({
     if (!afterRewind) return;
     if (rewindLanded(session.events, afterRewind.seq, afterRewind.since)) {
       setAfterRewind(null);
-      sessionSend(afterRewind.text, afterRewind.files);
+      sessionSend(afterRewind.text, afterRewind.files, { onFailed: err => giveBack(afterRewind.text, err) });
       return;
     }
     // The runner didn't go back (it may have said why): give the text back rather than lose it.
@@ -703,7 +729,7 @@ function ThreadSessionView({
   useEffect(() => {
     if (!settled || !held.length || session.state !== "live") return;
     // Any that couldn't go stay held.
-    setHeld(held.filter(m => !session.send(m.text)));
+    setHeld(held.filter(m => !session.send(m.text, [], { onFailed: err => giveBack(m.text, err) })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settled, held.length, session.state]);
 
@@ -865,6 +891,20 @@ function ThreadSessionView({
     ...(onMove ? { move: () => void move() } : {}),
     ...(entry.mode === "local" ? { remove: () => void removeLocal() } : {}),
   };
+  // The person who started a cloud thread decides whether the rest of the workspace may direct it.
+  const access = threadAccess(entry, { sharing: cloudApi?.canShareThreads ?? false });
+  const [sharePick, setSharePick] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (sharePick === access.shared) setSharePick(null);
+  }, [sharePick, access.shared]);
+  const share = (on: boolean) => {
+    if (entry.mode !== "cloud" || !cloudApi) return;
+    setSharePick(on);
+    cloudApi.shareThread(entry.thread.id, on).then(onCloudRefresh, err => {
+      setSharePick(null);
+      toast({ title: "Couldn't change who can take part", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    });
+  };
   const optionsMenu = (
     <ThreadMenu
       thread={summary}
@@ -900,6 +940,14 @@ function ThreadSessionView({
                 options={COMPUTER_LEVELS.map(l => ({ value: l.value, label: <span title={l.hint}>{l.label}</span> }))}
               />
             </SubMenu>
+            {access.canShare && (
+              <>
+                <MenuSeparator />
+                <MenuCheck icon={<Users />} checked={sharePick ?? access.shared} onChange={share} description={SHARE_HELP}>
+                  {SHARE_LABEL}
+                </MenuCheck>
+              </>
+            )}
           </>
         ) : undefined
       }
@@ -1208,7 +1256,12 @@ function ThreadSessionView({
               }}
             />
             {git.available && (
-              <GitStrip git={git} onOpenChanges={showChanges} onAsk={text => session.send(text)} {...(onTidyMerged ? { onTidy: onTidyMerged } : {})} />
+              <GitStrip
+                git={git}
+                onOpenChanges={showChanges}
+                onAsk={text => session.send(text, [], { onFailed: sayUnsent })}
+                {...(onTidyMerged ? { onTidy: onTidyMerged } : {})}
+              />
             )}
             {files.items.length > 0 && (
               <ul aria-label="Attached files" className="mb-2 flex flex-wrap gap-1.5">
@@ -1407,34 +1460,6 @@ function useDelayed(on: boolean, ms: number): boolean {
     return () => clearTimeout(t);
   }, [on, ms]);
   return on && late;
-}
-
-/** The shape of a conversation while its history loads: a message, a few steps, a reply. */
-function HistorySkeleton() {
-  const bar = "rounded-md bg-cream-deep animate-pulse-soft";
-  return (
-    <div role="status" aria-label="Loading the conversation" className="flex flex-col">
-      <div className="flex justify-end">
-        <div className={cx(bar, "h-10 w-[46%] rounded-2xl rounded-br-md")} />
-      </div>
-      <div className="mt-6 flex flex-col gap-2.5 pl-1.5">
-        {[38, 52, 30].map(w => (
-          <div key={w} className="flex items-center gap-2">
-            <div className={cx(bar, "size-3.5")} />
-            <div className={bar} style={{ width: `${w}%`, height: 12 }} />
-          </div>
-        ))}
-      </div>
-      <div className="mt-5 flex gap-3">
-        <div className={cx(bar, "size-[22px] shrink-0 rounded-full")} />
-        <div className="flex flex-1 flex-col gap-2 pt-1">
-          <div className={bar} style={{ width: "88%", height: 12 }} />
-          <div className={bar} style={{ width: "72%", height: 12 }} />
-          <div className={bar} style={{ width: "40%", height: 12 }} />
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function EmptyThread({

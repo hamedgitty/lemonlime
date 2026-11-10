@@ -30,7 +30,21 @@ export const pasteGoesToComposer = (focus: FocusFacts) => !focus.editable && !fo
 
 const CONTROL =
   'button, a[href], summary, [role="button"], [role="link"], [role="menuitem"], [role="option"], [role="tab"], [role="checkbox"], [role="radio"], [role="switch"], [role="slider"], [role="combobox"], [role="treeitem"]';
-const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]:not([data-composer] *)';
+/** What floats over the page: dialogs (popovers are dialogs too) and menus. */
+const FLOATING = '[role="dialog"], [role="alertdialog"], [role="menu"]';
+/** Those, and any list being picked from, other than the message box's own suggestions. */
+const OVERLAY = `${FLOATING}, [role="listbox"]:not([data-composer] *)`;
+
+const showing = (doc: Pick<Document, "querySelectorAll">, selector: string) =>
+  [...doc.querySelectorAll<HTMLElement>(selector)].some(o => o.getClientRects().length > 0);
+
+/**
+ * Whether a dialog or menu is showing over the page. Whatever opened has the person's
+ * attention, so passing hints (a hover card) stay out of its way.
+ */
+export function floatingOpen(doc: Pick<Document, "querySelectorAll"> = document): boolean {
+  return showing(doc, FLOATING);
+}
 
 /** The facts above, read from the page. */
 export function focusFacts(doc: Document = document): FocusFacts {
@@ -39,6 +53,6 @@ export function focusFacts(doc: Document = document): FocusFacts {
     editable: Boolean(el && (el.isContentEditable || el.matches("input, textarea, select"))),
     control: Boolean(el?.closest(CONTROL)),
     terminal: Boolean(el?.closest(".xterm")),
-    overlay: [...doc.querySelectorAll<HTMLElement>(OVERLAY)].some(o => o.getClientRects().length > 0),
+    overlay: showing(doc, OVERLAY),
   };
 }

@@ -45,7 +45,8 @@ import {
 } from "lucide-react";
 import type { ThreadSummary } from "../lib/threads.ts";
 import { useMachines } from "../lib/machines.ts";
-import { AGENT_LABELS, STATUS_LABELS, relativeTime, repoName } from "../lib/format.ts";
+import { AGENT_LABELS, relativeTime, repoName } from "../lib/format.ts";
+import { statusLabel } from "../lib/threadAccess.ts";
 import { NAV_ITEMS, type NavItem, type SidebarChild, type UiPrefs } from "../lib/storage.ts";
 import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.ts";
 import { ContextMenu, Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip, Toggle } from "./primitives.tsx";
@@ -293,7 +294,8 @@ export function AppSidebar(p: AppSidebarProps) {
   const rowActions = (t: ThreadSummary) => {
     const here = t.mode === "local" && !t.machine;
     return {
-      ...(p.onRename ? { onRename: (title: string) => p.onRename!(t, title) } : {}),
+      // Someone else's thread that isn't shared can be read, not renamed.
+      ...(p.onRename && t.sharing !== "read-only" ? { onRename: (title: string) => p.onRename!(t, title) } : {}),
       ...(p.onMarkUnread && !p.prefs.archived[t.id] ? { onMarkUnread: (u: boolean) => p.onMarkUnread!(t, u) } : {}),
       ...(p.onFork ? { onFork: () => p.onFork!(t) } : {}),
       ...(p.onOpenFolder && here ? { onOpenFolder: () => p.onOpenFolder!(t) } : {}),
@@ -863,7 +865,8 @@ function ThreadRow({
                 </span>
                 <span className="sr-only">
                   {t.mode === "cloud" ? "Cloud" : machineName ? `On ${machineName}` : "On this computer"}, {AGENT_LABELS[t.agent.kind]},{" "}
-                  {STATUS_LABELS[t.status]}
+                  {statusLabel(t.status, t.sharing)}
+                  {t.sharing === "read-only" ? ", read only" : ""}
                   {glyph && glyph !== "working" && glyph !== "failed" ? `, ${GLYPH_LABELS[glyph]}` : ""}
                   {snoozedUntil ? `, snoozed until ${snoozeWhen(new Date(snoozedUntil), new Date())}` : ""}
                 </span>

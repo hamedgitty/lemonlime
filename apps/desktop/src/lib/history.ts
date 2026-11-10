@@ -132,6 +132,17 @@ export async function importAgentSessionsIntoStorage(
   return { ...result, threads };
 }
 
+/**
+ * What the runner has kept of one of LemonLime's own threads on this computer: its history
+ * file as text, one event per line (`parseHistory` in exportChats.ts reads it). Null when it
+ * has kept nothing for that thread here, and outside the desktop app. The thread's runner
+ * doesn't have to be running.
+ */
+export async function readThreadHistory(threadId: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>("read_thread_history", { threadId });
+}
+
 function emptyScan(sinceDays: number): HistoryScan {
   const none = { found: false, sessions: 0, inRange: 0, perDay: {}, folders: [], note: "Scanning needs the LemonLime desktop app." };
   return { scannedAt: new Date().toISOString(), sinceDays, agents: { "claude-code": none, codex: { ...none }, opencode: { ...none } }, sessions: [] };

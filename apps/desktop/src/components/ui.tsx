@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useId, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { safeActionLink } from "@lemonlime/protocol";
 import type { DisplayStatus } from "../lib/format.ts";
 import { STATUS_LABELS } from "../lib/format.ts";
 
@@ -191,15 +192,8 @@ const DOT: Record<DisplayStatus, string> = {
   offline: "border border-rind-muted bg-transparent",
 };
 
-export function StatusDot({ status, className }: { status: DisplayStatus; className?: string }) {
-  return (
-    <span
-      role="img"
-      aria-label={STATUS_LABELS[status]}
-      title={STATUS_LABELS[status]}
-      className={cx("inline-block size-2 shrink-0 rounded-full", DOT[status], className)}
-    />
-  );
+export function StatusDot({ status, className, label = STATUS_LABELS[status] }: { status: DisplayStatus; className?: string; label?: string }) {
+  return <span role="img" aria-label={label} title={label} className={cx("inline-block size-2 shrink-0 rounded-full", DOT[status], className)} />;
 }
 
 /** A lemon-and-lime mark drawn with CSS so it needs no image asset. */
@@ -241,11 +235,16 @@ export function SegmentedControl<T extends string>({
   );
 }
 
-/** Opens a link in the user's browser (desktop shell) or a new tab (plain browser). */
+/**
+ * Opens a web link in the user's browser (desktop shell) or a new tab (plain browser), and
+ * an email address in their mail app. Anything else is ignored.
+ */
 export async function openExternal(url: string): Promise<void> {
-  if (!/^https?:\/\//i.test(url)) return;
+  const web = /^https?:\/\//i.test(url);
+  if (!web && !(/^mailto:/i.test(url) && safeActionLink(url))) return;
   if (isTauri()) await openUrl(url);
-  else window.open(url, "_blank", "noopener,noreferrer");
+  else if (web) window.open(url, "_blank", "noopener,noreferrer");
+  else window.location.href = url;
 }
 
 export function Spinner({ className }: { className?: string }) {

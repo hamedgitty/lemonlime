@@ -1,12 +1,12 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { ArchiveRestore, ArrowDown, ArrowUp, ExternalLink, FolderGit2, Plus, Search, Trash2 } from "lucide-react";
-import type { ThreadEvent } from "@lemonlime/protocol";
+import { exportGapsLine, gatherThreads, toJson, toMarkdown } from "../../lib/exportChats.ts";
 import { AGENT_LABELS, relativeTime, repoName } from "../../lib/format.ts";
+import { readThreadHistory } from "../../lib/history.ts";
 import { inDesktopShell, inspectRepo, pickFolder } from "../../lib/native.ts";
 import { loadEvents } from "../../lib/storage.ts";
 import { openFolder, saveTextFile } from "../../lib/system.ts";
-import type { ThreadSummary } from "../../lib/threads.ts";
 import { Button, IconButton, Spinner, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
 import { ErrorText, Row, SavedNote, Section, Select, Tabs, useSaved } from "./parts.tsx";
@@ -184,32 +184,34 @@ function ExportTab({ ctx }: { ctx: SettingsCtx }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, markDone] = useSaved();
-  // Threads that went into the last file by title only, because their messages aren't kept on this computer right now.
-  const [bare, setBare] = useState(0);
+  // What the last file is missing, if anything: threads whose messages couldn't be had.
+  const [gaps, setGaps] = useState<string | null>(null);
   const since = period === "all" ? 0 : Date.now() - Number(period) * DAY;
   const picked = ctx.threads.filter(t => (where === "all" || t.mode === where) && Date.parse(t.updatedAt) >= since);
 
   const run = async () => {
     setBusy(true);
     setError(null);
-    setBare(0);
+    setGaps(null);
     try {
-      const out: { thread: ThreadSummary; events: ThreadEvent[] }[] = [];
-      for (const t of picked) {
-        if (t.mode === "local") out.push({ thread: t, events: loadEvents(t.id) });
-        else if (ctx.cloudApi) out.push({ thread: t, events: await cloudHistory(ctx, t.id) });
-      }
-      const stamp = new Date().toISOString().slice(0, 10);
-      const content = format === "json" ? JSON.stringify({ exportedAt: new Date().toISOString(), threads: out }, null, 2) : toMarkdown(out);
+      // Messages this app no longer holds are read from the runner's own file or the control plane.
+      const api = ctx.cloudApi;
+      const out = await gatherThreads(picked, {
+        cached: loadEvents,
+        kept: readThreadHistory,
+        stored: api ? (id, after) => api.history(id, after) : undefined,
+      });
+      const exportedAt = new Date().toISOString();
+      const content = format === "json" ? toJson(out, exportedAt) : toMarkdown(out, { exportedAt });
       if (
         await saveTextFile(
-          `lemonlime-chats-${stamp}.${format}`,
+          `lemonlime-chats-${exportedAt.slice(0, 10)}.${format}`,
           content,
           format === "json" ? { name: "JSON", extensions: ["json"] } : { name: "Markdown", extensions: ["md"] },
         )
       ) {
         markDone();
-        setBare(out.filter(o => o.thread.mode === "local" && o.events.length === 0).length);
+        setGaps(exportGapsLine(out));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -266,42 +268,12 @@ function ExportTab({ ctx }: { ctx: SettingsCtx }) {
         </Button>
         <SavedNote show={done} />
       </div>
-      {bare > 0 && (
+      {gaps && (
         <p role="status" className="text-[14px] text-pretty text-ink-soft">
-          {bare === 1
-            ? "1 thread had no messages saved on this computer, so only its title is in the file. Open it to load its messages, then export again."
-            : `${bare} threads had no messages saved on this computer, so only their titles are in the file. Open them to load their messages, then export again.`}
+          {gaps}
         </p>
       )}
       <ErrorText>{error}</ErrorText>
     </Section>
   );
-}
-
-async function cloudHistory(ctx: SettingsCtx, id: string): Promise<ThreadEvent[]> {
-  const events: ThreadEvent[] = [];
-  let after = 0;
-  for (let page = 0; page < 200; page++) {
-    const r = await ctx.cloudApi!.history(id, after);
-    events.push(...r.events);
-    if (!r.more || r.events.length === 0) break;
-    after = r.events[r.events.length - 1]!.seq;
-  }
-  return events;
-}
-
-function toMarkdown(threads: { thread: ThreadSummary; events: ThreadEvent[] }[]): string {
-  const parts: string[] = [`# LemonLime chats\n\nExported ${new Date().toLocaleString()}.\n`];
-  for (const { thread: t, events } of threads) {
-    parts.push(
-      `\n---\n\n## ${t.title}\n\n${AGENT_LABELS[t.agent.kind]}, ${repoName(t.repo)}, branch \`${t.branch}\`, ${t.mode === "cloud" ? "cloud" : "this computer"}.\n`,
-    );
-    for (const e of events) {
-      if (e.type === "user_message") parts.push(`\n**You** (${new Date(e.at).toLocaleString()})\n\n${e.text}\n`);
-      else if (e.type === "agent_message") parts.push(`\n**${AGENT_LABELS[t.agent.kind]}**\n\n${e.text}\n`);
-      else if (e.type === "tool_call") parts.push(`\n> Used ${e.name}\n`);
-      else if (e.type === "error") parts.push(`\n> Error: ${e.message}\n`);
-    }
-  }
-  return parts.join("");
 }

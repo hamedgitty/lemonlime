@@ -11,9 +11,8 @@
 //! hold spaces (so it can't become an ssh option), and every word of the remote command is
 //! single-quoted for the remote shell.
 
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::fs;
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -412,19 +411,19 @@ fn start_blocking(app: &AppHandle, s: SshStart) -> Result<RunnerInfo, String> {
     let state = app.state::<Runners>();
 
     for attempt in 1..=START_ATTEMPTS {
-        let log_start = log_len(&log_path);
+        let log_start = runner::log_len(&log_path);
         let info = {
             let mut runners = state.lock();
             if let Some(existing) = runners.get_mut(&s.thread_id) {
                 if existing.alive() {
                     let info = RunnerInfo { port: existing.port, secret: existing.secret.clone() };
                     drop(runners);
-                    runner::wait_until_ready(app, &s.thread_id, info.port, &log_path, Probe::Health { host: &s.host })?;
+                    runner::wait_until_ready(app, &s.thread_id, info.port, &log_path, Probe::Remote { host: &s.host })?;
                     return Ok(info);
                 }
                 runners.remove(&s.thread_id);
             }
-            let local_port = runner::free_port()?;
+            let local_port = runner::free_port(&runner::ports_given(&runners))?;
             let remote_port: u16 = rand::random::<u16>() % 30_000 + 20_000;
             let secret = runner::random_secret();
             let log = runner::open_log(&log_path)?;
@@ -446,27 +445,14 @@ fn start_blocking(app: &AppHandle, s: SshStart) -> Result<RunnerInfo, String> {
             runners.insert(s.thread_id.clone(), RunnerProcess { child, port: local_port, secret: secret.clone(), log_path: log_path.clone(), stdin });
             RunnerInfo { port: local_port, secret }
         };
-        match runner::wait_until_ready(app, &s.thread_id, info.port, &log_path, Probe::Health { host: &s.host }) {
+        match runner::wait_until_ready(app, &s.thread_id, info.port, &log_path, Probe::Remote { host: &s.host }) {
             Ok(()) => return Ok(info),
             // The port picked there was taken: pick another.
-            Err(_) if attempt < START_ATTEMPTS && log_since(&log_path, log_start).contains("EADDRINUSE") => continue,
+            Err(_) if attempt < START_ATTEMPTS && runner::log_since(&log_path, log_start.saturating_sub(4096)).contains("EADDRINUSE") => continue,
             Err(e) => return Err(e),
         }
     }
     Err(format!("Couldn't find a free port on {}.", s.host))
-}
-
-fn log_len(path: &Path) -> u64 {
-    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
-}
-
-/// What the log gained since `offset` (this attempt's output), at most 64 KB.
-fn log_since(path: &Path, offset: u64) -> String {
-    let Ok(mut f) = File::open(path) else { return String::new() };
-    let _ = f.seek(SeekFrom::Start(offset.saturating_sub(4096)));
-    let mut buf = Vec::new();
-    let _ = f.take(64 * 1024).read_to_end(&mut buf);
-    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// Stops a thread on another machine, then removes its worktree and history there (the

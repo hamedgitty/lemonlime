@@ -12,7 +12,10 @@ export function qrPath(text: string): { size: number; d: string } {
   return { size, d };
 }
 
-/** A QR code a phone camera can open. Only ever give it public addresses, never a secret. */
+/**
+ * A QR code a phone camera can open. It is drawn here from the text, which goes nowhere
+ * else, so it can hold the code that pairs a phone; show one of those only while it's asked for.
+ */
 export function QrCode({ text, label, px = 152 }: { text: string; label: string; px?: number }) {
   const { size, d } = useMemo(() => qrPath(text), [text]);
   const quiet = 2;

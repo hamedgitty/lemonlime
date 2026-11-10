@@ -49,6 +49,8 @@ export function forkNote(items: readonly TimelineItem[], from: ForkFrom, source:
   const turns: string[] = [];
   for (const it of upTo) {
     if (it.kind === "user" && !it.pending && it.text.trim()) turns.push(`**User:**\n\n${cut(it.text, MESSAGE_CHARS)}`);
+    // What a subagent handed back is context worth carrying over, but it isn't the user speaking.
+    else if (it.kind === "auto" && it.from === "subagent" && it.text.trim()) turns.push(`**Subagent report:**\n\n${cut(it.text, MESSAGE_CHARS)}`);
     else if (it.kind === "agent" && it.text.trim()) turns.push(`**Agent:**\n\n${cut(it.text, MESSAGE_CHARS)}`);
   }
   const files = new Map<string, string>();

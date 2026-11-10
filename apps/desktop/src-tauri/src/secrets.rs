@@ -1,11 +1,12 @@
-//! Secrets the app keeps for you (the control plane access token), stored in the
-//! operating system's keychain instead of the web view's local storage.
+//! Secrets the app keeps for you (the control plane access token and the key phones are
+//! paired with), stored in the operating system's keychain instead of the web view's local
+//! storage.
 
 use keyring::Entry;
 
 const SERVICE: &str = "org.lemonlime.desktop";
 /// Only these names may be stored, so the web view can't use the keychain for anything else.
-const ALLOWED: [&str; 1] = ["control-plane-token"];
+const ALLOWED: [&str; 2] = ["control-plane-token", "phone-pairing-key"];
 
 fn entry(name: &str) -> Result<Entry, String> {
     if !ALLOWED.contains(&name) {
@@ -53,6 +54,7 @@ mod tests {
     #[test]
     fn only_stores_the_names_it_knows() {
         assert!(entry("anything-else").is_err());
+        assert!(entry("phone-pairing-key-2").is_err());
         assert!(read("../control-plane-token").is_err());
         assert!(write("", "x").is_err());
     }

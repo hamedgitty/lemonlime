@@ -1,7 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { AlarmClock, Check, CheckCheck, CircleDashed, Pause, Pencil, Play, Plus, RotateCw, SkipForward, Trash2, Webhook, X } from "lucide-react";
 import { nextRun, parseSchedule, WEBHOOK_BODY_MAX_BYTES } from "@lemonlime/protocol";
-import { automationBody, automationForm, localZone, newAutomationForm, type AutomationForm } from "../lib/automations.ts";
+import {
+  SECRET_CHOICE_IGNORED,
+  automationBody,
+  automationForm,
+  canManageAutomation,
+  localZone,
+  newAutomationForm,
+  pausedLine,
+  pickSecret,
+  secretChoiceIgnored,
+  secretChoices,
+  type AutomationForm,
+} from "../lib/automations.ts";
 import type { AutomationInfo, AutomationRun, CloudApi } from "../lib/cloud.ts";
 import { AGENT_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { CopyButton } from "../lib/markdown.tsx";
@@ -223,15 +235,18 @@ export function AutomationsView({
               initial={editing.form}
               isNew={!editing.id}
               onCancel={() => setEditing(null)}
+              loadSecrets={() => cloudApi.listSecrets().then(l => l.map(s => s.name))}
               onSave={async f => {
-                const body = automationBody(f);
+                const body = automationBody(f, editing.id ? list?.find(x => x.id === editing.id) : undefined);
+                let saved: AutomationInfo;
                 if (editing.id) {
-                  const u = await cloudApi.updateAutomation(editing.id, body);
-                  setList(l => l?.map(x => (x.id === editing.id ? { ...x, ...u } : x)) ?? null);
+                  saved = await cloudApi.updateAutomation(editing.id, body);
+                  setList(l => l?.map(x => (x.id === editing.id ? { ...x, ...saved } : x)) ?? null);
                 } else {
-                  const a = await cloudApi.createAutomation(body);
-                  setList(l => [...(l ?? []), { ...a, recentRuns: [] }]);
+                  saved = await cloudApi.createAutomation(body);
+                  setList(l => [...(l ?? []), { ...saved, recentRuns: [] }]);
                 }
+                setError(secretChoiceIgnored(body, saved) ? SECRET_CHOICE_IGNORED : null);
                 setEditing(null);
                 setTab("overview");
               }}
@@ -429,7 +444,7 @@ function AutomationCard({
   const [allRuns, setAllRuns] = useState<AutomationRun[] | "loading" | null>(null);
   const runs = Array.isArray(allRuns) ? allRuns : (a.recentRuns ?? []).slice(0, 5);
   // Someone else's automation, seen by a member who isn't an owner: they can look, not change.
-  const canManage = a.canManage !== false;
+  const canManage = canManageAutomation(a);
   return (
     <li className={cx("rounded-xl border bg-paper p-4", a.enabled ? "border-line" : "border-line-strong")}>
       <div className="flex items-start gap-2">
@@ -443,7 +458,7 @@ function AutomationCard({
           {a.enabled ? (
             a.schedule && <p className="mt-1 text-[13px] text-ink">Next run {when(a.nextRunAt, a.timezone)}</p>
           ) : (
-            <p className="mt-1 text-[13px] text-ink">{a.pausedReason ? `Paused automatically. ${a.pausedReason}` : canManage ? "Paused by you." : "Paused."}</p>
+            <p className="mt-1 text-[13px] text-ink">{pausedLine(a)}</p>
           )}
           {!canManage && <p className="mt-1 text-[13px] text-ink-soft">Only the person who set this up or a workspace owner can change it.</p>}
         </div>
@@ -739,7 +754,20 @@ export function describeCron(cron: string): string {
   return cron;
 }
 
-function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: boolean; onCancel: () => void; onSave: (f: Form) => Promise<void> }) {
+function Editor({
+  initial,
+  isNew,
+  onCancel,
+  onSave,
+  loadSecrets,
+}: {
+  initial: Form;
+  isNew: boolean;
+  onCancel: () => void;
+  onSave: (f: Form) => Promise<void>;
+  /** The names of the workspace's secrets, read when the form is asked to list them. */
+  loadSecrets: () => Promise<string[]>;
+}) {
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -890,6 +918,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           A shell command run in the sandbox before the agent starts. If it prints nothing or fails, the run is skipped; what it prints is given to the agent.
         </span>
       </label>
+      <SecretsField chosen={form.secretNames} onChange={secretNames => set({ secretNames })} loadSecrets={loadSecrets} />
       {error && (
         <p role="alert" className="text-[14px] text-danger">
           {error}
@@ -904,5 +933,89 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
         </Button>
       </div>
     </form>
+  );
+}
+
+/** Which workspace secrets an automation's runs get: all of them, or only the ones ticked. */
+function SecretsField({
+  chosen,
+  onChange,
+  loadSecrets,
+}: {
+  chosen: string[] | null;
+  onChange: (names: string[] | null) => void;
+  loadSecrets: () => Promise<string[]>;
+}) {
+  const [known, setKnown] = useState<string[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const some = chosen !== null;
+  const load = useRef(loadSecrets);
+  load.current = loadSecrets;
+  // The names are only read once the list is asked for.
+  useEffect(() => {
+    if (!some || known !== null) return;
+    let gone = false;
+    setError(null);
+    load.current().then(
+      names => !gone && setKnown(names),
+      e => !gone && setError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      gone = true;
+    };
+  }, [some, known]);
+  const choices = secretChoices(known ?? [], chosen);
+  return (
+    <div>
+      <span className="mb-1 block text-[14px] font-medium">Secrets</span>
+      <SegmentedControl
+        label="Secrets its runs get"
+        value={some ? "some" : "all"}
+        onChange={v => onChange(v === "all" ? null : (chosen ?? []))}
+        options={[
+          { value: "all", label: "All secrets" },
+          { value: "some", label: "Only some" },
+        ]}
+      />
+      {!some && <p className="mt-1 text-[13px] text-ink-faint">Each run gets every secret saved for this workspace.</p>}
+      {some && (
+        <>
+          {choices.length > 0 && (
+            <ul
+              aria-label="Secrets its runs get"
+              className="scroll-thin mt-2 flex max-h-[200px] flex-col overflow-y-auto rounded-lg border border-line bg-paper"
+            >
+              {choices.map(c => (
+                <li key={c.name} className="border-b border-line last:border-b-0">
+                  <label className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-cream">
+                    <input
+                      type="checkbox"
+                      checked={chosen.includes(c.name)}
+                      onChange={e => onChange(pickSecret(chosen, c.name, e.target.checked))}
+                      className="size-4 accent-[var(--color-leaf)]"
+                    />
+                    <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{c.name}</span>
+                    {c.gone && known !== null && <span className="shrink-0 text-[13px] text-danger">No longer in this workspace</span>}
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+          {error ? (
+            <p role="alert" className="mt-1 text-[13px] text-danger">
+              Couldn't list this workspace's secrets. {error}
+            </p>
+          ) : known === null ? (
+            <p className="mt-1 text-[13px] text-ink-faint">Loading…</p>
+          ) : known.length === 0 ? (
+            <p className="mt-1 text-[13px] text-ink-faint">This workspace has no secrets yet. Add them in Settings.</p>
+          ) : (
+            <p className="mt-1 text-[13px] text-ink-faint">
+              {chosen.length === 0 ? "Nothing ticked: its runs get no workspace secrets." : "Its runs get only the secrets ticked."}
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }

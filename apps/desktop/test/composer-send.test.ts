@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { enterAction, sendBlocker, sendKeyLabel, sendRoute } from "../src/lib/composerSend.ts";
+import { CloudApi, CloudError } from "../src/lib/cloud.ts";
+import { enterAction, sendBlocker, sendKeyLabel, sendRoute, undelivered, unsent } from "../src/lib/composerSend.ts";
 import { attachmentLabel, MESSAGE_MAX_CHARS, PASTE_AS_FILE_BYTES, pasteBecomesFile, pastedTextName } from "../src/lib/pastedText.ts";
 import { pasteGoesToComposer, typingGoesToComposer } from "../src/lib/typeAnywhere.ts";
 import { encodePlan, fitWithin, IMAGE_MAX_BYTES, needsShrinking, renameFor } from "../src/lib/imageShrink.ts";
@@ -17,6 +18,48 @@ describe("sending from the composer", () => {
     expect(sendRoute("hi", false, "cloud")).toBe("wake");
     expect(sendRoute("hi", false, "local")).toBeNull();
     expect(sendRoute("   ", true, "local")).toBeNull();
+  });
+});
+
+describe("a message the control plane wouldn't take", () => {
+  const tooMany = "Too many messages are waiting for this thread. Let the agent catch up, then send it again.";
+  const refuse = (status: number, body: unknown) =>
+    new CloudApi({ url: "http://cp.test", token: "t" }, async () => new Response(JSON.stringify(body), { status }));
+
+  it("comes back from a paused thread with the control plane's reason when too many are waiting", async () => {
+    const err = await refuse(429, { error: "too_many_requests", message: tooMany })
+      .sendWhilePaused("thread-0001", { clientMsgId: "m1", text: "Carry on" })
+      .catch(e => e);
+    expect(err).toBeInstanceOf(CloudError);
+    expect(err.status).toBe(429);
+    const back = undelivered("Carry on", "", err);
+    expect(back.box).toBe("Carry on");
+    expect(back.notice).toBe(`Couldn't send your message, so it's back in the message box. ${tooMany}`);
+    expect(back.denial).toBeNull();
+  });
+
+  it("goes back in the box ahead of anything typed since", () => {
+    expect(undelivered("Carry on", "and then tidy up", new CloudError(tooMany, 429)).box).toBe("Carry on\n\nand then tidy up");
+    expect(undelivered("Carry on", "  \n", new CloudError(tooMany, 429)).box).toBe("Carry on");
+  });
+
+  it("shows the control plane's own way forward when its usage policy said no", async () => {
+    const err = await refuse(402, { error: "policy_denied", reason: "Not allowed right now.", actionUrl: "https://cp.test/help", actionLabel: "Details" })
+      .sendWhilePaused("thread-0001", { clientMsgId: "m1", text: "Carry on" })
+      .catch(e => e);
+    const back = undelivered("Carry on", "", err);
+    expect(back.box).toBe("Carry on");
+    expect(back.notice).toBeNull();
+    expect(back.denial).toMatchObject({ reason: "Not allowed right now.", actionLabel: "Details" });
+  });
+
+  it("says why when the control plane couldn't be reached at all", () => {
+    expect(undelivered("Carry on", "", new TypeError("Failed to fetch")).notice).toMatch(/back in the message box\. Failed to fetch$/);
+  });
+
+  it("only gives the reason for something sent at the press of a button", () => {
+    expect(unsent(new CloudError(tooMany, 429))).toEqual({ denial: null, notice: `Couldn't send that. ${tooMany}` });
+    expect(unsent(new CloudError("No", 402, { error: "policy_denied", reason: "Not allowed right now." })).notice).toBeNull();
   });
 });
 

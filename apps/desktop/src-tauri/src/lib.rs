@@ -168,6 +168,7 @@ pub fn run() {
             host_terminal::host_terminal_close,
             history::scan_agent_history,
             history::import_agent_sessions,
+            history::read_thread_history,
             plugins::list_plugins,
             plugins::read_plugin,
             plugins::install_plugin_from_git,

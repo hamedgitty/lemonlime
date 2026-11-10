@@ -36,7 +36,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { elapsedMs, formatDuration, type SubagentInfo, type ThreadStatus } from "@lemonlime/protocol";
-import { foldFinishedTurns, type TimelineItem } from "../lib/timeline.ts";
+import { foldFinishedTurns, startsTurn, type TimelineItem } from "../lib/timeline.ts";
 import { continuableRestart } from "../lib/recovery.ts";
 import { collapseLongText, commandOutput, liveTurnStart, terminalTail, tocEntries, TOC_MIN_MESSAGES, unreadIndex } from "../lib/timelineView.ts";
 import {
@@ -94,6 +94,8 @@ interface RowActions {
   subagents: ReadonlyMap<string, SubagentInfo>;
   /** Items from this seq on belong to the turn that is running now (null when none is). */
   liveSeq: number | null;
+  /** The person can only read: nothing here waits for them. */
+  reading: boolean;
 }
 
 const NO_SUBAGENTS: ReadonlyMap<string, SubagentInfo> = new Map();
@@ -115,8 +117,11 @@ export function Timeline({
   loadImage,
   subagents = NO_SUBAGENTS,
   threadId,
+  reading = false,
 }: {
   items: TimelineItem[];
+  /** Someone else directs this thread: plans and questions show as records, with nothing to press. */
+  reading?: boolean;
   /** The thread shown, so its reading place is kept for when it's opened again. */
   threadId?: string | undefined;
   /** The last seq the user had seen when they opened the thread: a "New" divider goes after it. */
@@ -150,7 +155,7 @@ export function Timeline({
   const divider = useMemo(() => unreadIndex(shown, unreadAfterSeq), [shown, unreadAfterSeq]);
   const toc = useMemo(() => tocEntries(items), [items]);
   const turnStart = working ? liveTurnStart(items) : null;
-  const liveSeq = useMemo(() => (working ? (items.findLast(i => i.kind === "user" && !i.pending)?.seq ?? 0) : null), [items, working]);
+  const liveSeq = useMemo(() => (working ? (items.findLast(i => startsTurn(i) && !("pending" in i && i.pending))?.seq ?? 0) : null), [items, working]);
   const restartKey = useMemo(() => (onContinueAfterRestart ? continuableRestart(items) : null), [items, onContinueAfterRestart]);
   const actions = useMemo<RowActions>(
     () => ({
@@ -163,8 +168,9 @@ export function Timeline({
       subagents,
       liveSeq,
       restart: restartKey && onContinueAfterRestart ? { key: restartKey, onContinue: onContinueAfterRestart } : undefined,
+      reading,
     }),
-    [limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq, restartKey, onContinueAfterRestart],
+    [limit, lastSwitch, onRewind, onImplementPlan, onEdit, onFork, subagents, liveSeq, restartKey, onContinueAfterRestart, reading],
   );
 
   // The scrollbar shows while the person scrolls (not while new output follows itself).
@@ -506,6 +512,8 @@ const Row = memo(function Row({ row, actions }: { row: ShownRow; actions: RowAct
             : {})}
         />
       );
+    case "auto":
+      return row.from === "subagent" ? <SubagentReport text={row.text} at={row.at} /> : <RunnerLine text={row.text} at={row.at} />;
     case "agent":
       return (
         <AgentMessage text={row.text} streaming={row.streaming} messageKey={row.key} onFork={actions.onFork ? () => actions.onFork!(row.key) : undefined} />
@@ -536,9 +544,9 @@ const Row = memo(function Row({ row, actions }: { row: ShownRow; actions: RowAct
     case "approval":
       return <ApprovalRecord item={row} />;
     case "plan":
-      return <PlanCard plan={row.plan} open={row.open} onImplement={actions.onImplementPlan} />;
+      return <PlanCard plan={row.plan} open={row.open && !actions.reading} onImplement={actions.onImplementPlan} />;
     case "question":
-      return <QuestionRecord questions={row.questions} answers={row.answers} state={row.state} by={row.by} />;
+      return <QuestionRecord questions={row.questions} answers={row.answers} state={row.state} by={row.by} canAnswer={!actions.reading} />;
     case "options":
       return <OptionsRow options={row.options} />;
     case "limit":
@@ -1054,6 +1062,62 @@ function UserMessage({
           <span className="ml-1">{pending ? "Sending…" : clockTime(at)}</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** What a subagent handed back to the agent: labelled, quieter than a person's message, a long one cut short until asked for. */
+function SubagentReport({ text, at }: { text: string; at: string }) {
+  const cut = useMemo(() => collapseLongText(text, { tailLines: 0, tailChars: 0 }), [text]);
+  const [all, setAll] = useState(false);
+  const bodyId = useId();
+  return (
+    <div className="rounded-xl border border-line bg-cream-deep/60 px-4 py-2.5">
+      <p className="flex items-center gap-2 text-[12px] font-medium text-ink-soft">
+        <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-ink-faint" />
+        Subagent report
+        <span className="font-normal text-ink-faint tabular-nums">{clockTime(at)}</span>
+      </p>
+      <div id={bodyId} className="mt-1.5 text-ink-soft">
+        <StreamingMarkdown text={cut && !all ? cut.head : text} className="text-[13px]" />
+      </div>
+      {cut && (
+        <button
+          type="button"
+          aria-expanded={all}
+          aria-controls={bodyId}
+          onClick={() => setAll(a => !a)}
+          className="mt-1.5 flex w-full items-center gap-2.5 text-[12px] font-medium text-ink-soft hover:text-ink"
+        >
+          <span aria-hidden="true" className="h-px flex-1 bg-line" />
+          {all ? (
+            "Show less"
+          ) : (
+            <span>
+              Show all
+              <span className="font-normal tabular-nums">
+                {cut.hiddenLines > 0 ? ` (${cut.hiddenLines.toLocaleString()} more lines)` : ` (${cut.hiddenChars.toLocaleString()} more characters)`}
+              </span>
+            </span>
+          )}
+          <span aria-hidden="true" className="h-px flex-1 bg-line" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Something the runner sent to carry the thread on by itself: a small line, not a message from anyone. */
+function RunnerLine({ text, at }: { text: string; at: string }) {
+  const line = text.replace(/\s+/g, " ").trim();
+  return (
+    <div className="flex items-center gap-3 py-0.5 text-xs text-ink-faint" role="note">
+      <span className="h-px flex-1 bg-line" />
+      <span className="max-w-[70%] min-w-0 truncate" title={text}>
+        Sent by LemonLime at <span className="tabular-nums">{clockTime(at)}</span>
+        {line ? `: ${line}` : ""}
+      </span>
+      <span className="h-px flex-1 bg-line" />
     </div>
   );
 }

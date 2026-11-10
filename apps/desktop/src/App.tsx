@@ -1816,8 +1816,12 @@ export function App() {
     refreshAgents,
     phone,
     onSignOut: () => {
-      // The dashboard stops listing this computer, and any phone on it is cut off.
+      // The dashboard stops listing this computer, and any phone on it is cut off and has to
+      // be paired again: whoever signs in next starts with phone access off and a key no
+      // phone holds.
       void phone.turnOff();
+      void phone.unpairAll();
+      onPrefs({ phoneAccess: false });
       void cloudApi?.forgetComputer(computerId()).catch(() => undefined);
       saveAll({ ...settings, accessToken: "", cloudWorkspaceId: "" });
       setSignedIn(false);

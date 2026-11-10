@@ -58,6 +58,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
   g("files", "Open folders in", "editor vs code cursor zed file manager open in editor"),
   g("phone", "Use my local threads from my phone", "phone mobile remote access qr"),
   g("phone", "This computer's name", "computer name phone dashboard"),
+  g("phone", "Pair a phone", "pair phone qr code scan link key"),
+  g("phone", "Unpair all phones", "unpair phone remove revoke new code"),
   // Account
   on("account", "Sign in with your browser", "sign in login cloud", "account"),
   on("account", "Dashboard address", "control plane url server self-host", "account"),

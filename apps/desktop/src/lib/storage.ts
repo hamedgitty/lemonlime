@@ -195,8 +195,10 @@ export function loadMessageTexts(threadId: string): { seq: number; from: "you" |
   const raw = read(eventsKey(threadId));
   if (!Array.isArray(raw)) return [];
   const out: { seq: number; from: "you" | "agent"; text: string }[] = [];
-  for (const e of raw as { type?: unknown; text?: unknown; seq?: unknown; partial?: unknown }[]) {
+  for (const e of raw as { type?: unknown; text?: unknown; seq?: unknown; partial?: unknown; from?: unknown }[]) {
     if (!e || typeof e.text !== "string" || typeof e.seq !== "number" || !e.text.trim()) continue;
+    // A message a subagent or the runner sent is neither yours nor the agent's reply.
+    if (e.type === "user_message" && e.from) continue;
     if (e.type === "user_message") out.push({ seq: e.seq, from: "you", text: e.text });
     else if (e.type === "agent_message" && e.partial !== true) out.push({ seq: e.seq, from: "agent", text: e.text });
   }

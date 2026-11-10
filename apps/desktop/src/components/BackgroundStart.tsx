@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { ThreadStatus } from "@lemonlime/protocol";
 import { useThreadSession, type SessionTarget } from "../lib/useThreadSession.ts";
+import { backgroundStartOutcome, firstMessageArrived, shouldLookAgain } from "../lib/backgroundStart.ts";
 
 /** How long a thread made without being opened gets to take its first message. */
 const GIVE_UP_MS = 10 * 60_000;
@@ -39,13 +40,12 @@ export function BackgroundStart({
   done.current = onDone;
 
   // The runner has the message once it shows in the thread's history.
-  const arrived = session.events.some(e => e.type === "user_message");
+  const arrived = firstMessageArrived(session.events);
   const { state, error, restart } = session;
   const cloudStatus = target.mode === "cloud" ? target.thread.status : null;
   useEffect(() => {
-    if (arrived) done.current(id);
-    else if (state === "error" || (state === "offline" && error)) done.current(id, error ?? "The thread didn't start.");
-    else if (state === "offline" && (cloudStatus === "failed" || cloudStatus === "stopped")) done.current(id, "Its sandbox didn't start.");
+    const outcome = backgroundStartOutcome({ arrived, state, error, cloudStatus });
+    if (outcome) done.current(id, outcome.problem);
   }, [arrived, state, error, cloudStatus, id]);
 
   useEffect(() => {
@@ -60,7 +60,7 @@ export function BackgroundStart({
 
   // A cloud sandbox that is still starting has no address yet: look again shortly.
   useEffect(() => {
-    if (state !== "offline" || cloudStatus !== "provisioning") return;
+    if (!shouldLookAgain({ state, cloudStatus })) return;
     const t = setTimeout(() => {
       onCloudRefresh();
       restart();

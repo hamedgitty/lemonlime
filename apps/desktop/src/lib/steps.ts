@@ -407,7 +407,7 @@ export type RowGap = "none" | "step" | "block" | "turn";
 /** How far a row sits below the one before it: steps tight, messages with more air, a new turn most. */
 export function rowGap(prev: string | undefined, cur: string): RowGap {
   if (prev === undefined) return "none";
-  if (cur === "user") return "turn";
+  if (cur === "user" || cur === "auto") return "turn";
   if (STEP_ROWS.has(prev) && STEP_ROWS.has(cur)) return "step";
   // The agent's reply already has its row of buttons under it, which gives it room.
   if (prev === "agent") return "step";

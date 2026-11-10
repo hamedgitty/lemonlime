@@ -3,18 +3,23 @@
 //! reading (`lemonlime-runner history scan|import`, which never changes the originals);
 //! these commands run it and hand back its JSON, whose shape is `HistoryScan` and
 //! `HistoryImportResult` in packages/protocol/src/history.ts.
+//!
+//! Also here: what the runner has kept of one of this app's own threads on this computer,
+//! read straight from its file so a thread can be exported without starting its runner.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use serde_json::Value;
 
 use crate::paths;
-use crate::runner::runner_command;
+use crate::runner::{runner_command, valid_thread_id};
 
 /// Most conversations imported in one call (the runner has the same limit).
 const MAX_IDS: usize = 500;
 const AGENTS: [&str; 3] = ["claude-code", "codex", "opencode"];
+/// A thread's history bigger than this is not read into memory in one piece.
+const MAX_THREAD_HISTORY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Summarises the saved conversations: per agent, how many, activity per day for the last
 /// year and the folders used; plus the conversations updated in the last `since_days`.
@@ -51,6 +56,58 @@ pub async fn import_agent_sessions(ids: Vec<String>, runner_path: Option<String>
     tauri::async_runtime::spawn_blocking(move || run_history(runner_path.as_deref(), &args))
         .await
         .map_err(|e| format!("Could not import the conversations: {e}"))?
+}
+
+/// The history the runner keeps for a thread on this computer, as it is on disk: one event
+/// per line. `None` when the runner has kept nothing for that thread here.
+#[tauri::command]
+pub async fn read_thread_history(thread_id: String) -> Result<Option<String>, String> {
+    if !valid_thread_id(&thread_id) {
+        return Err("That thread id is not valid.".into());
+    }
+    let Some(home) = runner_home() else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || read_capped(&thread_history_file(&home, &thread_id), MAX_THREAD_HISTORY_BYTES))
+        .await
+        .map_err(|e| format!("Could not read the thread's history: {e}"))?
+}
+
+/// Where the runner keeps its threads: `$LEMONLIME_HOME`, or `.lemonlime` in the user's home
+/// folder. The runner reads a relative `$LEMONLIME_HOME` against the folder it was started
+/// in, which isn't known here, so only a full path counts.
+fn runner_home() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("LEMONLIME_HOME").filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(home)).filter(|p| p.is_absolute());
+    }
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+    home.filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join(".lemonlime"))
+}
+
+fn thread_history_file(home: &Path, thread_id: &str) -> PathBuf {
+    home.join("threads").join(thread_id).join("events.jsonl")
+}
+
+/// A file's text, `None` when there is no such file, and an error when it is bigger than `max`.
+/// A character cut in half by a write that never finished is replaced rather than refused:
+/// the reader skips that line anyway.
+fn read_capped(file: &Path, max: u64) -> Result<Option<String>, String> {
+    let meta = match std::fs::metadata(file) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Could not read the thread's history: {e}")),
+    };
+    if !meta.is_file() {
+        return Ok(None);
+    }
+    if meta.len() > max {
+        return Err("This thread's history is too big to read in one piece.".into());
+    }
+    let bytes = std::fs::read(file).map_err(|e| format!("Could not read the thread's history: {e}"))?;
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 fn run_history(runner_path: Option<&str>, args: &[String]) -> Result<Value, String> {
@@ -132,6 +189,28 @@ mod tests {
         assert!(!valid_history_id("codex:-rf"));
         assert!(!valid_history_id("codex"));
         assert!(!valid_history_id(&format!("codex:{}", "a".repeat(129))));
+    }
+
+    #[test]
+    fn finds_a_threads_history_under_the_runners_home() {
+        let file = thread_history_file(Path::new("/home/sam/.lemonlime"), "abc123");
+        assert_eq!(file, Path::new("/home/sam/.lemonlime").join("threads").join("abc123").join("events.jsonl"));
+    }
+
+    #[test]
+    fn reads_a_kept_history_and_says_when_there_is_none() {
+        let dir = std::env::temp_dir().join(format!("lemonlime-thread-history-test-{}", std::process::id()));
+        let file = thread_history_file(&dir, "abc123");
+        assert_eq!(read_capped(&file, 1024).unwrap(), None);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        // A folder where the file should be is nothing kept, not an error.
+        assert_eq!(read_capped(file.parent().unwrap(), 1024).unwrap(), None);
+        // The last line was cut off in the middle of a character.
+        std::fs::write(&file, b"{\"seq\":1}\n{\"seq\":2,\"text\":\"caf\xc3").unwrap();
+        let text = read_capped(&file, 1024).unwrap().unwrap();
+        assert!(text.starts_with("{\"seq\":1}\n{\"seq\":2"));
+        assert_eq!(read_capped(&file, 8).unwrap_err(), "This thread's history is too big to read in one piece.");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

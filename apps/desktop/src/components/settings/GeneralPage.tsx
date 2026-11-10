@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
 import { useSettingsTab } from "../../lib/settingsNav.ts";
-import { inDesktopShell } from "../../lib/native.ts";
+import { pairingLink } from "@lemonlime/protocol";
+import { confirmAction, inDesktopShell } from "../../lib/native.ts";
 import { listEditors, notificationPermission, notify, type EditorInfo } from "../../lib/system.ts";
 import { allowMicrophone, listMicrophones, micOptions } from "../../lib/dictation.ts";
 import type { UiPrefs } from "../../lib/storage.ts";
-import { Button, TextInput } from "../ui.tsx";
+import { Button, TextInput, cx } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
-import { ErrorText, Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, useSaved } from "./parts.tsx";
+import { ErrorText, Pill, Row, SavedNote, Section, Select, Tabs, ToggleRow, code, useSaved } from "./parts.tsx";
 import { normalizeBaseUrl } from "../../lib/cloud.ts";
 import { computerPlatform, defaultComputerName, type PhoneLinkState } from "../../lib/phoneBridge.ts";
+import type { PhoneAccess } from "../../lib/usePhoneLink.ts";
 import { QrCode } from "../QrCode.tsx";
 import { IS_MAC } from "../../lib/shortcuts.ts";
 import { composing } from "../../lib/ime.ts";
@@ -249,7 +251,6 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
   const { prefs, onPrefs, cloudApi, phone, settings } = ctx;
   const platform = computerPlatform();
   const [name, setName] = useState(prefs.computerName);
-  const [copied, markCopied] = useSaved();
   const signedIn = cloudApi !== null;
   const on = prefs.phoneAccess && signedIn;
   const state = phone?.state ?? "off";
@@ -270,7 +271,7 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
           label="Use my local threads from my phone"
           description={
             signedIn
-              ? "While it's on, this computer keeps a connection open to your dashboard, and only you can open its threads there. Turning it off cuts your phone off at once."
+              ? "While it's on, this computer keeps a connection open to your dashboard. Only a phone you have paired with it can open its threads, and the dashboard's server can't read what passes between them. Turning it off cuts your phone off at once."
               : "Sign in to your dashboard under Account first. Your phone reaches this computer through it."
           }
           checked={on}
@@ -299,29 +300,7 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
           </p>
         )}
         {on && state === "error" && phone?.detail && <ErrorText>{phone.detail}</ErrorText>}
-        {on && dashboard && (
-          <div className="flex items-start gap-5 py-3">
-            {/* Just the dashboard's address: signing in on the phone is what lets it in. */}
-            <QrCode text={dashboard} label={`QR code for ${dashboard}`} />
-            <div className="min-w-0 flex-1">
-              <p className="text-[14px] font-medium text-ink">On your phone</p>
-              <p className="mt-1 text-[14px] text-ink-soft">
-                Point your phone's camera at the code, or open <span className="break-all text-ink">{dashboard}</span> in its browser, then sign in with the
-                same account. This computer's threads are listed on the home page.
-              </p>
-              <div className="mt-3 flex items-center gap-2">
-                <Button
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(dashboard).then(markCopied, () => undefined);
-                  }}
-                >
-                  Copy link
-                </Button>
-                <SavedNote show={copied} text="Copied" />
-              </div>
-            </div>
-          </div>
-        )}
+        {on && dashboard && <PairPhone dashboard={dashboard} phone={phone} />}
       </Section>
       {on && (
         <Section title="What your phone can do">
@@ -331,6 +310,69 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
           </p>
         </Section>
       )}
+    </>
+  );
+}
+
+/**
+ * Pairing a phone with this computer. The code holds the key that seals everything between
+ * the two, so it is only on screen while the user asks to see it: this component's state is
+ * gone, and the code with it, as soon as Settings closes or another tab is opened.
+ */
+function PairPhone({ dashboard, phone }: { dashboard: string; phone: PhoneAccess | undefined }) {
+  const [shown, setShown] = useState(false);
+  const [copied, markCopied] = useSaved();
+  const [unpaired, markUnpaired] = useSaved();
+  const pairing = phone?.pairing ?? null;
+  const link = pairing ? pairingLink(dashboard, pairing) : null;
+  const unpairAll = async () => {
+    if (!(await confirmAction("Unpair all phones? Every phone paired with this computer stops working until you pair it again."))) return;
+    setShown(false);
+    await phone?.unpairAll();
+    markUnpaired();
+  };
+  return (
+    <>
+      <Row label="Pair a phone" description="A phone is paired once, by scanning a code from this screen. Until then it can't open this computer's threads.">
+        <Button disabled={!link} aria-expanded={shown} onClick={() => setShown(s => !s)}>
+          {shown ? "Hide the code" : "Pair a phone"}
+        </Button>
+      </Row>
+      {shown && link && (
+        <div className="flex flex-wrap items-start gap-5">
+          <QrCode text={link} label="Pairing code for your phone" px={196} />
+          <div className="min-w-0 flex-1 basis-[240px]">
+            <p className="text-[14px] text-ink">
+              Scan this with your phone's camera. It pairs the phone with this computer; the code never leaves your devices.
+            </p>
+            <p className="mt-2 text-[14px] text-ink-soft">
+              Treat it like a key. Anyone who has it and can sign in to your dashboard can use this computer's threads.
+            </p>
+            <p className={cx(code, "mt-3 rounded-lg bg-cream-deep px-3 py-2 break-all select-all")}>{link}</p>
+            <div className="mt-3 flex items-center gap-2">
+              <Button
+                onClick={() => {
+                  void navigator.clipboard?.writeText(link).then(markCopied, () => undefined);
+                }}
+              >
+                Copy link
+              </Button>
+              <SavedNote show={copied} text="Copied" />
+            </div>
+          </div>
+        </div>
+      )}
+      {pairing && !pairing.kept && (
+        <p className="rounded-lg bg-lemon-soft px-3 py-2 text-[14px]">
+          This computer couldn't save the pairing code, so phones will need pairing again after LemonLime restarts.
+        </p>
+      )}
+      <Row label="Unpair all phones" description="Makes a new code. Every phone paired with this computer stops working until you pair it again.">
+        <SavedNote show={unpaired} text="Unpaired" />
+        <Button variant="danger" disabled={!pairing} onClick={() => void unpairAll()}>
+          Unpair all phones
+        </Button>
+      </Row>
     </>
   );
 }

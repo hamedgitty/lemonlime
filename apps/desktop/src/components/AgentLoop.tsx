@@ -527,17 +527,22 @@ export function QuestionRecord({
   answers,
   state,
   by,
+  canAnswer = true,
 }: {
   questions: { question: string }[];
   answers: string[][] | null;
   state: "waiting" | "answered" | "declined";
   by?: string | undefined;
+  /** False for someone reading along: the questions are shown, with nowhere to answer them. */
+  canAnswer?: boolean;
 }) {
   return (
     <div className="flex items-start gap-2.5 px-1 text-[14px] text-ink-soft" role="note">
       <MessageCircleQuestionMark aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
       <div className="min-w-0 [overflow-wrap:anywhere]">
-        {state === "waiting" ? (
+        {state === "waiting" && !canAnswer ? (
+          <p>The agent asked: {questions.map(q => q.question).join(" ")}</p>
+        ) : state === "waiting" ? (
           <p>The agent asked {questions.length > 1 ? `${questions.length} questions` : "a question"}. Answer it below the conversation.</p>
         ) : state === "declined" ? (
           <p>

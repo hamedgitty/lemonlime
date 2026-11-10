@@ -3,6 +3,11 @@
 //! frontend signs short-lived client tokens with that secret and connects to
 //! `ws://127.0.0.1:<port>/ws`.
 //!
+//! The port is picked here and the runner takes it a while later, once it has set its
+//! thread up, so another program can get there first. A runner counts as ready only when
+//! its own process is still there and the port answers for its thread, and one that lost
+//! its port is started again on another.
+//!
 //! The secret is sent to the runner on its stdin (`--secret-stdin`), never in its
 //! environment or on its command line, where other programs running as the same user
 //! could read it for as long as the runner lives.
@@ -27,6 +32,9 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub(crate) const AGENTS: [&str; 4] = ["claude-code", "codex", "opencode", "acp"];
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
+/// How many ports a runner on this computer is tried on when another program keeps taking
+/// the one picked for it.
+const PORT_ATTEMPTS: usize = 4;
 const STOP_GRACE: Duration = Duration::from_secs(3);
 
 pub(crate) struct RunnerProcess {
@@ -364,31 +372,20 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         None => None,
     };
 
-    let state = app.state::<Runners>();
-    let (info, log_path) = {
-        let mut runners = state.lock();
-
-        if let Some(existing) = runners.get_mut(&req.thread_id) {
-            if existing.alive() {
-                let info = RunnerInfo { port: existing.port, secret: existing.secret.clone() };
-                let log = existing.log_path.clone();
-                drop(runners);
-                wait_until_ready(app, &req.thread_id, info.port, &log, Probe::Tcp)?;
-                return Ok(info);
-            }
-            runners.remove(&req.thread_id);
-        }
-
-        let port = free_port()?;
-        let secret = random_secret();
+    let flags = thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.fast, req.base_branch, &req.settings);
+    let start_flags = req.start.flags();
+    let thread_id = req.thread_id;
+    let agent = req.agent;
+    // The runner on `port`, ready to start: only the port differs from one attempt to the next.
+    let command = |port: u16| -> Result<Command, String> {
         let log = open_log(&log_path)?;
         let log_err = log.try_clone().map_err(|e| format!("Could not open the runner log: {e}"))?;
 
         let mut cmd = runner_command(&program)?;
         cmd.arg("--thread")
-            .arg(&req.thread_id)
+            .arg(&thread_id)
             .arg("--agent")
-            .arg(&req.agent)
+            .arg(&agent)
             // The runner works in its own git worktree of this repository, so the
             // user's checked-out branch and uncommitted work are never touched.
             .arg("--source-repo")
@@ -404,8 +401,8 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         if let Some(file) = &instructions_path {
             cmd.arg("--instructions-file").arg(file);
         }
-        cmd.args(thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.fast, req.base_branch, &req.settings));
-        cmd.args(req.start.flags());
+        cmd.args(&flags);
+        cmd.args(&start_flags);
         // If this app crashes or is force-quit, the runner stops too instead of living on:
         // it notices its parent changing, and its stdin (held open below) closing.
         cmd.arg("--secret-stdin").arg("--exit-with-parent");
@@ -435,55 +432,108 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Could not start {}: {e}", program.display()))?;
-        // The secret is the first line on the runner's stdin. A runner that has already
-        // exited makes this fail; the wait below then reports why, from its log.
-        let mut stdin = child.stdin.take();
-        if let Some(pipe) = stdin.as_mut() {
-            let _ = pipe.write_all(format!("{secret}\n").as_bytes()).and_then(|()| pipe.flush());
-        }
-
-        runners.insert(
-            req.thread_id.clone(),
-            RunnerProcess { child, port, secret: secret.clone(), log_path: log_path.clone(), stdin },
-        );
-        (RunnerInfo { port, secret }, log_path)
+        Ok(cmd)
     };
 
-    wait_until_ready(app, &req.thread_id, info.port, &log_path, Probe::Tcp)?;
-    Ok(info)
+    let state = app.state::<Runners>();
+    for _ in 0..PORT_ATTEMPTS {
+        let log_start = log_len(&log_path);
+        let info = {
+            let mut runners = state.lock();
+
+            if let Some(existing) = runners.get_mut(&thread_id) {
+                if existing.alive() {
+                    let info = RunnerInfo { port: existing.port, secret: existing.secret.clone() };
+                    let log = existing.log_path.clone();
+                    drop(runners);
+                    wait_until_ready(app, &thread_id, info.port, &log, Probe::Local)?;
+                    return Ok(info);
+                }
+                runners.remove(&thread_id);
+            }
+
+            let port = free_port(&ports_given(&runners))?;
+            let secret = random_secret();
+            let mut child = command(port)?
+                .spawn()
+                .map_err(|e| format!("Could not start {}: {e}", program.display()))?;
+            // The secret is the first line on the runner's stdin. A runner that has already
+            // exited makes this fail; the wait below then reports why, from its log.
+            let mut stdin = child.stdin.take();
+            if let Some(pipe) = stdin.as_mut() {
+                let _ = pipe.write_all(format!("{secret}\n").as_bytes()).and_then(|()| pipe.flush());
+            }
+
+            runners.insert(
+                thread_id.clone(),
+                RunnerProcess { child, port, secret: secret.clone(), log_path: log_path.clone(), stdin },
+            );
+            RunnerInfo { port, secret }
+        };
+
+        match watch_start(app, &thread_id, info.port, &log_path, Probe::Local.patience()) {
+            Ok(()) => return Ok(info),
+            Err(StartFailure::Exited { .. }) if lost_its_port(&log_since(&log_path, log_start), answers(info.port)) => continue,
+            Err(failure) => return Err(failure.explain(Probe::Local)),
+        }
+    }
+    Err("Couldn't start the runner: other programs kept taking the port picked for it. Try again.".into())
 }
 
-/// How to tell a runner is ready.
+/// Where the runner being waited for is.
 #[derive(Clone, Copy)]
 pub(crate) enum Probe<'a> {
-    /// Something accepts connections on the port (a runner on this computer).
-    Tcp,
-    /// The runner on `host` answers /healthz for this thread through the port. An ssh tunnel
-    /// accepts connections before the far end is there, so a connection alone proves nothing.
-    Health { host: &'a str },
+    /// On this computer, listening on the port itself.
+    Local,
+    /// On `host`, reached through an ssh tunnel that listens on the port. The tunnel accepts
+    /// connections before the far end is there.
+    Remote { host: &'a str },
+}
+
+impl Probe<'_> {
+    /// How long a runner gets to answer before the wait ends and the client keeps trying.
+    fn patience(self) -> Duration {
+        match self {
+            Probe::Local => READY_TIMEOUT,
+            // Connecting, then making the thread's worktree on the far side, takes longer.
+            Probe::Remote { .. } => READY_TIMEOUT * 3,
+        }
+    }
+}
+
+/// Why the wait for a runner ended without it being ready.
+enum StartFailure {
+    /// Someone else stopped it meanwhile.
+    Stopped,
+    /// Its process ended: how, and the last lines of its log.
+    Exited { status: String, code: Option<i32>, tail: String },
+}
+
+impl StartFailure {
+    fn explain(self, probe: Probe<'_>) -> String {
+        match (self, probe) {
+            (StartFailure::Stopped, _) => "The runner was stopped.".into(),
+            (StartFailure::Exited { code, tail, .. }, Probe::Remote { host }) => crate::ssh::explain_failure(host, code, &tail),
+            (StartFailure::Exited { status, tail, .. }, Probe::Local) if tail.is_empty() => format!("The runner exited right away ({status})."),
+            (StartFailure::Exited { status, tail, .. }, Probe::Local) => format!("The runner exited right away ({status}):\n{tail}"),
+        }
+    }
 }
 
 /// Waits until the runner is ready. Fails early if it exits.
 /// If it is merely slow, returns Ok and lets the client keep retrying.
 pub(crate) fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path, probe: Probe<'_>) -> Result<(), String> {
+    watch_start(app, thread_id, port, log_path, probe.patience()).map_err(|failure| failure.explain(probe))
+}
+
+/// Waits until the thread's runner answers on the port, for as long as `patience`. An answer
+/// only counts while the runner's own process is still there: once that has gone, whatever
+/// answers on the port is some other program.
+fn watch_start(app: &AppHandle, thread_id: &str, port: u16, log_path: &Path, patience: Duration) -> Result<(), StartFailure> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let deadline = Instant::now() + match probe {
-        Probe::Tcp => READY_TIMEOUT,
-        // Connecting, then making the thread's worktree on the far side, takes longer.
-        Probe::Health { .. } => READY_TIMEOUT * 3,
-    };
+    let deadline = Instant::now() + patience;
     loop {
-        let ready = match probe {
-            Probe::Tcp => TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok(),
-            Probe::Health { .. } => answers_health(&addr, thread_id),
-        };
-        if ready {
-            return Ok(());
-        }
+        let answered = answers_health(&addr, thread_id);
         {
             let state = app.state::<Runners>();
             let mut runners = state.lock();
@@ -493,28 +543,23 @@ pub(crate) fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_
                     Ok(None) => None,
                     Err(e) => Some((e.to_string(), None)),
                 },
-                // Stopped by someone else meanwhile.
-                None => return Err("The runner was stopped.".into()),
+                None => return Err(StartFailure::Stopped),
             };
             if let Some((status, code)) = exited {
                 runners.remove(thread_id);
                 drop(runners);
-                let tail = log_tail(log_path);
-                return Err(match probe {
-                    Probe::Health { host } => crate::ssh::explain_failure(host, code, &tail),
-                    Probe::Tcp if tail.is_empty() => format!("The runner exited right away ({status})."),
-                    Probe::Tcp => format!("The runner exited right away ({status}):\n{tail}"),
-                });
+                return Err(StartFailure::Exited { status, code, tail: log_tail(log_path) });
             }
         }
-        if Instant::now() >= deadline {
+        if answered || Instant::now() >= deadline {
             return Ok(());
         }
         thread::sleep(Duration::from_millis(150));
     }
 }
 
-/// GET /healthz through the port; true when the runner for this thread answers.
+/// GET /healthz through the port; true when the runner for this thread answers. Another
+/// program that happens to listen there doesn't know the thread, so it never passes.
 fn answers_health(addr: &SocketAddr, thread_id: &str) -> bool {
     let Ok(mut stream) = TcpStream::connect_timeout(addr, Duration::from_millis(500)) else { return false };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
@@ -526,6 +571,18 @@ fn answers_health(addr: &SocketAddr, thread_id: &str) -> bool {
     let _ = stream.take(16 * 1024).read_to_end(&mut buf);
     let text = String::from_utf8_lossy(&buf);
     text.starts_with("HTTP/1.1 200") && text.contains(&format!("\"threadId\":\"{thread_id}\""))
+}
+
+/// Whether anything accepts connections on the loopback port.
+fn answers(port: u16) -> bool {
+    TcpStream::connect_timeout(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)), Duration::from_millis(250)).is_ok()
+}
+
+/// Whether a runner that ended before it was ready lost its port to another program: its
+/// output says the address was in use, or something answers on the port now that the runner
+/// has gone.
+fn lost_its_port(output: &str, port_still_answers: bool) -> bool {
+    port_still_answers || output.contains("EADDRINUSE")
 }
 
 /// Stops a runner. Closing its stdin first lets it stop cleanly (it stops when its stdin
@@ -620,12 +677,27 @@ pub(crate) fn random_secret() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Asks the OS for a free port on the loopback interface.
-pub(crate) fn free_port() -> Result<u16, String> {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .map_err(|e| format!("Could not find a free port: {e}"))
+/// The ports already given to runners, whether or not they are listening on them yet.
+pub(crate) fn ports_given(runners: &HashMap<String, RunnerProcess>) -> Vec<u16> {
+    runners.values().map(|p| p.port).collect()
+}
+
+/// Asks the OS for a free port on the loopback interface, passing over those in `given`: a
+/// runner that is still starting hasn't taken its port yet, so the OS may offer it again.
+pub(crate) fn free_port(given: &[u16]) -> Result<u16, String> {
+    // Offers that were passed over stay bound until one is picked, so they aren't offered twice.
+    let mut passed_over = Vec::new();
+    loop {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| format!("Could not find a free port: {e}"))?;
+        let port = listener.local_addr().map_err(|e| format!("Could not find a free port: {e}"))?.port();
+        if !given.contains(&port) {
+            return Ok(port);
+        }
+        if passed_over.len() >= 32 {
+            return Err("Could not find a free port.".into());
+        }
+        passed_over.push(listener);
+    }
 }
 
 pub(crate) fn open_log(path: &Path) -> Result<File, String> {
@@ -634,6 +706,19 @@ pub(crate) fn open_log(path: &Path) -> Result<File, String> {
         .append(true)
         .open(path)
         .map_err(|e| format!("Could not open {}: {e}", path.display()))
+}
+
+pub(crate) fn log_len(path: &Path) -> u64 {
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// What the log holds from `offset` on, at most 64 KB.
+pub(crate) fn log_since(path: &Path, offset: u64) -> String {
+    let Ok(mut f) = File::open(path) else { return String::new() };
+    let _ = f.seek(SeekFrom::Start(offset));
+    let mut buf = Vec::new();
+    let _ = f.take(64 * 1024).read_to_end(&mut buf);
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// The last few lines of a runner log, for error messages.
@@ -649,4 +734,92 @@ fn log_tail(path: &Path) -> String {
     let text = String::from_utf8_lossy(&buf);
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     lines[lines.len().saturating_sub(12)..].join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Something listening on a loopback port that answers one request with `response`.
+    fn answering(response: &'static str) -> (SocketAddr, thread::JoinHandle<String>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap_or(0) == 1 {
+                request.push(byte[0]);
+            }
+            let _ = stream.write_all(response.as_bytes());
+            String::from_utf8_lossy(&request).into_owned()
+        });
+        (addr, served)
+    }
+
+    #[test]
+    fn a_port_counts_as_the_threads_runner_only_when_it_answers_for_that_thread() {
+        let ok = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n{\"ok\":true,\"threadId\":\"thread-0001\",\"version\":\"1\"}";
+        let (addr, served) = answering(ok);
+        assert!(answers_health(&addr, "thread-0001"));
+        // The runner only answers callers that name this machine as the host.
+        let request = served.join().unwrap();
+        assert!(request.starts_with("GET /healthz HTTP/1.1\r\n"), "{request}");
+        assert!(request.contains("\r\nHost: 127.0.0.1\r\n"), "{request}");
+
+        // Another thread's runner, and programs that aren't runners at all.
+        let (addr, served) = answering(ok);
+        assert!(!answers_health(&addr, "thread-0002"));
+        served.join().unwrap();
+        for other in ["HTTP/1.1 404 Not Found\r\n\r\n{\"threadId\":\"thread-0001\"}", "HTTP/1.1 200 OK\r\n\r\n<html>hello</html>", "hello", ""] {
+            let (addr, served) = answering(other);
+            assert!(!answers_health(&addr, "thread-0001"), "{other}");
+            served.join().unwrap();
+        }
+
+        // Nothing listening there at all.
+        let closed = {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            listener.local_addr().unwrap()
+        };
+        assert!(!answers_health(&closed, "thread-0001"));
+    }
+
+    #[test]
+    fn a_runner_is_started_on_another_port_only_when_it_lost_the_first_to_another_program() {
+        // The runner says so itself.
+        assert!(lost_its_port("[runner t] starting\nError: listen EADDRINUSE: address already in use 127.0.0.1:50123\n", false));
+        // It ended without saying why, and something else is on the port.
+        assert!(lost_its_port("", true));
+        // It ended for a reason of its own: starting it again would only fail the same way.
+        assert!(!lost_its_port("Error: the agent isn't installed\n", false));
+        assert!(!lost_its_port("", false));
+    }
+
+    #[test]
+    fn a_port_already_given_to_a_runner_is_never_picked_again() {
+        let port = free_port(&[]).unwrap();
+        assert_ne!(port, 0);
+        // The port just picked is free again, so the OS may offer it; it must be passed over.
+        for _ in 0..50 {
+            assert_ne!(free_port(&[port]).unwrap(), port);
+        }
+    }
+
+    #[test]
+    fn only_what_a_runner_wrote_since_it_started_is_read_from_its_log() {
+        let dir = std::env::temp_dir().join(format!("lemonlime-runner-log-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("runner.log");
+        assert_eq!(log_len(&log), 0);
+        assert_eq!(log_since(&log, 0), "");
+
+        fs::write(&log, "an earlier start: EADDRINUSE\n").unwrap();
+        let start = log_len(&log);
+        OpenOptions::new().append(true).open(&log).unwrap().write_all(b"this start: the agent isn't installed\n").unwrap();
+        let since = log_since(&log, start);
+        assert_eq!(since, "this start: the agent isn't installed\n");
+        assert!(!lost_its_port(&since, false));
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

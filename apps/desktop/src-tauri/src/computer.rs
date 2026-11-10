@@ -332,7 +332,7 @@ impl Level {
 
 #[derive(Default)]
 pub struct ComputerAccess {
-    levels: Mutex<Option<HashMap<String, String>>>,
+    levels: Arc<Levels>,
     /// Held while a question is on screen, so there is only ever one.
     asking: tauri::async_runtime::Mutex<()>,
     /// How many questions are waiting for that turn.
@@ -349,11 +349,31 @@ fn valid_thread_id(id: &str) -> bool {
     (6..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') && !id.starts_with('-')
 }
 
-impl ComputerAccess {
+/// Every thread's level, kept in a file: read the first time a level is needed, written on
+/// every change. Everything here may wait on the disk, so the commands reach it through
+/// `ComputerAccess::levels`, which keeps that waiting off the threads that serve the window.
+struct Levels {
+    /// Where the levels are kept; `None` when there is nowhere to keep them.
+    file: Option<PathBuf>,
+    map: Mutex<Option<HashMap<String, String>>>,
+}
+
+impl Default for Levels {
+    fn default() -> Self {
+        Levels::kept_in(access_file())
+    }
+}
+
+impl Levels {
+    fn kept_in(file: Option<PathBuf>) -> Self {
+        Levels { file, map: Mutex::new(None) }
+    }
+
     fn with<T>(&self, f: impl FnOnce(&mut HashMap<String, String>) -> T) -> T {
-        let mut guard = self.levels.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.map.lock().unwrap_or_else(|e| e.into_inner());
         let map = guard.get_or_insert_with(|| {
-            access_file()
+            self.file
+                .as_ref()
                 .and_then(|f| fs::read_to_string(f).ok())
                 .and_then(|t| serde_json::from_str::<HashMap<String, String>>(&t).ok())
                 .unwrap_or_default()
@@ -362,6 +382,10 @@ impl ComputerAccess {
                 .collect()
         });
         f(map)
+    }
+
+    fn all(&self) -> HashMap<String, String> {
+        self.with(|m| m.clone())
     }
 
     fn level(&self, thread_id: &str) -> Level {
@@ -375,14 +399,32 @@ impl ComputerAccess {
             } else {
                 m.insert(thread_id.to_string(), level.name().to_string());
             }
-            let Some(file) = access_file() else { return Ok(()) };
+            let Some(file) = &self.file else { return Ok(()) };
             if let Some(dir) = file.parent() {
                 fs::create_dir_all(dir).map_err(|e| e.to_string())?;
             }
             let tmp = file.with_extension("json.tmp");
             fs::write(&tmp, serde_json::to_string_pretty(m).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-            fs::rename(&tmp, &file).map_err(|e| e.to_string())
+            fs::rename(&tmp, file).map_err(|e| e.to_string())
         })
+    }
+}
+
+impl ComputerAccess {
+    /// Does something with the levels on a thread that may wait on the disk.
+    async fn levels<T: Send + 'static>(&self, work: impl FnOnce(&Levels) -> T + Send + 'static) -> Result<T, String> {
+        let levels = Arc::clone(&self.levels);
+        tauri::async_runtime::spawn_blocking(move || work(&levels)).await.map_err(|e| e.to_string())
+    }
+
+    async fn level(&self, thread_id: &str) -> Result<Level, String> {
+        let id = thread_id.to_string();
+        self.levels(move |l| l.level(&id)).await
+    }
+
+    async fn set(&self, thread_id: &str, level: Level) -> Result<(), String> {
+        let id = thread_id.to_string();
+        self.levels(move |l| l.set(&id, level)).await?
     }
 
     /// Whether the person said no to this thread a moment ago.
@@ -484,8 +526,8 @@ impl Drop for Waiting<'_> {
 
 /// Every cloud thread's level, for the window to show.
 #[tauri::command]
-pub fn computer_access_levels(state: tauri::State<'_, ComputerAccess>) -> HashMap<String, String> {
-    state.with(|m| m.clone())
+pub async fn computer_access_levels(state: tauri::State<'_, ComputerAccess>) -> Result<HashMap<String, String>, String> {
+    state.levels(Levels::all).await
 }
 
 /// Change a thread's level. Lowering it always works; raising it needs the person's OK in a
@@ -496,10 +538,10 @@ pub async fn computer_set_access(app: tauri::AppHandle, state: tauri::State<'_, 
         return Err("That isn't a thread.".into());
     }
     let next = Level::parse(&level).ok_or("That isn't an access level.")?;
-    if next > state.level(&thread_id) {
+    if next > state.level(&thread_id).await? {
         let _turn = state.asking.lock().await;
         // Read again: it may have changed while another question was on screen.
-        let now = state.level(&thread_id);
+        let now = state.level(&thread_id).await?;
         if next > now {
             let question = format!("Let the cloud agent in this thread {}?", next.describe());
             let app2 = app.clone();
@@ -511,7 +553,7 @@ pub async fn computer_set_access(app: tauri::AppHandle, state: tauri::State<'_, 
             }
         }
     }
-    state.set(&thread_id, next)?;
+    state.set(&thread_id, next).await?;
     Ok(next.name().to_string())
 }
 
@@ -520,7 +562,7 @@ pub async fn computer_set_access(app: tauri::AppHandle, state: tauri::State<'_, 
 /// was just told no can't ask again straight away.
 async fn allowed(app: &tauri::AppHandle, state: &ComputerAccess, thread_id: &str, runs: bool, secret: bool, what: String) -> Result<(), String> {
     const JUST_SAID_NO: &str = "The user said no a moment ago. Wait a little before asking again.";
-    if verdict(state.level(thread_id), runs, secret, &what)?.is_none() {
+    if verdict(state.level(thread_id).await?, runs, secret, &what)?.is_none() {
         return Ok(());
     }
     if state.just_refused(thread_id) {
@@ -532,7 +574,7 @@ async fn allowed(app: &tauri::AppHandle, state: &ComputerAccess, thread_id: &str
     let _turn = state.asking.lock().await;
     drop(place);
     // The setting may have changed, or the person may have said no, while this one waited.
-    let Some(message) = verdict(state.level(thread_id), runs, secret, &what)? else {
+    let Some(message) = verdict(state.level(thread_id).await?, runs, secret, &what)? else {
         return Ok(());
     };
     if state.just_refused(thread_id) {
@@ -685,6 +727,31 @@ mod tests {
         assert!(!access.just_refused("thread-other1"));
         access.refused.lock().unwrap().insert("thread-abc123".into(), Instant::now() - AFTER_NO);
         assert!(!access.just_refused("thread-abc123"));
+    }
+
+    #[test]
+    fn levels_are_kept_in_their_file_and_read_back_off_the_async_threads() {
+        let dir = std::env::temp_dir().join(format!("lemonlime-computer-access-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let file = dir.join("home").join("computer-access.json");
+        let access = ComputerAccess { levels: Arc::new(Levels::kept_in(Some(file.clone()))), ..Default::default() };
+        tauri::async_runtime::block_on(async {
+            assert_eq!(access.level("thread-abc123").await.unwrap(), Level::Off);
+            access.set("thread-abc123", Level::Read).await.unwrap();
+            access.set("thread-other1", Level::Full).await.unwrap();
+            access.set("thread-other1", Level::Off).await.unwrap();
+            assert_eq!(access.level("thread-abc123").await.unwrap(), Level::Read);
+            assert_eq!(access.levels(Levels::all).await.unwrap(), HashMap::from([("thread-abc123".to_string(), "read".to_string())]));
+        });
+        // The next start reads what was saved, and drops anything that isn't a thread's level.
+        assert_eq!(Levels::kept_in(Some(file.clone())).level("thread-abc123"), Level::Read);
+        fs::write(&file, r#"{"thread-abc123":"full","thread-other1":"root","../etc":"full"}"#).unwrap();
+        assert_eq!(Levels::kept_in(Some(file.clone())).all(), HashMap::from([("thread-abc123".to_string(), "full".to_string())]));
+        // With nowhere to keep them, levels still hold while the app runs.
+        let unkept = Levels::kept_in(None);
+        unkept.set("thread-abc123", Level::Ask).unwrap();
+        assert_eq!(unkept.level("thread-abc123"), Level::Ask);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

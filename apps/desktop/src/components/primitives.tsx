@@ -174,12 +174,40 @@ export function MenuBadge({ children, tone = "good" }: { children: ReactNode; to
 }
 
 /** An on/off setting inside a menu, with a check while on. The menu stays open. */
-export function MenuCheck({ checked, onChange, children, icon }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode; icon?: ReactNode }) {
+export function MenuCheck({
+  checked,
+  onChange,
+  children,
+  icon,
+  description,
+  disabled,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  children: ReactNode;
+  icon?: ReactNode;
+  /** A second line under the label, in the muted colour: what switching it on means. */
+  description?: ReactNode;
+  disabled?: boolean;
+}) {
   return (
-    <BaseMenu.CheckboxItem checked={checked} onCheckedChange={v => onChange(Boolean(v))} closeOnClick={false} className={ITEM}>
+    <BaseMenu.CheckboxItem
+      checked={checked}
+      onCheckedChange={v => onChange(Boolean(v))}
+      closeOnClick={false}
+      {...(disabled ? { disabled } : {})}
+      className={description ? ITEM_TWO_LINE : ITEM}
+    >
       {icon}
-      <span className="min-w-0 flex-1 truncate">{children}</span>
-      <BaseMenu.CheckboxItemIndicator keepMounted className="data-[unchecked]:invisible">
+      {description ? (
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{children}</span>
+          <span className="block max-w-[17rem] text-[13px] leading-snug text-pretty text-ink-soft">{description}</span>
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 truncate">{children}</span>
+      )}
+      <BaseMenu.CheckboxItemIndicator keepMounted className={cx("data-[unchecked]:invisible", description ? "mt-0.5 flex" : null)}>
         <Check aria-hidden="true" className="!text-leaf" />
       </BaseMenu.CheckboxItemIndicator>
     </BaseMenu.CheckboxItem>

@@ -1,4 +1,4 @@
-import type { TimelineItem } from "./timeline.ts";
+import { startsTurn, type TimelineItem } from "./timeline.ts";
 
 /**
  * The newest "the runner restarted and cut the turn short" notice, while nothing has been
@@ -7,7 +7,7 @@ import type { TimelineItem } from "./timeline.ts";
 export function continuableRestart(items: readonly TimelineItem[]): string | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]!;
-    if (it.kind === "user") return null;
+    if (startsTurn(it)) return null;
     if (it.kind === "error" && it.code === "turn_outcome_unknown") return it.key;
   }
   return null;

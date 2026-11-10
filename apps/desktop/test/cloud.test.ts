@@ -72,12 +72,49 @@ describe("CloudApi", () => {
   it("turns a 402 into a policy denial", async () => {
     const api = new CloudApi(
       { url: "http://cp.test", token: "t" },
-      respond(402, { error: "policy_denied", reason: "Not allowed right now.", actionUrl: "http://cp.test/help", actionLabel: "Details" }),
+      respond(402, { error: "policy_denied", reason: "Not allowed right now.", actionUrl: "https://cp.test/help", actionLabel: "Details" }),
     );
     const err = await api.resumeThread("thread-0001").catch(e => e);
     expect(err).toBeInstanceOf(CloudError);
     expect(err.status).toBe(402);
-    expect(err.denial).toMatchObject({ reason: "Not allowed right now.", actionLabel: "Details" });
+    expect(err.denial).toMatchObject({ reason: "Not allowed right now.", actionUrl: "https://cp.test/help", actionLabel: "Details" });
+  });
+
+  it("keeps a link from the control plane only when it is safe to open", async () => {
+    const denied = async (actionUrl: string) => {
+      const api = new CloudApi(
+        { url: "http://cp.test", token: "t" },
+        respond(402, { error: "policy_denied", reason: "Not allowed right now.", actionUrl, actionLabel: "Details" }),
+      );
+      return (await api.resumeThread("thread-0001").catch(e => e)).denial;
+    };
+    expect(await denied("mailto:help@example.com")).toMatchObject({ actionUrl: "mailto:help@example.com", actionLabel: "Details" });
+    for (const bad of ["http://example.com/help", "file:///etc/hosts", "mailto:help@example.com?body=Hello"]) {
+      expect(await denied(bad), bad).toEqual({ error: "policy_denied", reason: "Not allowed right now." });
+    }
+
+    const usage = (actionUrl: string) =>
+      new CloudApi(
+        { url: "http://cp.test", token: "t" },
+        respond(200, {
+          notice: { level: "warning", message: "Running low", actionUrl, actionLabel: "Add hours" },
+          summary: { title: "Cloud hours", detail: "143 of 200 left", actionUrl, actionLabel: "Add hours" },
+        }),
+      );
+    expect(await usage("https://cp.test/settings").usageNotice()).toEqual({
+      level: "warning",
+      message: "Running low",
+      actionUrl: "https://cp.test/settings",
+      actionLabel: "Add hours",
+    });
+    expect(await usage("https://cp.test/settings").usageSummary()).toEqual({
+      title: "Cloud hours",
+      detail: "143 of 200 left",
+      actionUrl: "https://cp.test/settings",
+      actionLabel: "Add hours",
+    });
+    expect(await usage("javascript:alert(1)").usageNotice()).toEqual({ level: "warning", message: "Running low" });
+    expect(await usage("http://example.com/settings").usageSummary()).toEqual({ title: "Cloud hours", detail: "143 of 200 left" });
   });
 
   it("reports other errors with the server message", async () => {

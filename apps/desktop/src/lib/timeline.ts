@@ -33,6 +33,11 @@ export type TimelineItem =
       /** Images sent with it (upload ids), shown as thumbnails. */
       images?: { id: string; name: string }[];
     }
+  /**
+   * A message nobody typed: a subagent handing back its report, or the runner carrying the
+   * thread on by itself. It starts a turn like a person's message does, but is never theirs.
+   */
+  | { kind: "auto"; key: string; seq: number; at: string; text: string; from: "subagent" | "runner" }
   | { kind: "agent"; key: string; seq: number; at: string; text: string; streaming: boolean }
   /** The agent's reasoning; `startedAt` is when it began thinking (the event before it). */
   | { kind: "reasoning"; key: string; seq: number; at: string; text: string; streaming: boolean; startedAt: string; endedAt: string }
@@ -230,8 +235,12 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
 
     switch (ev.type) {
       case "user_message":
-        lastUserSeq = ev.seq;
         if (ev.clientMsgId) confirmed.add(ev.clientMsgId);
+        if (ev.from) {
+          items.push({ kind: "auto", key: `e${ev.seq}`, seq: ev.seq, at: ev.at, text: ev.text, from: ev.from });
+          break;
+        }
+        lastUserSeq = ev.seq;
         items.push({
           kind: "user",
           key: `e${ev.seq}`,
@@ -435,6 +444,21 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
   return latestStandingNotices(items);
 }
 
+/** Whether a person wrote this message: not a subagent's report, and not the runner carrying on by itself. */
+export function writtenByPerson(ev: ThreadEvent): ev is EventOf<"user_message"> {
+  return ev.type === "user_message" && !ev.from;
+}
+
+/** What people wrote in a thread, oldest first: what prompt history and thread names are made from. */
+export function personTexts(events: readonly ThreadEvent[]): string[] {
+  return events.flatMap(e => (writtenByPerson(e) ? [e.text] : []));
+}
+
+/** Whether a row begins a turn: a person's message, or one the runner or a subagent sent. */
+export function startsTurn(it: { kind: string }): boolean {
+  return it.kind === "user" || it.kind === "auto";
+}
+
 /** Images the runner sends back for showing (see its `GET /attachments/<id>/image`). */
 const SHOWABLE_IMAGE = /\.(png|jpe?g|gif|webp|svg)$/i;
 
@@ -510,7 +534,7 @@ export interface FoldedSteps {
  * final message, errors and approvals stay in view.
  */
 export function foldFinishedTurns(items: readonly TimelineItem[]): Array<TimelineItem | FoldedSteps> {
-  const starts = items.flatMap((it, i) => (it.kind === "user" ? [i] : []));
+  const starts = items.flatMap((it, i) => (startsTurn(it) ? [i] : []));
   if (starts.length < 2) return [...items];
   const out: Array<TimelineItem | FoldedSteps> = items.slice(0, starts[0]);
   for (let t = 0; t < starts.length; t++) {

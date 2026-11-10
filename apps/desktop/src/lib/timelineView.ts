@@ -97,6 +97,9 @@ export function tocEntries(items: readonly TimelineItem[]): Toc {
       if (it.pending) continue;
       endTurn();
       you.push({ key: it.key, label: tocLabel(it.text) || "(no text)", at: it.at });
+    } else if (it.kind === "auto") {
+      // A message nobody typed still ends the agent's turn, but it isn't one of the user's.
+      endTurn();
     } else if (it.kind === "agent" && it.text.trim()) {
       lastAgent = { key: it.key, label: tocLabel(it.text) || "(no text)", at: it.at };
     }
@@ -197,7 +200,7 @@ export function unreadIndex(shown: readonly (TimelineItem | FoldedSteps | GroupR
 export function liveTurnStart(items: readonly TimelineItem[]): string | null {
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]!;
-    if (it.kind === "user" && !it.pending) return it.at;
+    if (it.kind === "auto" || (it.kind === "user" && !it.pending)) return it.at;
   }
   return null;
 }

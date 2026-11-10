@@ -1,11 +1,16 @@
 import {
-  LINK_FRAME_MAX_BYTES,
+  BRIDGE_CLOSE,
+  BRIDGE_HELLO_MS,
   LINK_PING,
   LINK_PING_MS,
   MAX_PHONES_PER_COMPUTER,
   MAX_SHARED_THREADS,
+  NOT_PAIRED_REASON,
   PHONE_TICKET_SECONDS,
+  SealedChannel,
+  newSealHello,
   parseLinkDown,
+  parseSealHello,
   signToken,
   type ComputerPlatform,
   type ComputerUpdate,
@@ -22,6 +27,11 @@ import type { LocalThreadMeta } from "./storage.ts";
  * needed, opens the runner's WebSocket on loopback with a `phone` token it signs itself
  * (the thread secret never leaves this computer), and pipes frames both ways. The runner
  * checks that token like any other and gives a phone fewer powers than this app.
+ *
+ * The bridge only carries the frames. A phone has to be paired with this computer first:
+ * both hold a key the control plane never sees, and every session is sealed with it. Until
+ * a phone has shown it holds the key, no runner is started or reached for it and nothing
+ * readable is sent back; a phone that doesn't seal is turned away.
  */
 
 export type PhoneLinkState = "off" | "connecting" | "live" | "unavailable" | "error";
@@ -44,6 +54,8 @@ export interface PhoneLinkOptions {
   threads: () => LocalThreadSnapshot[];
   /** Start (or find) the runner of one of this computer's threads; null if it isn't one. */
   runner: (threadId: string) => Promise<{ port: number; secret: string } | null>;
+  /** This computer's pairing key, asked for each time a phone connects; null when there is none. */
+  pairingKey: () => string | null;
   onState?: (state: PhoneLinkState, detail?: string) => void;
   WebSocketImpl?: typeof WebSocket;
   /** For tests. */
@@ -51,13 +63,35 @@ export interface PhoneLinkOptions {
 }
 
 interface Session {
+  threadId: string;
+  userId: string;
+  exp: number;
+  /** The pairing key as it was when the phone connected. */
+  key: string;
+  /**
+   * How far the phone has got: `hello` until it has sent its sealing hello, `proof` until
+   * one sealed frame from it has opened (which only a paired phone can make), then `open`.
+   */
+  stage: "hello" | "proof" | "open";
+  /** Frames from the phone so far. */
+  frames: number;
+  channel: SealedChannel | null;
   runner: WebSocket | null;
-  /** Frames from the phone that arrived before the runner's socket opened. */
+  /** Messages from the phone that were opened before the runner's socket was. */
   early: string[];
   /** The token for the phone's hello, until the hello has gone to the runner. */
   token: string | null;
+  /** Frames from the phone are handled one at a time, in order (opening one waits on crypto). */
+  fromPhone: Promise<void>;
+  /** So are messages for the phone (sealing one waits on crypto). */
+  toPhone: Promise<void>;
+  /** Ends the session if the phone hasn't proved it is paired in time. */
+  proofTimer: ReturnType<typeof setTimeout> | null;
   ended: boolean;
 }
+
+/** What a phone that isn't paired (or doesn't seal) is told. */
+const NOT_PAIRED = { code: BRIDGE_CLOSE.notPaired, reason: NOT_PAIRED_REASON };
 
 /** How often to check in (the dashboard shows a computer as online for a couple of minutes after). */
 const CHECK_IN_MS = 60_000;
@@ -115,11 +149,16 @@ export class PhoneLink {
     return [...this.sessions.values()].filter(s => !s.ended).length;
   }
 
+  /** The pairing key was replaced: every phone on the old one is cut off and told to pair again. */
+  unpairPhones(): void {
+    for (const id of Array.from(this.sessions.keys())) this.endSession(id, NOT_PAIRED);
+  }
+
   // ─── Internals ─────────────────────────────────────────────────────────────
 
   private identity() {
     const { name, platform } = this.opts.computer;
-    return { name: name.slice(0, 100) || "My computer", platform };
+    return { name: name.slice(0, 100) || "My computer", platform, sealed: true };
   }
 
   private checkIn(): Promise<{ bridgeAvailable: boolean }> {
@@ -188,7 +227,7 @@ export class PhoneLink {
         this.keepAlive(expiresAt);
         break;
       case "open":
-        void this.openSession(msg.session, msg.threadId, msg.userId, msg.exp);
+        this.openSession(msg.session, msg.threadId, msg.userId, msg.exp);
         break;
       case "data":
         this.fromPhone(msg.session, msg.data);
@@ -225,22 +264,106 @@ export class PhoneLink {
     this.timers.push(ping as unknown as ReturnType<typeof setTimeout>, checkIn as unknown as ReturnType<typeof setTimeout>, renew);
   }
 
-  private async openSession(session: string, threadId: string, userId: string, exp: number): Promise<void> {
+  /**
+   * A phone connected. Nothing is started for it yet: it first has to say hello with a nonce
+   * and then send one frame sealed with keys made from this computer's pairing key.
+   */
+  private openSession(session: string, threadId: string, userId: string, exp: number): void {
     if (this.phoneSessions >= MAX_PHONES_PER_COMPUTER) return this.send({ type: "end", session, code: 4429, reason: "too many connections" });
-    const s: Session = { runner: null, early: [], token: null, ended: false };
+    const key = this.opts.pairingKey();
+    if (!key) return this.send({ type: "end", session, ...NOT_PAIRED });
+    const s: Session = {
+      threadId,
+      userId,
+      exp,
+      key,
+      stage: "hello",
+      frames: 0,
+      channel: null,
+      runner: null,
+      early: [],
+      token: null,
+      fromPhone: Promise.resolve(),
+      toPhone: Promise.resolve(),
+      proofTimer: null,
+      ended: false,
+    };
     this.sessions.set(session, s);
+    s.proofTimer = setTimeout(() => {
+      // A phone that never said hello doesn't seal. One that did, and then went quiet, may
+      // just be on a bad connection: it is let go without being told to pair again.
+      if (s.stage === "hello") this.endSession(session, NOT_PAIRED);
+      else if (s.stage === "proof") this.endSession(session, { code: BRIDGE_CLOSE.idle, reason: "idle" });
+    }, BRIDGE_HELLO_MS);
+  }
+
+  private fromPhone(session: string, data: string): void {
+    const s = this.sessions.get(session);
+    if (!s || s.ended) return;
+    s.fromPhone = s.fromPhone.then(() => this.phoneFrame(session, s, data)).catch(() => this.endSession(session, { code: 1011, reason: "" }));
+  }
+
+  /** One frame from the phone. Anything that isn't sealed for this session ends the session. */
+  private async phoneFrame(session: string, s: Session, data: string): Promise<void> {
+    if (s.ended) return;
+    const first = s.frames++ === 0;
+    if (s.stage === "hello") {
+      // The bridge passes on the hello it took the phone's ticket from. It says nothing this
+      // app relies on: the phone's real hello comes sealed.
+      if (first && isPlainHello(data)) return;
+      const theirs = parseSealHello(data);
+      if (!theirs) return this.endSession(session, NOT_PAIRED);
+      const mine = newSealHello();
+      try {
+        s.channel = await SealedChannel.start({
+          key: s.key,
+          computerId: this.opts.computer.id,
+          threadId: s.threadId,
+          phoneNonce: theirs.nonce,
+          computerNonce: mine.nonce,
+          side: "computer",
+        });
+      } catch {
+        return this.endSession(session, NOT_PAIRED);
+      }
+      if (s.ended) return;
+      s.stage = "proof";
+      return this.send({ type: "data", session, data: JSON.stringify(mine) });
+    }
+    let message: string | null;
+    try {
+      message = await s.channel!.open(data);
+    } catch {
+      // Not sealed with this session's keys, out of order, or changed on the way.
+      return this.endSession(session, NOT_PAIRED);
+    }
+    if (s.ended) return;
+    if (s.stage === "proof") {
+      s.stage = "open";
+      if (s.proofTimer) clearTimeout(s.proofTimer);
+      s.proofTimer = null;
+      void this.openRunner(session, s).catch(() => this.endSession(session, { code: 1011, reason: "" }));
+    }
+    // Null is one part of a longer message; the rest follows.
+    if (message === null) return;
+    if (s.runner?.readyState === 1) this.toRunner(session, s, message);
+    else s.early.push(message);
+  }
+
+  /** The phone is paired: start the thread's runner if needed and connect the phone to it. */
+  private async openRunner(session: string, s: Session): Promise<void> {
     let runner: { port: number; secret: string } | null = null;
     try {
-      runner = await this.opts.runner(threadId);
+      runner = await this.opts.runner(s.threadId);
     } catch {
       runner = null;
     }
     if (s.ended) return;
     if (!runner) return this.endSession(session, { code: 4404, reason: "this thread isn't on this computer" });
-    // The phone's hello comes first; it's answered with a token signed here, for this thread
-    // and this user, no longer-lived than the phone's own ticket.
+    // The phone's hello is answered with a token signed here, for this thread and this user,
+    // no longer-lived than the phone's own ticket.
     const nowSec = Math.floor((this.opts.now ?? Date.now)() / 1000);
-    const token = await signToken({ threadId, scope: "phone", sub: userId, exp: Math.min(exp, nowSec + PHONE_TICKET_SECONDS) }, runner.secret);
+    const token = await signToken({ threadId: s.threadId, scope: "phone", sub: s.userId, exp: Math.min(s.exp, nowSec + PHONE_TICKET_SECONDS) }, runner.secret);
     if (s.ended) return;
     s.token = token;
     const WS = this.opts.WebSocketImpl ?? globalThis.WebSocket;
@@ -249,23 +372,30 @@ export class PhoneLink {
     ws.onopen = () => {
       for (const f of s.early.splice(0)) this.toRunner(session, s, f);
     };
-    ws.onmessage = ev => {
-      const data = typeof ev.data === "string" ? ev.data : String(ev.data);
-      // Wrapped, the frame has to fit the bridge's limit; one that wouldn't ends this phone's session.
-      if (data.length * 1.2 + 200 > LINK_FRAME_MAX_BYTES) return this.endSession(session, { code: 1009, reason: "message too big" });
-      this.send({ type: "data", session, data });
+    ws.onmessage = ev => this.toPhone(session, s, typeof ev.data === "string" ? ev.data : String(ev.data));
+    // What the runner said last reaches the phone before the session ends.
+    ws.onclose = ev => {
+      const tell = { code: ev.code === 4001 || ev.code === 4401 ? ev.code : 1000, reason: ev.reason?.slice(0, 120) ?? "" };
+      void s.toPhone.then(() => this.endSession(session, tell));
     };
-    ws.onclose = ev => this.endSession(session, { code: ev.code === 4001 || ev.code === 4401 ? ev.code : 1000, reason: ev.reason?.slice(0, 120) ?? "" });
     ws.onerror = () => {
       /* onclose follows */
     };
   }
 
-  private fromPhone(session: string, data: string): void {
-    const s = this.sessions.get(session);
-    if (!s || s.ended) return;
-    if (s.runner?.readyState === 1) this.toRunner(session, s, data);
-    else s.early.push(data);
+  /** Seal a message from the runner and send it to the phone, as one frame or several. */
+  private toPhone(session: string, s: Session, message: string): void {
+    const channel = s.channel;
+    if (!channel || s.ended) return;
+    s.toPhone = s.toPhone
+      .then(async () => {
+        if (s.ended) return;
+        const frames = await channel.seal(message);
+        if (s.ended) return;
+        for (const data of frames) this.send({ type: "data", session, data });
+      })
+      // The only message that can't be sealed is one over the size a phone is sent.
+      .catch(() => this.endSession(session, { code: 1009, reason: "message too big" }));
   }
 
   private toRunner(session: string, s: Session, data: string): void {
@@ -285,6 +415,8 @@ export class PhoneLink {
     if (!s || s.ended) return;
     s.ended = true;
     this.sessions.delete(session);
+    if (s.proofTimer) clearTimeout(s.proofTimer);
+    s.proofTimer = null;
     try {
       s.runner?.close(1000, "phone left");
     } catch {
@@ -315,8 +447,17 @@ export class PhoneLink {
   }
 }
 
+/** Whether a frame is a plain (unsealed) hello, which is all the bridge itself adds to a session. */
+function isPlainHello(frame: string): boolean {
+  try {
+    return (JSON.parse(frame) as { type?: unknown } | null)?.type === "hello";
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The phone's first frame, as the runner should get it: a hello with this app's token and
+ * The phone's first message, as the runner should get it: a hello with this app's token and
  * nothing else from the phone but where to resume. Null if it isn't a hello.
  */
 export function helloForRunner(first: string, token: string): string | null {

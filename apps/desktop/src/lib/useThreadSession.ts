@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RunnerClient, runnerHttpBase, uploadAttachment } from "@lemonlime/client";
 import {
+  canTakePart,
   signToken,
   type ClientLimitAction,
   type ClientSetOptions,
@@ -15,7 +16,9 @@ import { appendEvents, contiguousSeq, type PendingMessage } from "./timeline.ts"
 import { forgetEvents, loadEvents, saveEvents, type LocalThreadMeta } from "./storage.ts";
 import { confirmAction, isLocalRunnerRunning } from "./native.ts";
 import { answerComputerRequest, type ComputerLevel } from "./computer.ts";
-import { CloudError, type CloudApi } from "./cloud.ts";
+import type { CloudApi } from "./cloud.ts";
+import { readStoredHistory } from "./storedHistory.ts";
+import { signInRefusal } from "./threadAccess.ts";
 import { machineName, startThreadRunner } from "./threadRunner.ts";
 import { deliverFirstMessage, forgetFirstMessage, peekFirstMessage } from "./firstMessage.ts";
 import { newAttachmentId } from "./useAttachments.ts";
@@ -218,18 +221,15 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         // A paused cloud thread: show what the control plane has kept, without waking it.
         const t = targetRef.current;
         if (t.mode === "cloud") {
-          try {
-            let after = contiguousSeq(eventsRef.current);
-            for (let page = 0; page < 50 && !cancelled; page++) {
-              const h = await t.api.history(t.thread.id, after);
-              if (cancelled || h.events.length === 0) break;
-              setEvents(prev => appendEvents(prev, h.events));
-              after = h.events[h.events.length - 1]!.seq;
-              if (!h.more) break;
-            }
-          } catch {
+          await readStoredHistory(
+            t.api,
+            t.thread.id,
+            contiguousSeq(eventsRef.current),
+            page => setEvents(prev => appendEvents(prev, page)),
+            () => cancelled,
+          ).catch(() => {
             /* stored history is a nice-to-have; the cache still shows */
-          }
+          });
         }
         return;
       }
@@ -495,8 +495,8 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       t.api.requestSignIn(t.thread.id).then(
         () => clientRef.current?.startLogin(),
         err => {
-          // Someone else's thread: their sandbox is no place for this person's account.
-          if (err instanceof CloudError && err.status === 403) setLoginUpdate({ state: "failed", message: err.message });
+          const refused = signInRefusal(err);
+          if (refused !== null) setLoginUpdate({ state: "failed", message: refused });
           else clientRef.current?.startLogin();
         },
       );
@@ -571,6 +571,8 @@ export async function resolveConnection(target: SessionTarget): Promise<Connecti
   }
 
   const { api, thread } = target;
+  // Someone else's thread that isn't shared: there is no runner for this person to reach.
+  if (!canTakePart(thread)) return null;
   const first = await api.getThread(thread.id);
   if (!first.endpoint) return null;
   let endpoint = first.endpoint;

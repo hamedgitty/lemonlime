@@ -1,6 +1,7 @@
-import type { ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { PreviewCard } from "@base-ui/react/preview-card";
 import type { ThreadCardLine } from "../lib/threadCard.ts";
+import { floatingOpen } from "../lib/typeAnywhere.ts";
 
 /**
  * The card a sidebar row shows after the pointer rests on it: where the thread lives and
@@ -19,8 +20,33 @@ const CLOSE_DELAY = 80;
 
 /** Mount once, in the sidebar. */
 export function ThreadPeek() {
+  const actions = useRef<PreviewCard.Root.Actions | null>(null);
+  const [showing, setShowing] = useState(false);
+
+  // The card belongs to a resting pointer. When a dialog or menu opens over the page (the
+  // command palette from the keyboard, a row's own menu), the card goes at once, without a fade,
+  // so the two are never on screen together and neither has to be stacked above the other.
+  useEffect(() => {
+    if (!showing) return;
+    const watch = new MutationObserver(() => {
+      if (!floatingOpen()) return;
+      actions.current?.close();
+      actions.current?.unmount();
+    });
+    watch.observe(document.body, { childList: true, subtree: true });
+    return () => watch.disconnect();
+  }, [showing]);
+
   return (
-    <PreviewCard.Root handle={handle}>
+    <PreviewCard.Root
+      handle={handle}
+      actionsRef={actions}
+      onOpenChange={(open, details) => {
+        // The pointer may have come to rest on a row just before something opened over it.
+        if (open && floatingOpen()) details.cancel();
+        else setShowing(open);
+      }}
+    >
       {({ payload }) =>
         payload ? (
           <PreviewCard.Portal>

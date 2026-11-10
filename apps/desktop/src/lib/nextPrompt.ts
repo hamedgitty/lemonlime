@@ -27,7 +27,7 @@ function text(v: unknown, depth = 0): string {
   return (Array.isArray(v) ? v : Object.values(v)).map(x => text(x, depth + 1)).join(" ");
 }
 
-/** The events of the last turn: everything after the last message the person sent. */
+/** The events of the last turn: everything after the last message that started one, whoever sent it. */
 function lastTurn(events: readonly ThreadEvent[]): readonly ThreadEvent[] | null {
   for (let i = events.length - 1; i >= 0; i--) if (events[i]!.type === "user_message") return events.slice(i + 1);
   return null;

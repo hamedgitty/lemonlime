@@ -1,5 +1,6 @@
 import type { ThreadEvent } from "@lemonlime/protocol";
 import type { KnownPullRequest } from "./threadCard.ts";
+import { writtenByPerson } from "./timeline.ts";
 
 /**
  * The one menu of things you can do to a thread. The same items, in the same order, show
@@ -148,14 +149,14 @@ const FORK_QUOTE_CHARS = 1200;
  * reply), so the new thread starts with the context and can go its own way.
  */
 export function forkPrompt(t: { title: string; branch: string }, events: readonly ThreadEvent[]): string {
-  const first = events.find(e => e.type === "user_message");
+  const first = events.find(writtenByPerson);
   const last = [...events].reverse().find(e => e.type === "agent_message" && !e.partial);
   const clip = (s: string) => {
     const one = s.trim();
     return one.length > FORK_QUOTE_CHARS ? `${one.slice(0, FORK_QUOTE_CHARS).trimEnd()}…` : one;
   };
   const lines = [`Carry on from the thread “${t.title}” (its work is on the branch ${t.branch}).`];
-  if (first?.type === "user_message" && first.text.trim()) lines.push("", "It started with this request:", quote(clip(first.text)));
+  if (first?.text.trim()) lines.push("", "It started with this request:", quote(clip(first.text)));
   if (last?.type === "agent_message" && last.text.trim()) lines.push("", "The agent's last reply was:", quote(clip(last.text)));
   lines.push("", "Here's what I'd like to do next: ");
   return lines.join("\n");

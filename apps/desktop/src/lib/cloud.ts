@@ -7,6 +7,7 @@ import {
   type ComputerUpdate,
   type CreateThreadRequest as CreateThreadRequestT,
   type PendingMessage,
+  withSafeLink,
 } from "@lemonlime/protocol";
 import { z } from "zod";
 import { isTauri } from "@tauri-apps/api/core";
@@ -58,6 +59,7 @@ const defaultFetch: FetchLike = (input, init) => (isTauri() ? tauriFetch(input, 
 
 export class CloudApi {
   private readonly base: string;
+  private sharingKnown = false;
 
   constructor(
     private readonly cfg: CloudConfig,
@@ -73,17 +75,30 @@ export class CloudApi {
   }
 
   async listThreads(): Promise<Thread[]> {
-    const body = await this.request("GET", "/api/threads");
-    return parseThreadList(body);
+    return parseThreadList(this.noteSharing(await this.request("GET", "/api/threads")));
   }
 
   async getThread(id: string): Promise<ThreadWithEndpoint> {
-    return parseWithEndpoint(await this.request("GET", `/api/threads/${encodeURIComponent(id)}`));
+    return parseWithEndpoint(this.noteSharing(await this.request("GET", `/api/threads/${encodeURIComponent(id)}`)));
   }
 
   async createThread(req: CreateThreadRequestT): Promise<ThreadWithEndpoint> {
     const body = CreateThreadRequest.parse(req);
-    return parseWithEndpoint(await this.request("POST", "/api/threads", body));
+    return parseWithEndpoint(this.noteSharing(await this.request("POST", "/api/threads", body)));
+  }
+
+  /**
+   * Whether this control plane lets the person who started a thread share it with their
+   * workspace. Known once it has sent a thread that says whose it is; one that never does
+   * has no sharing to switch on.
+   */
+  get canShareThreads(): boolean {
+    return this.sharingKnown;
+  }
+
+  private noteSharing<T>(body: T): T {
+    if (tellsWhoseThreads(body)) this.sharingKnown = true;
+    return body;
   }
 
   /** The workspace's automations (scheduled prompts that start cloud threads), with recent runs. */
@@ -100,7 +115,9 @@ export class CloudApi {
 
   async updateAutomation(
     id: string,
-    patch: Partial<Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name" | "agent" | "repo" | "sandboxSize" | "checkScript">>,
+    patch: Partial<
+      Pick<AutomationInfo, "enabled" | "schedule" | "timezone" | "prompt" | "name" | "agent" | "repo" | "sandboxSize" | "checkScript" | "secretNames">
+    >,
   ): Promise<AutomationInfo> {
     return ((await this.request("PATCH", `/api/automations/${encodeURIComponent(id)}`, patch)) as { automation: AutomationInfo }).automation;
   }
@@ -127,6 +144,11 @@ export class CloudApi {
   /** Rename a cloud thread. */
   async renameThread(id: string, title: string): Promise<void> {
     await this.request("PATCH", `/api/threads/${encodeURIComponent(id)}`, { title });
+  }
+
+  /** Let the rest of the workspace take part in a cloud thread, or stop that. Only the person who started it may. */
+  async shareThread(id: string, shared: boolean): Promise<void> {
+    await this.request("PATCH", `/api/threads/${encodeURIComponent(id)}`, { shared });
   }
 
   /** Open a pull request for the thread's branch (or get the one already open). */
@@ -162,12 +184,12 @@ export class CloudApi {
     const body = (await this.request("GET", "/api/usage")) as { notice?: unknown } | null;
     const n = body?.notice as { level?: string; message?: string; actionUrl?: string; actionLabel?: string } | null | undefined;
     if (!n || typeof n.message !== "string" || !["info", "warning", "blocked"].includes(n.level ?? "")) return null;
-    return {
+    return withSafeLink({
       level: n.level as "info" | "warning" | "blocked",
       message: n.message,
-      ...(n.actionUrl ? { actionUrl: n.actionUrl } : {}),
-      ...(n.actionLabel ? { actionLabel: n.actionLabel } : {}),
-    };
+      ...(typeof n.actionUrl === "string" ? { actionUrl: n.actionUrl } : {}),
+      ...(typeof n.actionLabel === "string" ? { actionLabel: n.actionLabel } : {}),
+    });
   }
 
   /** The deployment's usage card for the sidebar (e.g. cloud hours left), or null. */
@@ -175,13 +197,13 @@ export class CloudApi {
     const body = (await this.request("GET", "/api/usage")) as { summary?: unknown } | null;
     const s = body?.summary as { title?: unknown; detail?: unknown; progress?: unknown; actionUrl?: unknown; actionLabel?: unknown } | null | undefined;
     if (!s || typeof s.title !== "string" || typeof s.detail !== "string") return null;
-    return {
+    return withSafeLink({
       title: s.title,
       detail: s.detail,
       ...(typeof s.progress === "number" ? { progress: Math.min(1, Math.max(0, s.progress)) } : {}),
-      ...(typeof s.actionUrl === "string" && s.actionUrl.startsWith("https://") ? { actionUrl: s.actionUrl } : {}),
+      ...(typeof s.actionUrl === "string" ? { actionUrl: s.actionUrl } : {}),
       ...(typeof s.actionLabel === "string" ? { actionLabel: s.actionLabel } : {}),
-    };
+    });
   }
 
   /** GitHub accounts connected to the workspace (null when this server has no GitHub App). */
@@ -194,6 +216,7 @@ export class CloudApi {
     return Array.isArray(body?.installations) ? body.installations : [];
   }
 
+  /** Disconnect a GitHub account from the workspace. Only a workspace owner may: the control plane refuses anyone else. */
   async unlinkGithub(id: string): Promise<void> {
     await this.request("DELETE", `/api/github/installations/${encodeURIComponent(id)}`);
   }
@@ -319,7 +342,7 @@ export class CloudApi {
 
     if (res.status === 402) {
       const denial = PolicyDenied.safeParse(json);
-      if (denial.success) throw new CloudError(denial.data.reason, 402, denial.data);
+      if (denial.success) throw new CloudError(denial.data.reason, 402, withSafeLink(denial.data));
     }
     throw new CloudError(errorMessage(res.status, json, text), res.status);
   }
@@ -359,6 +382,14 @@ export function parseThreadList(body: unknown): Thread[] {
   return out;
 }
 
+/** Whether a thread, or any thread in a list, comes with whose it is (`mine`), in any of the shapes above. */
+export function tellsWhoseThreads(body: unknown): boolean {
+  if (Array.isArray(body)) return body.some(item => tellsWhoseThreads(item));
+  if (!body || typeof body !== "object") return false;
+  const o = body as { mine?: unknown; thread?: unknown; threads?: unknown };
+  return typeof o.mine === "boolean" || tellsWhoseThreads(o.thread) || tellsWhoseThreads(o.threads);
+}
+
 function parseWithEndpoint(body: unknown): ThreadWithEndpoint {
   const r = ThreadWithEndpoint.safeParse(body);
   if (r.success) return r.data;
@@ -395,6 +426,8 @@ export interface AutomationInfo {
   prompt: string;
   /** Shell command run first; the run goes ahead only if it prints something. */
   checkScript?: string;
+  /** The workspace secrets its runs get, by name. Null or missing means all of them. */
+  secretNames?: string[] | null;
   enabled: boolean;
   /** Why it turned itself off; null when on or paused by hand. */
   pausedReason?: string | null;

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { GitWorkspace } from "../src/index.ts";
+import { listWorkdirFiles } from "../src/composer.ts";
 import { assertSafePath, assertSafeRef } from "../src/git.ts";
 
 const dirs: string[] = [];
@@ -52,6 +53,27 @@ describe.skipIf(process.platform === "win32")("the runner's git calls ignore pro
     writeFileSync(join(dir, "a.txt"), "two\n");
     await ws.collectChanges();
     await ws.commit("Change");
+    // Listing files for the composer is a git call too.
+    expect(await listWorkdirFiles(dir)).toContain("a.txt");
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("never runs a command written as a remote's address", async () => {
+    const { dir, marker, script } = repo();
+    git(dir, "config", "protocol.ext.allow", "always");
+    git(dir, "remote", "add", "origin", `ext::${script}`);
+    // Plain git does run it, so the test would notice if the runner did too.
+    try {
+      execFileSync("git", ["fetch", "-q", "origin"], { cwd: dir, stdio: "ignore" });
+    } catch {
+      // The script isn't a git server, so the fetch fails after running it.
+    }
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    const ws = new GitWorkspace(dir);
+    expect(await ws.fetch("origin", [])).toMatch(/not allowed/);
+    expect(await ws.push("main")).toMatch(/not allowed/);
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -81,6 +103,25 @@ describe.skipIf(process.platform === "win32")("the runner's git calls ignore pro
     const changes = await ws.collectChanges();
     expect(changes.find(c => c.path === "a.txt")?.diff).toContain("+two");
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe("file names with unusual characters", () => {
+  it("reports changed files by their real names, with their changes", async () => {
+    const { dir } = repo();
+    const ws = new GitWorkspace(dir);
+    await ws.ensureBranch("agent/names1", "main");
+    const odd = ["café menu.txt", "tab\there.txt", 'say "hi".txt'];
+    for (const name of odd) writeFileSync(join(dir, name), `in ${name}\n`);
+    git(dir, "mv", "a.txt", "ä renamed.txt");
+    const changes = await ws.collectChanges();
+    for (const name of odd) {
+      const change = changes.find(c => c.path === name);
+      expect(change?.change).toBe("added");
+      expect(change?.diff).toContain(`+in ${name}`);
+    }
+    expect(changes.find(c => c.path === "ä renamed.txt")?.change).toBe("renamed");
+    expect(changes).toHaveLength(odd.length + 1);
   });
 });
 

@@ -112,8 +112,10 @@ export class E2BProvider implements SandboxProvider {
         state,
         runnerUrl: state === "running" ? this.runnerUrl(id, port, info.domain) : null,
       };
-    } catch {
-      return null;
+    } catch (err) {
+      // Gone only when E2B says so. Anything else, such as an outage, is an error.
+      if (isStatus(err, 404)) return null;
+      throw err;
     }
   }
 

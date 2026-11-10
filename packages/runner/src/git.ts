@@ -11,10 +11,23 @@ const MAX_DIFF_BYTES = 200_000;
 
 /**
  * Put in front of every git call the runner makes. The agent can edit the repository's
- * config, so none of the runner's own git calls may run a program the config names: no
- * fsmonitor daemon, no hooks, no bare repositories found by walking up from a folder.
+ * config, so the runner's own git calls don't run a program the config names where git
+ * lets us say no: no fsmonitor daemon, no hooks, no bare repositories found by walking up
+ * from a folder, and no remote whose address is a command to run.
+ *
+ * Settings that people rely on are left alone: credential helpers, the ssh command,
+ * commit signing, and content filters (large-file storage is one).
  */
-export const SAFE_GIT_CONFIG = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "safe.bareRepository=explicit"];
+export const SAFE_GIT_CONFIG = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "safe.bareRepository=explicit",
+  "-c",
+  "protocol.ext.allow=never",
+];
 /** Diffs never run an external diff tool or a textconv filter. */
 export const SAFE_DIFF = ["--no-ext-diff", "--no-textconv"];
 /** A git call that takes longer than this is killed. Network calls get longer. */
@@ -166,7 +179,7 @@ export class GitWorkspace {
     try {
       await this.git([...AGENT_IDENTITY, "merge", "-q", "--no-edit", "--no-verify", "-m", message, "--end-of-options", ref]);
     } catch (err) {
-      const conflicts = (await this.git(["diff", "--name-only", "-z", "--diff-filter=U"], { allowFail: true })).split("\0").filter(Boolean);
+      const conflicts = (await this.git(["diff", ...SAFE_DIFF, "--name-only", "-z", "--diff-filter=U"], { allowFail: true })).split("\0").filter(Boolean);
       await this.git(["merge", "--abort"], { allowFail: true });
       if (conflicts.length) return { result: "conflicts", conflicts };
       throw new Error(`Couldn't merge ${ref}: ${gitError(err)}`);
@@ -322,12 +335,17 @@ export class GitWorkspace {
     await this.git(["add", "-A"]);
     // Diff against HEAD, or against git's empty tree before the first commit.
     const base = (await this.hasCommits()) ? "HEAD" : await this.emptyTree();
-    const nameStatus = await this.git(["diff", ...SAFE_DIFF, "--cached", "--name-status", "-M", "--end-of-options", base, "--"]);
+    // With -z git prints names as they are, whatever characters they hold: a status, then
+    // the path, or the old and new path for a rename.
+    const fields = (await this.git(["diff", ...SAFE_DIFF, "--cached", "--name-status", "-z", "-M", "--end-of-options", base, "--"])).split("\0");
 
     const changes: FileChange[] = [];
-    for (const line of nameStatus.split("\n")) {
-      if (!line.trim()) continue;
-      const [status = "", ...paths] = line.split("\t");
+    for (let i = 0; i < fields.length;) {
+      const status = fields[i++] ?? "";
+      if (!status) continue;
+      const count = /^[RC]/.test(status) ? 2 : 1;
+      const paths = fields.slice(i, i + count);
+      i += count;
       const path = paths[paths.length - 1] ?? "";
       const change = statusToChange(status);
       let diff = await this.git(["diff", ...SAFE_DIFF, "--cached", "-M", "--end-of-options", base, "--", ...paths], { allowFail: true });
@@ -359,7 +377,7 @@ export class GitWorkspace {
 
   /** Commit staged changes on the current branch. Returns the new commit sha, or null if nothing changed. */
   async commit(message: string): Promise<string | null> {
-    const staged = (await this.git(["diff", "--cached", "--name-only", "-z"], { allowFail: true })).length > 0;
+    const staged = (await this.git(["diff", ...SAFE_DIFF, "--cached", "--name-only", "-z"], { allowFail: true })).length > 0;
     if (!staged) return null;
     await this.git([...AGENT_IDENTITY, "commit", "-q", "--no-verify", "-m", message]);
     return (await this.git(["rev-parse", "HEAD"])).trim();

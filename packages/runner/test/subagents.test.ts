@@ -15,23 +15,39 @@ const until = async (ok: () => boolean, ms = 5000) => {
   }
 };
 
-async function boot() {
+/** `live`: the agent's sessions can change mode between turns, instead of being started again. */
+async function boot({ live = false } = {}) {
   const mainPrompts: string[] = [];
   const childPrompts: string[] = [];
+  /** What each subagent turn was allowed to do. */
+  const childModes: string[] = [];
   let release: () => void = () => {};
   const adapter: AgentAdapter = {
     kind: "claude-code",
-    createSession: opts => ({
-      runTurn: async ctx => {
-        if (opts.env?.LEMONLIME_SUBAGENT_ID) {
+    createSession: opts => {
+      let mode = opts.autonomy;
+      return {
+        runTurn: async ctx => {
+          if (!opts.env?.LEMONLIME_SUBAGENT_ID) return void mainPrompts.push(ctx.prompt);
           childPrompts.push(ctx.prompt);
-          if (ctx.prompt.includes("slow")) await new Promise<void>(r => (release = r));
+          childModes.push(mode);
+          if (ctx.prompt.includes("slow")) {
+            await new Promise<void>(r => {
+              release = r;
+              ctx.signal.addEventListener("abort", () => r(), { once: true });
+            });
+          }
+          if (ctx.prompt.includes("risky")) {
+            const answer = (await ctx.requestApproval?.({ tool: "Bash", input: { command: "make clean" }, summary: "make clean" })) ?? "nobody to ask";
+            return ctx.emit({ type: "agent_message", text: `child was told: ${answer}` });
+          }
           ctx.emit({ type: "agent_message", text: `child done: ${ctx.prompt.split("\n").at(-1)}` });
-        } else mainPrompts.push(ctx.prompt);
-      },
-      saveState: () => ({}),
-      dispose: async () => {},
-    }),
+        },
+        saveState: () => ({ conversation: "kept" }),
+        ...(live ? { setOptions: (change: { autonomy?: typeof mode }) => void (mode = change.autonomy ?? mode) } : {}),
+        dispose: async () => {},
+      };
+    },
   };
   const now = new Date().toISOString();
   const thread: Thread = {
@@ -55,7 +71,7 @@ async function boot() {
     () => server.close(),
   );
   const env = { LEMONLIME_RUNNER_URL: `http://127.0.0.1:${server.port}`, LEMONLIME_THREAD_ID: thread.id, LEMONLIME_AGENT_KEY: await deriveAgentKey(SECRET) };
-  return { runner, env, mainPrompts, childPrompts, release: () => release() };
+  return { runner, env, mainPrompts, childPrompts, childModes, release: () => release() };
 }
 const textOf = (r: { content: { text: string }[] }) => r.content[0]!.text;
 
@@ -123,5 +139,63 @@ describe("subagents", () => {
       isError: true,
     });
     release();
+  });
+
+  for (const live of [false, true]) {
+    it(`may do what the thread's agent may do now, not what it could when the thread started${live ? " (mode changed in place)" : ""}`, async () => {
+      const { runner, env, mainPrompts, childModes } = await boot({ live });
+      expect(runner.setOptions({ permission: "ask" })).toEqual({ ok: true });
+      const id = /sub-\w+/.exec(textOf(await runSubagentTool("spawn_subagent", { request_id: "m1", task: "tidy up" }, env)))![0];
+      await until(() => mainPrompts.length === 1);
+      await runner.settled();
+
+      // A later change reaches a subagent that already exists, from its next turn.
+      expect(runner.setOptions({ permission: "edits" })).toEqual({ ok: true });
+      await runSubagentTool("message_subagent", { id, text: "and the tests" }, env);
+      await until(() => mainPrompts.length === 2);
+      await runner.settled();
+
+      // While the thread's agent is planning, a subagent only looks.
+      expect(runner.setOptions({ permission: "plan" })).toEqual({ ok: true });
+      await runSubagentTool("message_subagent", { id, text: "what would you change?" }, env);
+      await until(() => childModes.length === 3);
+      expect(childModes).toEqual(["ask", "edits", "read"]);
+    });
+  }
+
+  it("ask the user before doing something the thread's mode says to ask about", async () => {
+    const { runner, env, mainPrompts } = await boot();
+    runner.setOptions({ permission: "ask" });
+    await runSubagentTool("spawn_subagent", { request_id: "a1", task: "risky cleanup" }, env);
+    const asked = () => runner.store.since(0).flatMap(e => (e.type === "approval_request" ? [e] : []));
+    await until(() => asked().length === 1);
+    expect(asked()[0]).toMatchObject({ tool: "Bash", summary: "make clean" });
+    expect(mainPrompts).toHaveLength(0);
+    expect(runner.answerApproval(asked()[0]!.requestId, "allow")).toBe(true);
+    await until(() => mainPrompts.length === 1);
+    expect(mainPrompts[0]).toContain("child was told: allow");
+  });
+
+  it("stop when the user stops the agent, without waking it with half a reply", async () => {
+    const { runner, env, mainPrompts, childPrompts } = await boot();
+    runner.setOptions({ permission: "ask" });
+    const slow = /sub-\w+/.exec(textOf(await runSubagentTool("spawn_subagent", { request_id: "s1", task: "slow job" }, env)))![0];
+    await runSubagentTool("spawn_subagent", { request_id: "s2", task: "risky job" }, env);
+    await runSubagentTool("message_subagent", { id: slow, text: "one more thing" }, env);
+    await until(() => runner.store.since(0).some(e => e.type === "approval_request"));
+
+    runner.interrupt();
+    await until(() => runner.subagents.list().every(a => a.status === "idle"));
+    expect(runner.subagents.list().map(a => a.lastReply)).toEqual(["Stopped before it finished.", "Stopped before it finished."]);
+    // The question it was waiting on is closed, and the follow-up that was waiting is dropped.
+    expect(runner.store.since(0).flatMap(e => (e.type === "approval_result" ? [[e.decision, e.by]] : []))).toEqual([["deny", "interrupted"]]);
+    await new Promise(r => setTimeout(r, 50));
+    expect(childPrompts).toHaveLength(2);
+    expect(mainPrompts).toHaveLength(0);
+
+    // It can be given more work afterwards.
+    await runSubagentTool("message_subagent", { id: slow, text: "carry on" }, env);
+    await until(() => mainPrompts.length === 1);
+    expect(mainPrompts[0]).toContain("child done: carry on");
   });
 });

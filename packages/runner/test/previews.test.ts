@@ -147,5 +147,9 @@ describe("previews", () => {
     expect(allowedRequest(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${tunnel.port}\r\nOrigin: http://127.0.0.1:${tunnel.port}\r\n\r\n`, tunnel.port)).toEqual({
       ok: true,
     });
+    // A page that hides its address may post a form; a socket from a nameless page is refused.
+    const mine = `Host: 127.0.0.1:${tunnel.port}\r\nOrigin: null\r\n`;
+    expect(allowedRequest(`POST /form HTTP/1.1\r\n${mine}\r\n`, tunnel.port)).toEqual({ ok: true });
+    expect(allowedRequest(`GET /live HTTP/1.1\r\n${mine}Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n`, tunnel.port)).toMatchObject({ ok: false });
   });
 });

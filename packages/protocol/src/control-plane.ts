@@ -39,10 +39,16 @@ export const PolicyDenied = z.object({
 });
 export type PolicyDenied = z.infer<typeof PolicyDenied>;
 
+/**
+ * The statuses a runner reports about itself: starting up, waiting, or working. The control
+ * plane decides the rest (paused, stopped, failed) and refuses them in a heartbeat.
+ */
+export const RUNNER_STATUSES = ["provisioning", "idle", "running"] as const satisfies readonly ThreadStatus[];
+
 /** Runner → control plane, every ~30 s and on every status change. */
 export const RunnerHeartbeat = z.object({
   threadId: ThreadId,
-  status: ThreadStatus,
+  status: ThreadStatus.refine(s => (RUNNER_STATUSES as readonly string[]).includes(s), { message: "A runner can't report that status." }),
   latestSeq: z.number().int().nonnegative(),
   /** ISO time the agent last finished work, or null while running. */
   idleSince: z.string().datetime().nullable(),

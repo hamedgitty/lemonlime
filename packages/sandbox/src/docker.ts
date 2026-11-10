@@ -110,16 +110,41 @@ export class DockerProvider implements SandboxProvider {
       "-c",
       launchCommand(o.runner),
     ];
-    const id = await this.exec(args, o.runner.env);
-    return this.info(id, o.runner.port);
+    let id: string;
+    try {
+      id = await this.exec(args, o.runner.env);
+    } catch (err) {
+      // Docker can make the container and then fail to start it. Left behind, it would keep
+      // the name and block the next try. A container that already had the name is not ours.
+      if (!nameTaken(err)) await this.removeUnstarted(containerName(o.threadId));
+      throw err;
+    }
+    try {
+      return await this.info(id, o.runner.port);
+    } catch (err) {
+      // The caller never learns this id, so clean up rather than leave it running.
+      await this.exec(["rm", "-f", id]).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /**
+   * Remove a container docker made but never started. One that has run is a thread's
+   * sandbox with its files in it, and is never removed here.
+   */
+  private async removeUnstarted(name: string): Promise<void> {
+    const status = await this.exec(["inspect", "-f", "{{.State.Status}}", name]).catch(() => "");
+    if (status === "created") await this.exec(["rm", "-f", name]).catch(() => undefined);
   }
 
   async get(id: string): Promise<SandboxInfo | null> {
     try {
       const port = await this.exec(["inspect", "-f", '{{index .Config.Labels "lemonlime.runner-port"}}', id]);
       return await this.info(id, Number(port) || 7420);
-    } catch {
-      return null;
+    } catch (err) {
+      // Gone only when docker says so. Anything else, such as docker not answering, is an error.
+      if (isMissing(err)) return null;
+      throw err;
     }
   }
 
@@ -171,7 +196,18 @@ export function mapDockerState(status: string): SandboxState {
   }
 }
 
+const said = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** Docker's answer for a container that isn't there ("No such container", or "no such object" from inspect). */
+function isMissing(err: unknown): boolean {
+  return /no such (container|object)/i.test(said(err));
+}
+
+/** Docker's answer when another container already has the name. */
+function nameTaken(err: unknown): boolean {
+  return /is already in use/i.test(said(err));
+}
+
 function ignoreMissing(err: unknown): void {
-  const msg = err instanceof Error ? err.message : String(err);
-  if (!/No such container/i.test(msg)) throw err;
+  if (!isMissing(err)) throw err;
 }

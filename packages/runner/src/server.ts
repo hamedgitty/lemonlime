@@ -10,6 +10,7 @@ import {
   FILES_LIMIT_MAX,
   FOLDER_LIMIT,
   RelayAnswers,
+  TunnelHello,
   parseClientMessage,
   parseTerminalClientMessage,
   verifyToken,
@@ -67,14 +68,34 @@ function keysFor(opts: ServerOptions, threadId: string): Promise<ThreadKeys> {
   return keys;
 }
 
-/** A token signed with the thread secret (the user's apps, the relay), capped in lifetime. */
+/**
+ * A token signed with the thread secret (the user's apps, the relay), capped in lifetime.
+ * Never throws: a token that can't be checked for any reason is simply not accepted.
+ */
 async function verifyUser(token: string, opts: ServerOptions, threadId: string): Promise<VerifyResult> {
-  return capped(await (await keysFor(opts, threadId)).verify(token));
+  try {
+    return capped(await (await keysFor(opts, threadId)).verify(token));
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
 }
 
-/** A token from the agent's own tools, signed with the agent key, capped in lifetime. */
+/** A token from the agent's own tools, signed with the agent key, capped in lifetime. Never throws. */
 async function verifyAgent(token: string, opts: ServerOptions, threadId: string): Promise<VerifyResult> {
-  return capped(await verifyToken(token, (await keysFor(opts, threadId)).agentKey));
+  try {
+    return capped(await verifyToken(token, (await keysFor(opts, threadId)).agentKey));
+  } catch {
+    return { ok: false, reason: "malformed" };
+  }
+}
+
+/** The path of a request, or null when its address isn't one (`//`, a bad port, and so on). */
+function pathOf(req: IncomingMessage): string | null {
+  try {
+    return new URL(req.url ?? "/", "http://runner").pathname;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -120,6 +141,8 @@ function drained(ws: WebSocket): Promise<void> {
   });
 }
 const TERMINAL_SLOW_MS = 10_000;
+/** Most bytes a `/tunnel` client may send while its token is still being checked. */
+const TUNNEL_EARLY_BYTES = 1024 * 1024;
 /** Close code for a terminal socket whose terminal was closed for good (don't reconnect). */
 const TERMINAL_CLOSED_CLOSE = 4410;
 
@@ -135,7 +158,12 @@ const PHONE_REFUSED = new Set<string>(["computer_result", "start_login", "login_
 /** HTTP health endpoint + the thread's WebSocket. */
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
   const http: Server = createServer((req, res) => {
-    const path = new URL(req.url ?? "/", "http://runner").pathname;
+    const path = pathOf(req);
+    if (path === null) {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "bad_request" }));
+      return;
+    }
     if (
       path === "/capabilities" ||
       path === "/files" ||
@@ -187,7 +215,8 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
   const tunnelWss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const terminals = opts.terminal?.spawn ? new TerminalPool(opts.terminal.spawn, opts.terminal.cwd, opts.terminal.max, undefined, runner.scriptEnv) : null;
   http.on("upgrade", (req, socket, head) => {
-    const path = new URL(req.url ?? "/", "http://runner").pathname;
+    // An address that can't be read gets no connection at all.
+    const path = pathOf(req);
     if (path === "/ws") wss.handleUpgrade(req, socket, head, ws => handleConnection(ws, runner, opts));
     else if (path === "/terminal") terminalWss.handleUpgrade(req, socket, head, ws => handleTerminal(ws, runner, opts, terminals, watcher));
     else if (path === "/tunnel") tunnelWss.handleUpgrade(req, socket, head, ws => handleTunnel(ws, req, runner, opts));
@@ -347,9 +376,13 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
         send({ type: "side_history", sideId: msg.sideId, events: runner.side.history(msg.sideId) });
         break;
       case "rewind":
-        void runner.rewind(msg.toSeq, msg.restoreFiles).then(r => {
-          if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
-        });
+        void runner.rewind(msg.toSeq, msg.restoreFiles).then(
+          r => {
+            if ("error" in r) send({ type: "error", code: "bad_request", message: r.error });
+          },
+          // It stopped part-way, for example because the files couldn't be put back.
+          (err: unknown) => send({ type: "error", code: "internal", message: `Could not go back: ${err instanceof Error ? err.message : String(err)}` }),
+        );
         break;
       case "offer_preview":
         if (!runner.offerListeningPort(msg.port)) send({ type: "error", code: "bad_request", message: "Nothing is listening on that port any more." });
@@ -547,6 +580,8 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
     stopExpiry();
     unsubscribe?.();
   });
+  // A frame that is too big or broken ends this connection, nothing else.
+  ws.on("error", () => ws.terminate());
 }
 
 const CORS = {
@@ -842,11 +877,13 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
  * offered, only on this machine's loopback.
  */
 function handleTunnel(ws: WebSocket, req: IncomingMessage, runner: ThreadRunner, opts: ServerOptions): void {
+  // The upgrade handler only lets a readable address through.
   const port = Number(new URL(req.url ?? "/", "http://runner").searchParams.get("port"));
   let socket: Socket | null = null;
   let state: "hello" | "checking" | "open" = "hello";
   // Bytes the client sends while its token is being checked, written once connected.
   const early: Buffer[] = [];
+  let earlyBytes = 0;
   const timer = setTimeout(() => ws.close(4401, "unauthorized"), HELLO_TIMEOUT_MS);
 
   const open = () => {
@@ -876,14 +913,19 @@ function handleTunnel(ws: WebSocket, req: IncomingMessage, runner: ThreadRunner,
       return;
     }
     if (state === "checking") {
-      if (binary) early.push(Buffer.from(data as Buffer));
+      if (!binary) return;
+      // Nobody has signed in yet: hold only a little, and drop a client that sends more.
+      earlyBytes += (data as Buffer).length;
+      if (earlyBytes > TUNNEL_EARLY_BYTES) return ws.close(1009, "too much sent before sign-in");
+      early.push(Buffer.from(data as Buffer));
       return;
     }
     state = "checking";
     clearTimeout(timer);
     let token = "";
     try {
-      token = binary ? "" : ((JSON.parse(data.toString()) as { token?: string }).token ?? "");
+      const hello = binary ? null : TunnelHello.safeParse(JSON.parse(data.toString()));
+      if (hello?.success) token = hello.data.token;
     } catch {
       /* not a hello */
     }
@@ -891,11 +933,15 @@ function handleTunnel(ws: WebSocket, req: IncomingMessage, runner: ThreadRunner,
       const auth = token ? await verifyUser(token, opts, runner.thread.id) : null;
       if (!auth?.ok || auth.claims.scope !== "client" || auth.claims.threadId !== runner.thread.id) return ws.close(4401, "unauthorized");
       if (!runner.previews.some(p => p.port === port)) return ws.close(4404, "not a preview port");
+      if (ws.readyState !== ws.OPEN) return;
       open();
-    })();
+    })().catch(() => ws.close(4401, "unauthorized"));
   });
   ws.on("close", () => {
     clearTimeout(timer);
+    early.length = 0;
     socket?.destroy();
   });
+  // A frame that is too big or broken ends this connection, nothing else.
+  ws.on("error", () => ws.terminate());
 }

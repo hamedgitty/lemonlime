@@ -8,7 +8,8 @@
 # The control plane starts the runner with a command like
 #   lemonlime-runner --thread <id> --agent <kind> --repo <url> --base <branch> \
 #     --host 0.0.0.0 --port 7420 --control-plane <url>
-# and LEMONLIME_THREAD_SECRET in the environment (see docs/runner.md).
+# and LEMONLIME_THREAD_SECRET in the environment. With the provider's agent-user setting the
+# secret stays with a keeper running as root instead (see docs/runner.md, Tokens).
 
 FROM node:22-bookworm-slim
 

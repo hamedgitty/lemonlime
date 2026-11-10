@@ -304,7 +304,7 @@ export class GitReview {
     let view: unknown;
     try {
       view = JSON.parse(
-        await this.gh(["pr", "view", "--json", "number,url,state,mergeable,headRefOid,statusCheckRollup,comments,reviews", "--", which], this.ws.dir),
+        await this.gh(["pr", "view", "--json", "number,url,state,mergeable,headRefOid,statusCheckRollup,author,comments,reviews", "--", which], this.ws.dir),
       );
     } catch {
       return null;
@@ -624,7 +624,14 @@ function summarise(text: string): string {
   return end > SUMMARY_CHARS / 2 ? cut.slice(0, end + 1) : `${cut.trimEnd()}…`;
 }
 
-/** `gh pr view` (state, mergeable, checks, comments, reviews) and the inline review comments → a watch snapshot. */
+/** What GitHub calls the people who can push to a repository. */
+const CAN_PUSH = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+/**
+ * `gh pr view` (state, mergeable, checks, author, comments, reviews) and the inline review
+ * comments → a watch snapshot. A comment is trusted when GitHub says its author can push
+ * to the repository, or when the pull request's own author wrote it.
+ */
 export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapshot | null {
   if (!view || typeof view !== "object") return null;
   const v = view as {
@@ -633,6 +640,7 @@ export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapsho
     mergeable?: unknown;
     headRefOid?: unknown;
     statusCheckRollup?: unknown;
+    author?: unknown;
     comments?: unknown;
     reviews?: unknown;
   };
@@ -641,13 +649,25 @@ export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapsho
   const rollup = Array.isArray(v.statusCheckRollup) ? v.statusCheckRollup : [];
   const comments: WatchSnapshot["comments"] = [];
   const login = (a: unknown) => String((a as { login?: unknown } | null)?.login ?? "someone");
+  const opener = (v.author as { login?: unknown } | null)?.login;
+  const trusted = (a: unknown, association: unknown): boolean => {
+    if (typeof association === "string" && CAN_PUSH.includes(association.toUpperCase())) return true;
+    const who = (a as { login?: unknown } | null)?.login;
+    return typeof who === "string" && who !== "" && who === opener;
+  };
   for (const c of Array.isArray(v.comments) ? v.comments : []) {
-    const x = c as { id?: unknown; author?: unknown; body?: unknown; createdAt?: unknown };
+    const x = c as { id?: unknown; author?: unknown; authorAssociation?: unknown; body?: unknown; createdAt?: unknown };
     if (x.id === undefined) continue;
-    comments.push({ id: `c:${String(x.id)}`, author: login(x.author), body: String(x.body ?? ""), at: String(x.createdAt ?? "") });
+    comments.push({
+      id: `c:${String(x.id)}`,
+      author: login(x.author),
+      body: String(x.body ?? ""),
+      at: String(x.createdAt ?? ""),
+      trusted: trusted(x.author, x.authorAssociation),
+    });
   }
   for (const r of Array.isArray(v.reviews) ? v.reviews : []) {
-    const x = r as { id?: unknown; author?: unknown; body?: unknown; state?: unknown; submittedAt?: unknown };
+    const x = r as { id?: unknown; author?: unknown; authorAssociation?: unknown; body?: unknown; state?: unknown; submittedAt?: unknown };
     // A plain approval with nothing written isn't something to act on.
     if (x.id === undefined || (!String(x.body ?? "").trim() && String(x.state ?? "").toUpperCase() !== "CHANGES_REQUESTED")) continue;
     const asked = String(x.state ?? "").toUpperCase() === "CHANGES_REQUESTED";
@@ -656,10 +676,11 @@ export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapsho
       author: login(x.author),
       body: String(x.body ?? "").trim() || (asked ? "(asked for changes)" : ""),
       at: String(x.submittedAt ?? ""),
+      trusted: trusted(x.author, x.authorAssociation),
     });
   }
   for (const c of Array.isArray(inline) ? inline : []) {
-    const x = c as { id?: unknown; user?: unknown; body?: unknown; path?: unknown; line?: unknown; created_at?: unknown };
+    const x = c as { id?: unknown; user?: unknown; author_association?: unknown; body?: unknown; path?: unknown; line?: unknown; created_at?: unknown };
     if (x.id === undefined) continue;
     const where = typeof x.path === "string" ? `${x.path}${typeof x.line === "number" ? `:${x.line}` : ""}` : undefined;
     comments.push({
@@ -668,6 +689,7 @@ export function parseWatchSnapshot(view: unknown, inline: unknown): WatchSnapsho
       body: String(x.body ?? ""),
       at: String(x.created_at ?? ""),
       ...(where ? { path: where } : {}),
+      trusted: trusted(x.user, x.author_association),
     });
   }
   return {

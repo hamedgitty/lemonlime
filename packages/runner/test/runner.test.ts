@@ -8,7 +8,7 @@ import WebSocket from "ws";
 import { RunnerClient } from "@lemonlime/client";
 import { branchForThread, signToken, type Thread, type ThreadEvent } from "@lemonlime/protocol";
 import { acpAdapter, startServer, ThreadRunner, type AgentAdapter, type RunningServer } from "../src/index.ts";
-import { CONTINUE_AFTER_RESTART, RESTART_CONTINUE_WINDOW_MS, restartContinueAllowed } from "../src/thread-runner.ts";
+import { CONTINUE_AFTER_RESTART, readSavedState, RESTART_CONTINUE_WINDOW_MS, restartContinueAllowed } from "../src/thread-runner.ts";
 
 const SECRET = "thread-secret-for-tests-0123456789";
 const here = dirname(fileURLToPath(import.meta.url));
@@ -326,6 +326,81 @@ describe("runner end to end", () => {
     expect(prompts).toHaveLength(3);
   });
 
+  it("starts from a saved state file that has nonsense in it, keeping only the parts that fit", async () => {
+    const dir = tempRepo();
+    const dataDir = join(dir, ".lemonlime");
+    const thread = makeThread("odd-state-1");
+    const first = new ThreadRunner({ thread, workdir: dir, dataDir, adapter: fakeAdapter, session: { autonomy: "edits" } });
+    await first.init();
+    await first.close();
+    const good = { clientMsgId: "kept", text: "queued work", queuedAt: new Date().toISOString() };
+    const odd = {
+      agentState: { sessionId: "s1", extra: { nested: true } },
+      status: 7,
+      queue: [good, { text: "no id" }, 5],
+      options: { permission: "anything goes" },
+      agent: { kind: "claude-code", model: "m", command: ["sh", "-c", "echo hi"] },
+      retry: "soon",
+      limitStop: [],
+      usageLimit: "yes",
+      autoContinues: { length: 3 },
+      restartContinues: "often",
+      account: 12,
+    };
+    expect(readSavedState(odd)).toEqual({
+      agentState: { sessionId: "s1" },
+      status: "idle",
+      queue: [good],
+      autoContinues: [],
+      restartContinues: [],
+      agent: { kind: "claude-code", model: "m" },
+    });
+    for (const nothing of [null, 5, "text", []]) expect(readSavedState(nothing)).toBeNull();
+
+    writeFileSync(join(dataDir, "state.json"), JSON.stringify(odd));
+    const prompts: string[] = [];
+    const recording: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => ({ runTurn: async ctx => void prompts.push(ctx.prompt), saveState: () => ({}), dispose: async () => {} }),
+    };
+    const second = new ThreadRunner({ thread, workdir: dir, dataDir, adapter: recording, session: { autonomy: "edits" } });
+    cleanups.push(() => second.close());
+    await second.init();
+    await second.settled();
+    expect(prompts).toEqual(["queued work"]);
+    expect(second.currentOptions.permission).toBe("edits");
+  });
+
+  it("says so and runs the next message when a turn breaks in a way nothing planned for", async () => {
+    let sessions = 0;
+    const prompts: string[] = [];
+    const flaky: AgentAdapter = {
+      kind: "claude-code",
+      createSession: () => {
+        sessions += 1;
+        // The agent can't be started again right after it crashed.
+        if (sessions === 2) throw new Error("the agent could not be started");
+        return {
+          runTurn: async ctx => {
+            if (sessions === 1) throw Object.assign(new Error("the agent went away"), { code: "agent_crashed" });
+            prompts.push(ctx.prompt);
+          },
+          saveState: () => ({}),
+          dispose: async () => {},
+        };
+      },
+    };
+    const { runner } = await boot(flaky, "broken-turn-1");
+    runner.sendMessage("first");
+    expect(runner.sendMessage("second").result).toBe("queued");
+    await runner.settled();
+
+    expect(prompts).toEqual(["second"]);
+    expect(runner.thread.status).toBe("idle");
+    const broke = runner.store.since(0).find(e => e.type === "error" && e.code === "turn_failed");
+    expect((broke as { message: string }).message).toContain("the agent could not be started");
+  });
+
   it("only allows a few restart continues within the window", () => {
     const now = 10 * 60_000;
     expect(restartContinueAllowed([], now).allowed).toBe(true);
@@ -364,6 +439,24 @@ describe("runner end to end", () => {
     await runner.settled();
     const err = runner.store.since(0).find(e => e.type === "error");
     expect(err).toMatchObject({ code: "agent_not_found", fatal: false });
+    expect(runner.thread.status).toBe("idle");
+  });
+
+  it("reports an ACP agent that stops listening as an error instead of crashing", async () => {
+    // Answers the first request, then closes its input and exits a moment later.
+    const agent = `
+      process.stdin.on("error", () => {});
+      process.stdin.once("data", data => {
+        const msg = JSON.parse(String(data).split("\\n")[0]);
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } }) + "\\n");
+        process.stdin.pause();
+        require("node:fs").closeSync(0);
+        setTimeout(() => process.exit(1), 300);
+      });`;
+    const { runner } = await boot(acpAdapter("acp", ["node", "-e", agent]), "test-thread-acp-closed");
+    runner.sendMessage("hi");
+    await runner.settled();
+    expect(runner.store.since(0).find(e => e.type === "error")).toMatchObject({ fatal: false });
     expect(runner.thread.status).toBe("idle");
   });
 });

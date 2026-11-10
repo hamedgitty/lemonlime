@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { ThreadId } from "@lemonlime/protocol";
+import { MAX_TOKEN_CHARS, ThreadId } from "@lemonlime/protocol";
 import { keysFromSecret, MAX_RUNNER_TOKEN_SECONDS, type ThreadKeys } from "./keys.ts";
 
 /**
@@ -71,7 +71,11 @@ export function serveKeys(socket: string, keys: ThreadKeys): Promise<Server> {
       while ((nl = buf.indexOf("\n")) !== -1) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
-        void answer(line, keys).then(a => conn.write(JSON.stringify(a) + "\n"));
+        void answer(line, keys)
+          .catch(() => ({ error: "bad request" }))
+          .then(a => {
+            if (!conn.destroyed) conn.write(JSON.stringify(a) + "\n");
+          });
       }
     });
     conn.on("error", () => conn.destroy());
@@ -93,7 +97,8 @@ async function answer(line: string, keys: ThreadKeys): Promise<Record<string, un
     case "agentKey":
       return { agentKey: keys.agentKey };
     case "verify":
-      if (typeof req.token !== "string" || req.token.length > 4096) return { error: "bad token" };
+      // Not a token at all: an ordinary "no", the same answer a forged one gets.
+      if (typeof req.token !== "string" || req.token.length > MAX_TOKEN_CHARS) return { result: { ok: false, reason: "malformed" } };
       return { result: await keys.verify(req.token) };
     case "sign": {
       // Runner tokens only, short-lived: never a token that opens the thread as the user.

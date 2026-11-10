@@ -124,6 +124,8 @@ class AcpSession implements AgentSession {
       track(child);
       this.child = child;
       child.stderr?.on("data", (d: Buffer) => (this.stderr = (this.stderr + d.toString()).slice(-4000)));
+      // An agent that stops reading closes the pipe; its exit is what gets reported, below.
+      child.stdin?.on("error", () => undefined);
       const lines = lineSplitter(
         line => this.onLine(line),
         bytes => this.turn?.emit(oversizeNotice(bytes)),

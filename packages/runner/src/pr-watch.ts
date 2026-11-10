@@ -7,6 +7,9 @@ import type { PullRequestInfo, PullRequestWatchState } from "@lemonlime/protocol
  * comments or it can no longer merge cleanly, the agent gets a message saying what changed.
  * It checks every few minutes, and comments alone wake the agent a limited number of times,
  * so a bot that answers every push can't keep it busy forever.
+ *
+ * Anyone can comment on a public pull request, and the agent reads a wake-up as if the user
+ * wrote it. So only comments from people who could change the code anyway reach it.
  */
 
 /** What one look at the pull request found. */
@@ -20,7 +23,15 @@ export interface WatchSnapshot {
   failing: string[];
   /** GitHub says the branch has merge conflicts with its base. */
   conflicting: boolean;
-  comments: { id: string; author: string; body: string; at: string; path?: string }[];
+  comments: {
+    id: string;
+    author: string;
+    body: string;
+    at: string;
+    path?: string;
+    /** Written by someone who can push to the repository, or by the pull request's author. The rest never reach the agent. */
+    trusted: boolean;
+  }[];
 }
 
 /** Most times comments alone wake the agent. */
@@ -46,6 +57,8 @@ export interface WatchMemory {
   checksSeen: boolean;
   noChecksNoted: boolean;
   capNoted: boolean;
+  /** The user was told that a comment from someone else was left out. */
+  outsiderNoted: boolean;
 }
 
 export const watchOff = (): WatchMemory => ({
@@ -59,6 +72,7 @@ export const watchOff = (): WatchMemory => ({
   checksSeen: false,
   noChecksNoted: false,
   capNoted: false,
+  outsiderNoted: false,
 });
 
 export interface WatchStep {
@@ -103,7 +117,13 @@ export function watchStep(memory: WatchMemory, snap: WatchSnapshot, now: number,
   const fresh = snap.comments.filter(c => !seen.has(c.id));
   for (const c of fresh) m.seen.push(c.id);
   if (m.seen.length > MAX_SEEN) m.seen = m.seen.slice(-MAX_SEEN);
-  let comments = m.baselined ? fresh : [];
+  let comments = m.baselined ? fresh.filter(c => c.trusted) : [];
+  if (m.baselined && !m.outsiderNoted && fresh.some(c => !c.trusted)) {
+    m.outsiderNoted = true;
+    notices.push(
+      `Someone who can't push to the repository commented on ${pr}. LemonLime doesn't pass comments like that on to the agent; you can read them on GitHub.`,
+    );
+  }
   m.baselined = true;
   if (comments.length && !reasons.length) {
     // Comments alone: counted, up to the limit.

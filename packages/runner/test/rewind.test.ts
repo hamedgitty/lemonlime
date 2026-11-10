@@ -99,6 +99,71 @@ describe("rewind", () => {
     expect(await runner.rewind(reply.seq, false)).toEqual({ error: "That isn't one of your messages." });
   });
 
+  it("holds a message sent while going back until the thread is ready for it", async () => {
+    const source = mkdtempSync(join(tmpdir(), "lemonlime-rewind-src-"));
+    git(source, "init", "-q", "-b", "main");
+    writeFileSync(join(source, "notes.md"), "start\n");
+    git(source, "add", "-A");
+    git(source, "commit", "-qm", "init");
+    const work = join(mkdtempSync(join(tmpdir(), "lemonlime-rewind-")), "w");
+    cleanups.push(() => rmSync(source, { recursive: true, force: true }));
+
+    const ran: { prompt: string; session: number; notes: string }[] = [];
+    const gone = new Set<number>();
+    let sessions = 0;
+    const adapter: AgentAdapter = {
+      kind: "claude-code",
+      createSession: opts => {
+        const session = ++sessions;
+        return {
+          runTurn: async ctx => {
+            if (gone.has(session)) throw new Error("this conversation was already closed");
+            ran.push({ prompt: ctx.prompt, session, notes: readFileSync(join(opts.cwd, "notes.md"), "utf8") });
+            writeFileSync(join(opts.cwd, "notes.md"), `${readFileSync(join(opts.cwd, "notes.md"), "utf8")}${ctx.prompt.split("\n").at(-1)}\n`);
+          },
+          saveState: () => ({}),
+          // Closing takes a moment, as it does with a real agent.
+          dispose: async () => {
+            await new Promise(r => setTimeout(r, 30));
+            gone.add(session);
+          },
+        };
+      },
+    };
+    const runner = new ThreadRunner({
+      thread: thread("rewind-thread-2"),
+      workdir: work,
+      dataDir: null,
+      adapter,
+      session: { autonomy: "full" },
+      sourceRepo: source,
+      bundledSkills: false,
+    });
+    await runner.init();
+    cleanups.push(() => runner.close());
+    runner.sendMessage("one");
+    await runner.settled();
+    runner.sendMessage("two");
+    await runner.settled();
+
+    const second = runner.store.since(0).find(e => e.type === "user_message" && e.text === "two")!;
+    const goingBack = runner.rewind(second.seq, true);
+    expect(runner.sendMessage("two, but different").result).toBe("queued");
+    expect(await runner.rewind(second.seq, true)).toHaveProperty("error");
+    expect(await goingBack).toEqual({ text: "two" });
+    await runner.settled();
+
+    // It ran once, after the files were put back, in the fresh conversation with the recap.
+    expect(ran).toHaveLength(3);
+    expect(ran[2]!.session).toBe(2);
+    expect(ran[2]!.notes).toBe("start\none\n");
+    expect(ran[2]!.prompt).toContain("This conversation was rewound");
+    expect(readFileSync(join(work, "notes.md"), "utf8")).toBe("start\none\ntwo, but different\n");
+    const visible = runner.store.since(0);
+    const rewindSeq = visible.find(e => e.type === "rewind")!.seq;
+    expect(visible.find(e => e.type === "user_message" && e.text === "two, but different")!.seq).toBeGreaterThan(rewindSeq);
+  });
+
   it("leaves rewound-past messages out of later recaps", () => {
     const at = new Date().toISOString();
     const base = { threadId: "t-recap-1", at };

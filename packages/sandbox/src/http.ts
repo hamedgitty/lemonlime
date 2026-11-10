@@ -35,7 +35,12 @@ export interface JsonRequest {
   headers: Record<string, string>;
   body?: unknown;
   signal?: AbortSignal;
+  /** Give up after this long without a full answer. Default 2 minutes. */
+  timeoutMs?: number;
 }
+
+/** A provider that hasn't answered in this long isn't going to; waiting forever would hang the caller. */
+const REQUEST_TIMEOUT_MS = 120_000;
 
 /** Sends a JSON request and returns the parsed JSON answer (undefined for an empty body). */
 export async function requestJson<T>(fetchFn: FetchLike, provider: string, req: JsonRequest): Promise<T> {
@@ -45,9 +50,18 @@ export async function requestJson<T>(fetchFn: FetchLike, provider: string, req: 
     headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(req.body);
   }
-  if (req.signal) init.signal = req.signal;
-  const res = await fetchFn(req.url, init);
-  const text = await res.text();
+  const timeoutMs = req.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  init.signal = req.signal ? AbortSignal.any([req.signal, timeout]) : timeout;
+  let res: Response;
+  let text: string;
+  try {
+    res = await fetchFn(req.url, init);
+    text = await res.text();
+  } catch (err) {
+    if (!timeout.aborted) throw err;
+    throw new Error(`${provider} ${req.method} ${new URL(req.url).pathname} did not answer within ${Math.ceil(timeoutMs / 1000)}s`);
+  }
   if (!res.ok) throw new ProviderHttpError(provider, req.method, new URL(req.url).pathname, res.status, errorDetail(text));
   if (!text) return undefined as T;
   try {

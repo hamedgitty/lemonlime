@@ -1,5 +1,5 @@
 import { connect } from "node:net";
-import { deriveAgentKey, signToken, verifyToken, type VerifyResult } from "@lemonlime/protocol";
+import { deriveAgentKey, MAX_TOKEN_CHARS, signToken, verifyToken, type VerifyResult } from "@lemonlime/protocol";
 
 /**
  * What the runner does with the thread secret, behind one interface so the secret itself
@@ -54,6 +54,11 @@ export function keeperCall<T>(socket: string, request: Record<string, unknown>, 
       clearTimeout(timer);
       reject(err);
     });
+    // Closed without an answer (nothing happens if one already arrived).
+    conn.on("close", () => {
+      clearTimeout(timer);
+      reject(new Error("the keeper closed the connection"));
+    });
   });
 }
 
@@ -61,7 +66,11 @@ export function keeperCall<T>(socket: string, request: Record<string, unknown>, 
 export async function keysFromKeeper(socket: string): Promise<ThreadKeys> {
   const { agentKey } = await keeperCall<{ agentKey: string }>(socket, { op: "agentKey" });
   return {
-    verify: token => keeperCall<{ result: VerifyResult }>(socket, { op: "verify", token }).then(r => r.result),
+    verify: async token => {
+      // Too long to be a token: say no here instead of sending it to the keeper.
+      if (typeof token !== "string" || token.length > MAX_TOKEN_CHARS) return { ok: false, reason: "malformed" };
+      return (await keeperCall<{ result: VerifyResult }>(socket, { op: "verify", token })).result;
+    },
     signRunner: seconds => keeperCall<{ token: string }>(socket, { op: "sign", seconds }).then(r => r.token),
     agentKey,
   };

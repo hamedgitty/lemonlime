@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { NewEvent, SubagentInfo as SubagentSnapshot } from "@lemonlime/protocol";
-import type { AgentAdapter, AgentSession, SessionOptions } from "./agents/index.ts";
+import type { NewEvent, Question, SubagentInfo as SubagentSnapshot } from "@lemonlime/protocol";
+import type { AgentAdapter, AgentSession, Autonomy, SessionOptions } from "./agents/index.ts";
+import type { ApprovalDecision, ApprovalRequest } from "./approvals.ts";
 
 /** A subagent may start its own, once: main thread → child → grandchild. */
 export const MAX_SUBAGENT_DEPTH = 2;
@@ -20,6 +21,10 @@ export interface SubagentInfo {
 
 interface Subagent extends SubagentInfo {
   session: AgentSession;
+  /** What its session was last told it may do. */
+  autonomy: Autonomy;
+  /** Stops the turn it is working on, if any. */
+  abort: AbortController | null;
   inbox: string[];
   turns: number;
 }
@@ -28,6 +33,15 @@ export interface SubagentsOptions {
   adapter: AgentAdapter;
   session: Omit<SessionOptions, "cwd" | "saved">;
   cwd: string;
+  /**
+   * How much the thread's agent may do right now. A subagent gets the same, checked again
+   * before each of its turns. Without it, `session.autonomy` is used throughout.
+   */
+  autonomy?: () => Autonomy;
+  /** Ask the user whether a subagent may use a tool. Without it, anything that needs asking is denied. */
+  requestApproval?: (req: ApprovalRequest, signal: AbortSignal) => Promise<ApprovalDecision>;
+  /** Ask the user a subagent's questions. Without it, they go unanswered. */
+  askQuestions?: (questions: Question[], signal: AbortSignal) => Promise<string[][] | null>;
   /** Hand a finished child's reply to the main thread (it joins the queue like any message). */
   toMain: (text: string, id: string) => void;
   /** Something for the thread's history, e.g. "started a subagent". */
@@ -54,7 +68,7 @@ export class Subagents {
   list(parentId?: string | null): SubagentInfo[] {
     return [...this.agents.values()]
       .filter(a => parentId === undefined || a.parentId === parentId)
-      .map(({ session: _s, inbox: _i, turns: _t, ...info }) => info);
+      .map(({ session: _s, autonomy: _a, abort: _b, inbox: _i, turns: _t, ...info }) => info);
   }
 
   /**
@@ -76,6 +90,31 @@ export class Subagents {
     this.opts.changed?.(this.snapshot());
   }
 
+  /**
+   * What a subagent may do: what the thread's agent may do right now. Plans are for the
+   * thread's own agent to propose, so in plan mode a subagent only looks.
+   */
+  private autonomy(): Autonomy {
+    const now = this.opts.autonomy?.() ?? this.opts.session.autonomy;
+    return now === "plan" ? "read" : now;
+  }
+
+  private open(id: string, autonomy: Autonomy, saved: Record<string, string>): AgentSession {
+    const env = { ...this.opts.session.env, LEMONLIME_SUBAGENT_ID: id };
+    return this.opts.adapter.createSession({ ...this.opts.session, autonomy, env, cwd: this.opts.cwd, saved });
+  }
+
+  /** The thread's mode changed since this subagent's last turn: carry on the same conversation under the new one. */
+  private async retune(agent: Subagent, autonomy: Autonomy): Promise<void> {
+    if (agent.session.setOptions) agent.session.setOptions({ autonomy });
+    else {
+      const saved = agent.session.saveState();
+      await agent.session.dispose().catch(() => undefined);
+      agent.session = this.open(agent.id, autonomy, saved);
+    }
+    agent.autonomy = autonomy;
+  }
+
   spawn(o: { requestId: string; task: string; parentId: string | null }): { id: string; created: boolean } | { error: string } {
     const known = this.byRequest.get(o.requestId);
     if (known) return { id: known, created: false };
@@ -86,8 +125,8 @@ export class Subagents {
     const siblings = [...this.agents.values()].filter(a => a.parentId === o.parentId && a.status === "working");
     if (siblings.length >= MAX_SUBAGENT_CHILDREN) return { error: `You already have ${MAX_SUBAGENT_CHILDREN} subagents working; wait for one to reply.` };
     const id = `sub-${randomUUID().slice(0, 8)}`;
-    const env = { ...this.opts.session.env, LEMONLIME_SUBAGENT_ID: id };
-    const session = this.opts.adapter.createSession({ ...this.opts.session, env, cwd: this.opts.cwd, saved: {} });
+    const autonomy = this.autonomy();
+    const session = this.open(id, autonomy, {});
     const agent: Subagent = {
       id,
       parentId: o.parentId,
@@ -97,6 +136,8 @@ export class Subagents {
       lastReply: null,
       startedAt: new Date().toISOString(),
       session,
+      autonomy,
+      abort: null,
       inbox: [],
       turns: 0,
     };
@@ -117,6 +158,17 @@ export class Subagents {
     return true;
   }
 
+  /**
+   * Stop every subagent that is working, and drop what was waiting for them. Nobody is
+   * woken with a half-finished reply; whoever started one can message it to carry on.
+   */
+  interrupt(): void {
+    for (const a of this.agents.values()) {
+      a.inbox.length = 0;
+      a.abort?.abort();
+    }
+  }
+
   async close(): Promise<void> {
     for (const a of this.agents.values()) await a.session.dispose().catch(() => undefined);
   }
@@ -124,20 +176,39 @@ export class Subagents {
   private async run(agent: Subagent, prompt: string): Promise<void> {
     agent.status = "working";
     agent.turns++;
+    const abort = new AbortController();
+    agent.abort = abort;
     this.announce();
     let reply = "";
     try {
-      await agent.session.runTurn({
-        prompt,
-        signal: new AbortController().signal,
-        emit: (e: NewEvent) => {
-          if (e.type === "agent_message" && !e.partial) reply = e.text;
-        },
-      });
+      const autonomy = this.autonomy();
+      if (autonomy !== agent.autonomy) await this.retune(agent, autonomy);
+      const { requestApproval, askQuestions } = this.opts;
+      if (!abort.signal.aborted) {
+        await agent.session.runTurn({
+          prompt,
+          signal: abort.signal,
+          emit: (e: NewEvent) => {
+            if (e.type === "agent_message" && !e.partial) reply = e.text;
+          },
+          ...(requestApproval ? { requestApproval: (req: ApprovalRequest) => requestApproval(req, abort.signal) } : {}),
+          ...(askQuestions ? { askQuestions: (questions: Question[]) => askQuestions(questions, abort.signal) } : {}),
+        });
+      }
       agent.status = "idle";
     } catch (err) {
       agent.status = "failed";
       reply = `It stopped with an error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    agent.abort = null;
+    if (abort.signal.aborted) {
+      // Stopped, not finished: it can be messaged again, and nobody is told it replied.
+      agent.status = "idle";
+      agent.lastReply = "Stopped before it finished.";
+      agent.inbox.length = 0;
+      this.opts.notice("subagent_stopped", `Stopped a subagent: ${agent.task.slice(0, 120)}`);
+      this.announce();
+      return;
     }
     agent.lastReply = reply || "(no reply)";
     this.deliver(agent);

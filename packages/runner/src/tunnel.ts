@@ -8,6 +8,10 @@ const MAX_HEAD_BYTES = 32 * 1024;
  * Is this the start of a request meant for our own address? A page on another site can
  * point a browser at 127.0.0.1 (DNS rebinding, or a fetch/WebSocket from that page), so
  * the Host must be this port on loopback, and any Origin must be too.
+ *
+ * A page that keeps its address to itself sends `Origin: null` with its own form posts,
+ * so plain requests like that pass. A WebSocket always names the page that opened it, so
+ * `null` there means a page that isn't ours (a sandboxed frame on another site).
  */
 export function allowedRequest(head: string, localPort: number): { ok: true } | { ok: false; why: string } {
   if (!/^[A-Z]+ \S+ HTTP\/1\.[01]\r\n/.test(head)) return { ok: false, why: "not an HTTP request" };
@@ -18,8 +22,9 @@ export function allowedRequest(head: string, localPort: number): { ok: true } | 
   }
   const mine = [`127.0.0.1:${localPort}`, `localhost:${localPort}`, `[::1]:${localPort}`];
   if (!mine.includes((headers.get("host") ?? "").toLowerCase())) return { ok: false, why: "wrong Host" };
-  const origin = headers.get("origin");
-  if (origin && origin !== "null" && !mine.some(h => origin.toLowerCase() === `http://${h}`)) return { ok: false, why: "request from another site" };
+  const origin = (headers.get("origin") ?? "").toLowerCase();
+  const fromOurs = origin === "null" ? (headers.get("upgrade") ?? "").toLowerCase() !== "websocket" : !origin || mine.some(h => origin === `http://${h}`);
+  if (!fromOurs) return { ok: false, why: "request from another site" };
   return { ok: true };
 }
 

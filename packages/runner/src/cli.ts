@@ -45,9 +45,12 @@ import { readSecretLine, releaseStdin } from "./secret-stdin.ts";
 // Output piped into something that stops reading early (`lemonlime-runner --help | head`):
 // stop quietly instead of crashing with a stack trace. 141 is what a shell reports for a
 // closed pipe, and being non-zero, a service manager still restarts a runner that hit it.
+/** Set when writing to stdout or stderr failed some other way: there is nowhere left to report to. */
+let outputBroken = false;
 for (const stream of [process.stdout, process.stderr])
   stream.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EPIPE") process.exit(141);
+    outputBroken = true;
     throw err;
   });
 
@@ -531,6 +534,14 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     watchPorts: true,
   });
   log(`listening on ${values.host}:${server.port} (agent: ${agent.data}, autonomy: ${autonomy})`);
+  // From here on, a mistake while handling one request must not end the thread for everyone:
+  // say what went wrong and keep serving. Anything that fails before this still stops the start.
+  const survive = (err: unknown) => {
+    if (outputBroken) process.exit(1);
+    log(`unexpected error, still running: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+  };
+  process.on("uncaughtException", survive);
+  process.on("unhandledRejection", survive);
   // For the agent's own `lemonlime-runner preview`: where this runner is, and which thread.
   process.env.LEMONLIME_RUNNER_URL = `http://127.0.0.1:${server.port}`;
   // Cloud agents can ask for the user's own computer (their desktop app decides).

@@ -71,6 +71,9 @@ export async function deriveAgentKey(threadSecret: string): Promise<string> {
 /** Longest lifetime a runner or client should accept on a token, from now. */
 export const MAX_TOKEN_LIFETIME_SECONDS = 15 * 60;
 
+/** Longest token anything accepts. Real tokens are a few hundred characters. */
+export const MAX_TOKEN_CHARS = 4096;
+
 export async function signToken(claims: TokenClaims, secret: string): Promise<string> {
   const payload = b64url(enc.encode(JSON.stringify(TokenClaims.parse(claims))));
   const sig = await crypto.subtle.sign("HMAC", await hmacKey(secret), enc.encode(payload));
@@ -80,6 +83,8 @@ export async function signToken(claims: TokenClaims, secret: string): Promise<st
 export type VerifyResult = { ok: true; claims: TokenClaims } | { ok: false; reason: "malformed" | "bad_signature" | "expired" };
 
 export async function verifyToken(token: string, secret: string, nowSec = Math.floor(Date.now() / 1000)): Promise<VerifyResult> {
+  // Whatever arrives from the network: anything that isn't a token of sane size is just refused.
+  if (typeof token !== "string" || token.length > MAX_TOKEN_CHARS) return { ok: false, reason: "malformed" };
   const parts = token.split(".");
   if (parts.length !== 2 || !parts[0] || !parts[1]) return { ok: false, reason: "malformed" };
   const [payload, sig] = parts as [string, string];
@@ -115,8 +120,9 @@ export async function signClaims(claims: Record<string, unknown>, secret: string
 
 /** The claims of a token made by signClaims, or null if it is malformed or the signature is wrong. */
 export async function verifyClaims(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  if (typeof token !== "string" || token.length > MAX_TOKEN_CHARS) return null;
   const parts = token.split(".");
-  if (parts.length !== 2 || !parts[0] || !parts[1] || token.length > 4096) return null;
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
   try {
     const valid = await crypto.subtle.verify("HMAC", await hmacKey(secret), fromB64url(parts[1]), enc.encode(parts[0]));
     if (!valid) return null;

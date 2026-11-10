@@ -3,6 +3,7 @@ import { PermissionMode, ReasoningLevel, ThreadOptions } from "./capabilities.ts
 import { AccountId } from "./accounts.ts";
 import { ThreadEvent } from "./events.ts";
 import { AgentKind, Thread } from "./thread.ts";
+import { MAX_TOKEN_CHARS } from "./token.ts";
 
 /**
  * Messages on the WebSocket between a client (desktop or web) and a runner.
@@ -12,7 +13,7 @@ import { AgentKind, Thread } from "./thread.ts";
 export const ClientHello = z.object({
   type: z.literal("hello"),
   /** Runner token issued by the control plane (cloud) or the desktop app (local). */
-  token: z.string().min(1),
+  token: z.string().min(1).max(MAX_TOKEN_CHARS),
   /** Send every event with seq > resumeFrom. 0 replays the whole history. */
   resumeFrom: z.number().int().nonnegative().default(0),
   /** This app can answer `computer_request`s (the desktop app, which decides what to allow). */

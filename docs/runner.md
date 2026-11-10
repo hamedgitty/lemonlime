@@ -104,7 +104,7 @@ Environment:
 
 | Variable | Purpose |
 | --- | --- |
-| `LEMONLIME_THREAD_SECRET` | The thread's own secret. Client tokens must be signed with it. Required, unless `--secret-stdin` is given. |
+| `LEMONLIME_THREAD_SECRET` | The thread's own secret. Client tokens must be signed with it. Required, unless `--secret-stdin` is given. Prefer `--secret-stdin`: see [Tokens](#tokens) for what the agent can read. |
 | `LEMONLIME_HOME` | Where local worktrees and history live. Default `~/.lemonlime`. |
 
 ### Threads on your other machines (SSH)
@@ -288,14 +288,20 @@ merges the base in, in the thread's own folder only: when it conflicts, the merg
 undone and the conflicting files are listed. `POST /git/pull-request/watch {on}` watches
 the pull request every three minutes and sends the agent a message when its checks fail,
 new comments arrive or it gets merge conflicts; comments alone wake it at most 10 times,
-and it says once if no checks have shown up after 15 minutes. The watch is saved, so it
+and it says once if no checks have shown up after 15 minutes. Only comments from people
+who can push to the repository (owner, member or collaborator) or from the pull request's
+author reach the agent; anyone else's are left out, and the thread says so once. The watch is saved, so it
 carries on after a restart, and stops when the pull request is merged or closed. Diffs are capped at 400 files and 3 MB of
 text; bigger files say they were shortened. Working-tree diffs use a scratch index, so
 the agent's own index is never touched.
 
 Every git call the runner makes turns off `core.fsmonitor`, hooks and bare-repository
-discovery, never runs an external diff or textconv filter, has a time limit, and refuses
-branch names, refs and paths that start with `-`.
+discovery, refuses a remote whose address is a command (`ext::`), never runs an external
+diff or textconv filter, has a time limit, and refuses branch names, refs and paths that
+start with `-`. Settings people rely on still apply to those calls: credential helpers,
+the ssh command, commit signing and content filters (large-file storage is one). The
+agent can edit the repository's config, so a program named there for one of those still
+runs when the runner commits, fetches or pushes.
 
 ## Previews
 
@@ -325,6 +331,10 @@ working folder, given one task. Spawning is idempotent per `request_id`; an agen
 3 working at once, and subagents can start their own once (2 levels). When a subagent
 finishes, its reply is queued to whoever started it as a message, so the work goes on
 with no app open; the thread shows `subagent_started` / `subagent_replied` notices.
+A subagent works under the thread's current permission mode (checked again before each
+of its turns; in plan mode it only looks), and what it has to ask about goes to the user
+like the thread's own requests. Stopping the agent stops its subagents too: they keep
+their conversation and can be messaged again, but nobody is sent a half-finished reply.
 Only the agent that started a subagent can message it. The tools call the runner's
 `/subagents` routes with a runner token signed with the agent key (see Tokens).
 
@@ -335,15 +345,20 @@ In a sandbox, agents also get `computer_read_file`, `computer_list_dir` and
 the newest connected desktop app that said it can answer (`hello.computer`), and the app
 decides by the thread's setting: **Off** (the default), **Read-only**, **Ask first** (it
 shows the exact request, with control, invisible and non-ASCII characters escaped so
-look-alikes can't hide anything) or **Full**. Paths must be absolute and are never
-followed through symbolic links; reads stop at 1 MB, commands at 60 seconds and 256 KB of
-output. With no desktop app open, the agent is told the computer can't be reached.
+look-alikes can't hide anything) or **Full**. Read-only still asks before a file that
+usually holds keys or passwords (`~/.ssh`, `.env`, saved logins, shell history and the
+like). Paths must be absolute, on this computer's own drives, and are never followed
+through symbolic links; reads stop at 1 MB, commands at 60 seconds and 256 KB of output.
+With no desktop app open, the agent is told the computer can't be reached.
 
 The desktop app's native side, not its window, keeps each thread's setting (in
 `~/.lemonlime/computer-access.json`) and checks it on every request; raising a thread's
-setting and each **Ask first** request are confirmed in a native dialog. A command runs in
-its own process group, which is stopped when it ends or times out, so nothing it started is
-left running.
+setting and each question are confirmed in a native dialog. In that dialog "Don't allow"
+is the button Return presses, and only a click on the allow button counts as a yes. One
+question is on screen at a time, a request too long to read in full (over 2,000
+characters) is refused rather than asked, and after a "no" the thread has to wait a few
+seconds before it can ask again. A command runs in its own process group, which is
+stopped when it ends or times out, so nothing it started is left running.
 
 ## Moving a thread (teleport)
 
@@ -489,13 +504,32 @@ connection is closed (code 4001) when the token it opened with runs out; apps re
 once with a fresh token, so removing someone from a workspace cuts them off within one
 token's lifetime.
 
-The agent never gets the thread secret. The runner removes `LEMONLIME_THREAD_SECRET` from
-the environment the agent and everything it starts inherit, and sets `LEMONLIME_AGENT_KEY`
-instead: a key derived from the secret with `deriveAgentKey` that can't be turned back into
-it. The agent's own tools (`lemonlime-runner preview`, the subagents and computer tools, the
-git credential helper) sign with that key, and only those routes accept it. Opening the
-thread as the user (`client` tokens) and talking to the control plane as the runner still
-need the secret, so an agent can't approve its own requests or post as the runner.
+The agent is never handed the thread secret. The runner removes `LEMONLIME_THREAD_SECRET`
+from the environment the agent and everything it starts inherit, and sets
+`LEMONLIME_AGENT_KEY` instead: a key derived from the secret with `deriveAgentKey` that can't
+be turned back into it. The agent's own tools (`lemonlime-runner preview`, the subagents and
+computer tools, the git credential helper) sign with that key, and only those routes accept
+it. Opening the thread as the user (`client` tokens) and talking to the control plane as the
+runner still need the secret.
+
+Whether the agent can go and find the secret depends on how the runner got it:
+
+- **On stdin (`--secret-stdin`).** The secret is never in any process's environment or
+  command line. This is how the desktop app starts local and SSH threads.
+- **In `LEMONLIME_THREAD_SECRET`.** The runner drops the variable for everything it starts,
+  but the operating system keeps the environment a process was started with, and another
+  process of the same user can read it (`/proc/<pid>/environ` on Linux, `ps eww` on macOS).
+  An agent that runs as the runner's user can therefore read the secret, and with it approve
+  its own requests or act as the runner. Use this only where that is acceptable.
+- **With a keeper (the sandbox providers' agent-user setting, see
+  [sandboxes](sandboxes.md)).** A keeper running as root holds the secret and starts the
+  runner and the agent as another user, so neither can read it. The runner asks the keeper to
+  check tokens and to sign its own runner tokens. The agent runs as the same user as the
+  runner, so it can ask the keeper for a runner token too; it still can't make a token that
+  opens the thread as the user.
+
+Without the agent-user setting, a sandbox's runner gets the secret in its environment, so the
+second case applies to it.
 
 ## Idle pausing
 

@@ -13,6 +13,7 @@ import {
   launchCommand,
 } from "../src/index.ts";
 import { envelope } from "../src/e2b.ts";
+import { requestJson } from "../src/http.ts";
 
 interface Call {
   method: string;
@@ -98,6 +99,23 @@ describe("createSandboxProvider", () => {
     createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "daytona", DAYTONA_API_KEY: "k" });
     createSandboxProvider({ LEMONLIME_SANDBOX_PROVIDER: "e2b", E2B_API_KEY: "k" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("requests to a provider", () => {
+  it("give up when the provider doesn't answer in time", async () => {
+    // Never answers, and stops waiting when told to, like the real fetch.
+    const silent = (_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason as Error)));
+    const req = { method: "GET" as const, url: "https://api.example/sandbox/sb1", headers: {}, timeoutMs: 20 };
+    await expect(requestJson(silent, "Daytona", req)).rejects.toThrow("Daytona GET /sandbox/sb1 did not answer within 1s");
+  });
+
+  it("pass on other failures as they are", async () => {
+    const broken = async () => {
+      throw new Error("no route to host");
+    };
+    await expect(requestJson(broken, "E2B", { method: "GET", url: "https://api.example/x", headers: {} })).rejects.toThrow("no route to host");
   });
 });
 
@@ -255,6 +273,13 @@ describe("DaytonaProvider", () => {
       `GET ${API}/sandbox/sb1`,
       `GET ${API}/sandbox/gone`,
     ]);
+  });
+
+  it("doesn't call a sandbox gone when Daytona fails to answer about it", async () => {
+    const { fetch } = scriptedFetch([json({ message: "boom" }, 500), json({ message: "slow down" }, 429)]);
+    const p = make(fetch);
+    await expect(p.get("sb1")).rejects.toThrow("Daytona GET /api/sandbox/sb1 failed with 500: boom");
+    await expect(p.get("sb1")).rejects.toThrow("failed with 429");
   });
 
   it("pauses by stopping and waiting, and ignores missing or stopped sandboxes", async () => {
@@ -418,6 +443,11 @@ describe("E2BProvider", () => {
     expect(await p.get("ib1")).toEqual({ id: "ib1", provider: "e2b", state: "paused", runnerUrl: null });
     expect(await p.get("gone")).toBeNull();
     expect(calls[0]).toMatchObject({ method: "GET", url: `${API}/sandboxes/ib1`, headers: { "x-api-key": "ek" } });
+  });
+
+  it("doesn't call a sandbox gone when E2B fails to answer about it", async () => {
+    const { fetch } = scriptedFetch([json({ message: "boom" }, 500)]);
+    await expect(make(fetch).get("ib1")).rejects.toThrow("E2B GET /sandboxes/ib1 failed with 500: boom");
   });
 
   it("pauses, treating already-paused and missing sandboxes as done", async () => {

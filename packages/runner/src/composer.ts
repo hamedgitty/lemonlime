@@ -1,12 +1,9 @@
-import { execFile } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative, sep } from "node:path";
-import { promisify } from "node:util";
 import { fuzzyFilter, type AgentCommand, type AgentCommandSource, type AgentKind, type FilesResponse, type FolderResponse } from "@lemonlime/protocol";
+import { runGit } from "./git.ts";
 import { listSkills, skillsDirFor } from "./skills.ts";
-
-const run = promisify(execFile);
 
 /**
  * What the app's composer offers as you type: `@` lists files in the thread's working
@@ -33,10 +30,7 @@ export function listWorkdirFiles(workdir: string, now = Date.now()): Promise<str
 }
 
 async function gitFiles(workdir: string): Promise<string[]> {
-  const { stdout } = await run("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], {
-    cwd: workdir,
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const { stdout } = await runGit(["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { cwd: workdir, maxBuffer: 64 * 1024 * 1024 });
   const seen = new Set<string>();
   for (const f of stdout.split("\0")) {
     if (!f || f.startsWith(".lemonlime/")) continue;

@@ -84,7 +84,7 @@ export interface SandboxProvider {
   readonly name: string;
   /** Create a sandbox, start the runner in it and return where to reach it. */
   create(opts: CreateSandboxOptions): Promise<SandboxInfo>;
-  /** Current state, or null if the sandbox no longer exists. */
+  /** Current state, or null if the sandbox no longer exists. Throws when the provider can't say. */
   get(id: string): Promise<SandboxInfo | null>;
   /** Stop compute billing while keeping the sandbox's files. */
   pause(id: string): Promise<void>;

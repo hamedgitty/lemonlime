@@ -24,6 +24,11 @@ export interface RunnerClientOptions {
   onEvent?: (event: ThreadEvent) => void;
   /** `options`: the thread's model, reasoning and permission mode now (newer runners). */
   onWelcome?: (thread: Thread, latestSeq: number, options?: ThreadOptions) => void;
+  /**
+   * The runner's history started over: it holds less than this client had seen. Drop the
+   * events you have; the whole history follows through onEvent.
+   */
+  onReset?: () => void;
   onState?: (state: ConnectionState) => void;
   onError?: (message: string, code?: string) => void;
   /** Sign-in progress (cloud sandboxes). Never part of the history. */
@@ -58,6 +63,8 @@ export class RunnerClient {
   /** Messages sent but not yet acknowledged; resent after a reconnect (the runner ignores repeats). */
   private readonly unacked = new Map<string, ClientMessage>();
   private live = false;
+  /** An attempt to connect is waiting for its token. */
+  private opening = false;
 
   constructor(private readonly opts: RunnerClientOptions) {
     this.lastSeq = opts.resumeFrom ?? 0;
@@ -93,7 +100,7 @@ export class RunnerClient {
     if (this.closedByUser || this.live) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    if (this.ws && this.ws.readyState <= 1) return; // already connecting
+    if (this.opening || (this.ws && this.ws.readyState <= 1)) return; // already connecting
     this.attempts = Math.max(1, this.attempts);
     void this.open();
   }
@@ -208,29 +215,49 @@ export class RunnerClient {
 
   private async open(): Promise<void> {
     this.setState(this.attempts === 0 ? "connecting" : "reconnecting");
+    // One attempt at a time: the one already waiting for its token carries on.
+    if (this.opening) return;
+    this.opening = true;
     let token: string;
     try {
       token = typeof this.opts.token === "string" ? this.opts.token : await this.opts.token();
     } catch (err) {
+      this.opening = false;
+      if (this.closedByUser) return;
       this.opts.onError?.(`Could not get a token: ${String(err)}`);
       return this.scheduleReconnect();
     }
+    this.opening = false;
+    // Closed while the token was on its way: don't open a connection nobody wants.
+    if (this.closedByUser) return;
     const WS = this.opts.WebSocketImpl ?? globalThis.WebSocket;
     const ws = new WS(this.opts.url);
     this.ws = ws;
     this.live = false;
+    // Set when this connection is dropped to ask for the whole history on a new one.
+    let startOver = false;
 
     ws.onopen = () =>
       ws.send(
         JSON.stringify({ type: "hello", token, resumeFrom: this.lastSeq, ...(this.opts.onComputerRequest ? { computer: true } : {}) } satisfies ClientMessage),
       );
     ws.onmessage = ev => {
+      if (startOver) return;
       const msg = parseServerMessage(typeof ev.data === "string" ? ev.data : String(ev.data));
       if (!msg) return;
       switch (msg.type) {
         case "welcome":
           this.attempts = 0;
+          // The runner holds less history than this client has seen, so its history started
+          // over and its numbers begin again. Ask for all of it on a new connection; counting
+          // on from the old number would make every new event look like one already seen.
+          if (msg.latestSeq < this.lastSeq) {
+            this.lastSeq = 0;
+            startOver = true;
+            this.opts.onReset?.();
+          }
           this.opts.onWelcome?.(msg.thread, msg.latestSeq, msg.options);
+          if (startOver) ws.close(1000, "starting over");
           break;
         case "event":
           if (msg.event.seq <= this.lastSeq) return; // already have it
@@ -284,7 +311,8 @@ export class RunnerClient {
           break;
         case "error":
           this.opts.onError?.(msg.message, msg.code);
-          if (msg.code === "unauthorized") this.closedByUser = typeof this.opts.token === "string";
+          // A fixed token that was refused will be refused again, so stop trying.
+          if (msg.code === "unauthorized" && typeof this.opts.token === "string") this.closedByUser = true;
           break;
         case "pong":
           break;
@@ -294,8 +322,8 @@ export class RunnerClient {
       this.live = false;
       if (this.ws === ws) this.ws = null;
       // The runner closes a connection when its token runs out (4001): reconnect at once with
-      // a fresh one, without showing the thread as reconnecting.
-      if (ev?.code === 4001 && !this.closedByUser) {
+      // a fresh one, without showing the thread as reconnecting. The same when starting over.
+      if ((ev?.code === 4001 || startOver) && !this.closedByUser) {
         this.timer = setTimeout(() => void this.open(), 0);
         return;
       }

@@ -3,11 +3,14 @@ import {
   branchForThread,
   ClientMessage,
   deriveThreadSecret,
+  MAX_TOKEN_CHARS,
   newThreadId,
   parseClientMessage,
+  parseTerminalClientMessage,
   signToken,
   ThreadEvent,
   ThreadId,
+  TunnelHello,
   verifyToken,
 } from "../src/index.ts";
 
@@ -81,6 +84,19 @@ describe("tokens", () => {
 
     const old = await signToken({ threadId: "abc123", scope: "client", exp: 10 }, SECRET);
     expect(await verifyToken(old, SECRET)).toEqual({ ok: false, reason: "expired" });
+  });
+
+  it("refuses anything that isn't a token of sane size, without throwing", async () => {
+    for (const bad of [5, null, undefined, {}, ["a.b"], "a".repeat(MAX_TOKEN_CHARS + 1), `${"a".repeat(70_000)}.b`]) {
+      expect(await verifyToken(bad as string, SECRET)).toEqual({ ok: false, reason: "malformed" });
+    }
+    // The first message of every connection is refused before its token is looked at.
+    const long = "a".repeat(MAX_TOKEN_CHARS + 1);
+    expect(parseClientMessage(JSON.stringify({ type: "hello", token: long }))).toBeNull();
+    expect(parseTerminalClientMessage(JSON.stringify({ type: "hello", token: long, cols: 80, rows: 24 }))).toBeNull();
+    expect(TunnelHello.safeParse({ type: "hello", token: long }).success).toBe(false);
+    expect(TunnelHello.safeParse({ type: "hello", token: 5 }).success).toBe(false);
+    expect(parseClientMessage(JSON.stringify({ type: "hello", token: "a".repeat(MAX_TOKEN_CHARS) }))).not.toBeNull();
   });
 
   it("derives a different secret per thread", async () => {

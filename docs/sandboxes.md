@@ -26,6 +26,10 @@ Docker daemon on the same machine. It loads `node:child_process` only when it is
 first used, so importing the package is safe anywhere; on Workers its methods
 throw an error saying to use `daytona` or `e2b` instead.
 
+By default the runner gets the thread secret in its environment and the agent runs as the
+same user, so an agent that looks for the secret can read it (see
+[Tokens](runner.md#tokens)). Turn the agent-user setting on to keep it out of reach.
+
 With `LEMONLIME_DOCKER_AGENT_USER=agent`, the agent runs as its own user, apart from the
 thread secret. The container starts as root with only `SETUID`, `SETGID` and `KILL` added
 back (still `no-new-privileges`), and runs `lemonlime-runner keeper --thread <id>

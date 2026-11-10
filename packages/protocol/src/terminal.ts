@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_TOKEN_CHARS } from "./token.ts";
 
 /**
  * The thread's terminals: shells in the thread's working folder, over their own WebSocket
@@ -26,7 +27,7 @@ export const TerminalClientMessage = z.discriminatedUnion("type", [
   /** First message: a client token for the thread, the window size, and where to resume. */
   z.object({
     type: z.literal("hello"),
-    token: z.string().min(1),
+    token: z.string().min(1).max(MAX_TOKEN_CHARS),
     ...Size,
     /** From an earlier `ready`/`output`: the shell and position the client got up to. */
     shell: z.number().int().nonnegative().optional(),
@@ -96,4 +97,4 @@ export function parseTerminalServerMessage(raw: string): TerminalServerMessage |
  * frame is raw bytes to and from that port inside the sandbox (only ports the agent offered
  * for preview). One WebSocket per TCP connection.
  */
-export const TunnelHello = z.object({ type: z.literal("hello"), token: z.string().min(1) });
+export const TunnelHello = z.object({ type: z.literal("hello"), token: z.string().min(1).max(MAX_TOKEN_CHARS) });

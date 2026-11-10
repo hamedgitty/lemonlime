@@ -22,6 +22,8 @@ export function readSecretLine(input: Readable, timeoutMs = 30_000): Promise<str
       input.off("data", onData);
       input.off("end", onEnd);
       input.off("error", onError);
+      // The other end going away later is for `releaseStdin` to notice, never a crash.
+      input.on("error", () => {});
       input.pause();
       if (err) reject(err);
       else resolve(secret);

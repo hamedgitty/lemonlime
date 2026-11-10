@@ -1,5 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
@@ -51,6 +51,19 @@ describe("reading the thread secret from stdin", () => {
     await new Promise(r => setTimeout(r, 20));
     expect(calls).toBe(1);
   });
+
+  it("treats stdin breaking after the secret as stdin closing, not as a crash", async () => {
+    const input = new PassThrough();
+    const got = readSecretLine(input);
+    input.write(`${SECRET}\n`);
+    expect(await got).toBe(SECRET);
+    // The other end goes away before the runner has finished starting.
+    input.destroy(new Error("read EIO"));
+    await new Promise(r => setTimeout(r, 20));
+    let calls = 0;
+    releaseStdin(input, () => calls++);
+    expect(calls).toBe(1);
+  });
 });
 
 function startRunner(args: string[]): ChildProcessWithoutNullStreams {
@@ -84,6 +97,19 @@ function readyPort(child: ChildProcessWithoutNullStreams): Promise<number> {
   });
 }
 
+/** The command line and environment a process was started with, as the system shows them to its own user. */
+function startedWith(pid: number): string {
+  try {
+    return `${readFileSync(`/proc/${pid}/cmdline`, "utf8")}\n${readFileSync(`/proc/${pid}/environ`, "utf8")}`;
+  } catch {
+    try {
+      return execFileSync("ps", ["eww", "-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+    } catch {
+      return "";
+    }
+  }
+}
+
 const exited = (child: ChildProcessWithoutNullStreams) => new Promise<number | null>(r => child.on("exit", code => r(code)));
 
 describe("lemonlime-runner --secret-stdin", () => {
@@ -94,6 +120,10 @@ describe("lemonlime-runner --secret-stdin", () => {
     const health = (await (await fetch(`http://127.0.0.1:${port}/healthz`)).json()) as { threadId: string };
     expect(health.threadId).toBe("secret-stdin-1");
     expect(child.spawnargs.join(" ")).not.toContain(SECRET);
+    // What another program of the same user can read about the running runner.
+    const seen = startedWith(child.pid!);
+    expect(seen).toContain("secret-stdin-1");
+    expect(seen).not.toContain(SECRET);
   });
 
   it("refuses a short secret", { timeout: 30_000 }, async () => {

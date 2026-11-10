@@ -12,19 +12,19 @@ import {
   SETUP_SCRIPT_TIMEOUT_SECONDS,
   ReasoningLevel,
   withoutRewound,
+  AgentConfig,
+  AgentKind,
+  QueuedMessage,
+  ThreadStatus,
   type AccountRef,
   type AgentCommand,
-  type AgentConfig,
-  type AgentKind,
   type OnLimit,
   type NewEvent,
   type Preview,
   type Question,
-  type QueuedMessage,
   type Thread,
   type ThreadEvent,
   type ThreadOptions,
-  type ThreadStatus,
   type UsageWindow,
 } from "@lemonlime/protocol";
 import { capabilitiesFor } from "./capabilities.ts";
@@ -261,6 +261,64 @@ interface SavedState {
   setupPending?: boolean;
 }
 
+const isText = (v: unknown): v is string => typeof v === "string";
+const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const listOf = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/**
+ * Saved state, keeping only the parts that look like what the runner writes. The file can
+ * sit inside the checkout, where a crash, an older version or the agent may have left
+ * anything in it, so a part that doesn't fit is dropped rather than stopping the start.
+ */
+export function readSavedState(raw: unknown): SavedState | null {
+  if (!isObject(raw)) return null;
+  const state: SavedState = { agentState: {}, status: ThreadStatus.safeParse(raw.status).data ?? "idle" };
+  if (isObject(raw.agentState)) for (const [key, value] of Object.entries(raw.agentState)) if (isText(value)) state.agentState[key] = value;
+  state.queue = listOf(raw.queue).flatMap(q => QueuedMessage.safeParse(q).data ?? []);
+  if (isObject(raw.usageLimit)) state.usageLimit = { resetAt: isText(raw.usageLimit.resetAt) ? raw.usageLimit.resetAt : null };
+  state.autoContinues = listOf(raw.autoContinues).filter(isText);
+  state.restartContinues = listOf(raw.restartContinues).filter(t => typeof t === "number");
+  if (isText(raw.recap)) state.recap = raw.recap;
+  if (isText(raw.account)) state.account = raw.account;
+  if (raw.setupPending === true) state.setupPending = true;
+
+  const o = raw.options;
+  const permission = isObject(o) ? PermissionMode.safeParse(o.permission).data : undefined;
+  if (isObject(o) && permission) {
+    const exitPlanTo = PermissionMode.safeParse(o.exitPlanTo).data;
+    state.options = {
+      model: isText(o.model) ? o.model : null,
+      reasoning: ReasoningLevel.safeParse(o.reasoning).data ?? null,
+      permission,
+      ...(exitPlanTo ? { exitPlanTo } : {}),
+      ...(o.fast === true ? { fast: true } : {}),
+    };
+  }
+  // Only the kind and model of a changed agent are saved; a command to run never comes from here.
+  const agent = AgentConfig.safeParse(raw.agent).data;
+  if (agent) state.agent = { kind: agent.kind, ...(agent.model ? { model: agent.model } : {}) };
+
+  const r = raw.retry;
+  if (isObject(r) && isText(r.clientMsgId) && isText(r.prompt) && (r.reason === "overloaded" || r.reason === "usage_limit")) {
+    if (typeof r.attempts === "number" && isText(r.firstFailedAt) && isText(r.at)) {
+      state.retry = { clientMsgId: r.clientMsgId, prompt: r.prompt, reason: r.reason, attempts: r.attempts, firstFailedAt: r.firstFailedAt, at: r.at };
+    }
+  }
+  const l = raw.limitStop;
+  const stoppedAgent = isObject(l) ? AgentKind.safeParse(l.agent).data : undefined;
+  if (isObject(l) && stoppedAgent && isText(l.clientMsgId) && isText(l.prompt) && isText(l.at)) {
+    state.limitStop = {
+      clientMsgId: l.clientMsgId,
+      prompt: l.prompt,
+      agent: stoppedAgent,
+      account: isText(l.account) ? l.account : null,
+      resetAt: isText(l.resetAt) ? l.resetAt : null,
+      at: l.at,
+    };
+  }
+  return state;
+}
+
 /** A change to the thread's options (see ThreadRunner.setOptions). */
 export interface OptionsChange {
   model?: string | null;
@@ -380,6 +438,10 @@ export class ThreadRunner {
       adapter: live,
       session: this.sessionOpts,
       cwd: opts.workdir,
+      // A subagent may do what the thread's agent may do right now, and asks the same people.
+      autonomy: () => this.options.permission,
+      requestApproval: (req, signal) => this.askUser(req, signal),
+      askQuestions: (questions, signal) => this.askQuestions(questions, signal),
       toMain: (text, id) => {
         if (!this.closing) this.sendMessage(text, `subagent-${id}`);
       },
@@ -862,7 +924,7 @@ export class ThreadRunner {
     this.cancelRetry("You sent a new message, so LemonLime stopped waiting to try the last one again.");
     // `current` is still set for a moment after a turn ends; queue then too, so two
     // turns can never run at once.
-    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching || this.settingUp) {
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching || this.settingUp || this.rewinding) {
       this.queue.push({ clientMsgId, text, queuedAt: new Date().toISOString(), ...(attachments.length ? { attachments } : {}) });
       this.publishQueue();
       this.saveState();
@@ -1010,7 +1072,7 @@ export class ThreadRunner {
     if (!retry || this.closing) return;
     if (!now && Date.parse(retry.at) > Date.now() + 1000) return this.scheduleRetryTimer(); // a long wait, woken early
     // Something else is happening: the user wrote, or the computer is out of room. Try again in a minute.
-    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching) {
+    if (this.status === "running" || this.current || this.queue.length > 0 || this.held || this.switching || this.rewinding) {
       this.retry = { ...retry, at: new Date(Date.now() + 60_000).toISOString() };
       this.saveState();
       return this.scheduleRetryTimer();
@@ -1511,7 +1573,8 @@ export class ThreadRunner {
     this.publishQueue();
     this.saveState();
     if (change.action === "send_now") {
-      if (this.current) this.interrupt();
+      // Only the turn in the way stops; subagents carry on with what they were given.
+      if (this.current) this.stopTurn();
       else this.startNext();
     }
     return true;
@@ -1539,8 +1602,13 @@ export class ThreadRunner {
     return this.held;
   }
 
-  /** Stop the agent's current turn. Queued messages still run afterwards. */
+  /** Stop the agent's current turn and its subagents. Queued messages still run afterwards. */
   interrupt(): void {
+    this.stopTurn();
+    this.subagents.interrupt();
+  }
+
+  private stopTurn(): void {
     this.abort?.abort();
     // Stopping the agent also stops a wait to try a message again (not on the way out, though).
     if (!this.closing && !this.held) this.cancelRetry("Stopped: LemonLime won't try the last message again.");
@@ -1583,19 +1651,43 @@ export class ThreadRunner {
     const abort = new AbortController();
     this.abort = abort;
     this.turnMsgId = clientMsgId;
-    const turn = this.runTurn(prompt, abort, original).finally(() => {
-      if (this.current === turn) this.current = null;
-      const next = this.pendingSwitch;
-      this.pendingSwitch = null;
-      if (next) void this.switchAccount(next, { auto: true }).then(() => this.startNext());
-      else this.startNext();
-    });
+    const turn = this.runTurn(prompt, abort, original)
+      .catch((err: unknown) => this.turnBroke(abort, err))
+      .finally(() => {
+        if (this.current === turn) this.current = null;
+        const next = this.pendingSwitch;
+        this.pendingSwitch = null;
+        if (next) void this.switchAccount(next, { auto: true }).then(() => this.startNext());
+        else this.startNext();
+      });
     this.current = turn;
+  }
+
+  /**
+   * A turn failed in a way nothing planned for, such as history that couldn't be written.
+   * Say so and go back to idle, so the thread isn't stuck and the next message still runs.
+   */
+  private turnBroke(abort: AbortController, err: unknown): void {
+    if (this.abort === abort) this.abort = null;
+    const why = err instanceof Error ? err.message : String(err);
+    try {
+      this.store.append({
+        type: "error",
+        code: "turn_failed",
+        message: `The runner hit a problem while finishing this turn: ${why}\n\nSend a message to carry on.`,
+        fatal: false,
+      });
+      this.setStatus("idle");
+    } catch {
+      // Even that couldn't be written down. Be idle all the same.
+      this.status = "idle";
+    }
   }
 
   /** Start the oldest queued message if the agent is free. */
   private startNext(): void {
-    if (this.closing || this.held || this.switching || this.settingUp || this.status === "running" || this.current || !this.queue.length) return;
+    if (this.closing || this.held || this.switching || this.settingUp || this.rewinding || this.status === "running" || this.current || !this.queue.length)
+      return;
     const next = this.queue.shift()!;
     this.publishQueue();
     this.startTurn(next.text, next.clientMsgId, next.attachments ?? []);
@@ -1828,6 +1920,8 @@ export class ThreadRunner {
   private unpushed = false;
   /** The thread branch's commit, kept current so each user message can record it. */
   private headCommit: string | null = null;
+  /** A rewind is under way: no turn starts until it's done, and messages sent meanwhile wait. */
+  private rewinding = false;
   /** The branch was moved back by a rewind, so the next push replaces the remote one. */
   private rewound = false;
   /** What the thread said before a rewind, handed to the fresh agent conversation once. */
@@ -1843,29 +1937,37 @@ export class ThreadRunner {
     const target = this.store.since(toSeq - 1).find(e => e.seq === toSeq);
     if (!target || target.type !== "user_message") return { error: "That isn't one of your messages." };
     if (restoreFiles && (!this.git || !target.commit)) return { error: "There's no saved point to restore files to for that message." };
-    this.queue = [];
-    this.publishQueue();
-    this.clearUsageLimit();
-    this.interrupt();
-    await this.current?.catch(() => undefined);
-    let restoredTo: string | undefined;
-    let backupRef: string | undefined;
-    if (restoreFiles && this.git && target.commit) {
-      backupRef = `refs/lemonlime/rewind/${Date.now()}`;
-      await this.git.rewindTo(target.commit, backupRef);
-      restoredTo = target.commit;
-      this.headCommit = target.commit;
-      this.rewound = true;
-      this.unpushed = Boolean(this.opts.pushBranch);
+    if (this.rewinding) return { error: "The thread is already going back to an earlier message. Try again in a moment." };
+    this.rewinding = true;
+    try {
+      this.queue = [];
+      this.publishQueue();
+      this.clearUsageLimit();
+      this.interrupt();
+      await this.current?.catch(() => undefined);
+      let restoredTo: string | undefined;
+      let backupRef: string | undefined;
+      if (restoreFiles && this.git && target.commit) {
+        backupRef = `refs/lemonlime/rewind/${Date.now()}`;
+        await this.git.rewindTo(target.commit, backupRef);
+        restoredTo = target.commit;
+        this.headCommit = target.commit;
+        this.rewound = true;
+        this.unpushed = Boolean(this.opts.pushBranch);
+      }
+      // Everything the agent knew came from this conversation, so it starts again from a recap.
+      await this.session?.dispose().catch(() => undefined);
+      this.session = null;
+      this.agentState = {};
+      this.recap = recapBefore(this.store.since(0), toSeq);
+      this.store.append({ type: "rewind", toSeq, ...(restoredTo ? { restoredTo } : {}), ...(backupRef ? { backupRef } : {}) });
+      this.saveState();
+      return { text: target.text };
+    } finally {
+      this.rewinding = false;
+      // A message sent meanwhile starts now, on the thread as it is after going back.
+      this.startNext();
     }
-    // Everything the agent knew came from this conversation, so it starts again from a recap.
-    await this.session?.dispose();
-    this.session = null;
-    this.agentState = {};
-    this.recap = recapBefore(this.store.since(0), toSeq);
-    this.store.append({ type: "rewind", toSeq, ...(restoredTo ? { restoredTo } : {}), ...(backupRef ? { backupRef } : {}) });
-    this.saveState();
-    return { text: target.text };
   }
 
   /** Where moved threads are packed and unpacked. */
@@ -1979,7 +2081,7 @@ export class ThreadRunner {
     const f = this.stateFile();
     if (!f || !existsSync(f)) return null;
     try {
-      return JSON.parse(readFileSync(f, "utf8")) as SavedState;
+      return readSavedState(JSON.parse(readFileSync(f, "utf8")));
     } catch {
       return null;
     }

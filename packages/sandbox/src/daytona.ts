@@ -119,8 +119,10 @@ export class DaytonaProvider implements SandboxProvider {
     try {
       const sandbox = await this.fetchSandbox(id);
       return await this.info(sandbox, Number(sandbox.labels?.[RUNNER_PORT_LABEL]) || null);
-    } catch {
-      return null;
+    } catch (err) {
+      // Gone only when Daytona says so. Anything else, such as an outage, is an error.
+      if (isStatus(err, 404)) return null;
+      throw err;
     }
   }
 

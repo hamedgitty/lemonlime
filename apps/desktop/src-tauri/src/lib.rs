@@ -78,14 +78,31 @@ fn fit_on_screen(window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Puts the window in front of the person: shown, out of the dock or taskbar, and focused.
+fn bring_forward(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 pub fn run() {
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // Only one copy of the app runs at a time, so two copies never start runners for the
+    // same thread, and a sign-in link opened from the browser reaches the window that asked
+    // for it (on Windows and Linux a link starts the app again; that second copy hands the
+    // link over and exits). It has to be the first plugin. A development build is left out
+    // so it can run beside the installed app.
+    if !cfg!(debug_assertions) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| bring_forward(app)));
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         // Size, place and maximised, checked against the connected displays when put back.
         .plugin(

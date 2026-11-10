@@ -2,10 +2,14 @@
 //! bound to 127.0.0.1 on a free port, with a fresh random thread secret. The
 //! frontend signs short-lived client tokens with that secret and connects to
 //! `ws://127.0.0.1:<port>/ws`.
+//!
+//! The secret is sent to the runner on its stdin (`--secret-stdin`), never in its
+//! environment or on its command line, where other programs running as the same user
+//! could read it for as long as the runner lives.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -30,8 +34,9 @@ pub(crate) struct RunnerProcess {
     pub(crate) port: u16,
     pub(crate) secret: String,
     pub(crate) log_path: PathBuf,
-    /// For a thread on another machine: the ssh session's stdin, kept open for as long as
-    /// the thread runs. Closing it ends the session, and the remote runner with it.
+    /// The pipe the thread secret was sent on, kept open for as long as the thread runs.
+    /// Closing it tells the runner to stop; for a thread on another machine it is the ssh
+    /// session's stdin, and closing it ends the session and the remote runner with it.
     pub(crate) stdin: Option<ChildStdin>,
 }
 
@@ -401,8 +406,9 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
         }
         cmd.args(thread_flags(agent_command.as_deref(), req.model, req.reasoning, req.fast, req.base_branch, &req.settings));
         cmd.args(req.start.flags());
-        // If this app crashes or is force-quit, the runner stops too instead of living on.
-        cmd.arg("--exit-with-parent");
+        // If this app crashes or is force-quit, the runner stops too instead of living on:
+        // it notices its parent changing, and its stdin (held open below) closing.
+        cmd.arg("--secret-stdin").arg("--exit-with-parent");
         // The terminal's native PTY module ships next to the bundled runner, which can't carry it.
         if let Ok(pty) = app.path().resolve("node-pty", tauri::path::BaseDirectory::Resource) {
             if pty.join("node_modules").is_dir() {
@@ -415,11 +421,13 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
                 cmd.env("LEMONLIME_SKILLS_DIR", skills);
             }
         }
-        cmd.env("LEMONLIME_THREAD_SECRET", &secret)
-            .env("PATH", paths::search_path())
+        cmd.env("PATH", paths::search_path())
+            // Nothing this app was started with may stand in for the secret sent below.
+            .env_remove("LEMONLIME_THREAD_SECRET")
+            .env_remove("LEMONLIME_KEEPER")
             .env_remove("LEMONLIME_RUNNER_PORT")
             .current_dir(&workdir)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err));
         #[cfg(windows)]
@@ -428,13 +436,19 @@ fn start_blocking(app: &AppHandle, req: StartRequest) -> Result<RunnerInfo, Stri
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Could not start {}: {e}", program.display()))?;
+        // The secret is the first line on the runner's stdin. A runner that has already
+        // exited makes this fail; the wait below then reports why, from its log.
+        let mut stdin = child.stdin.take();
+        if let Some(pipe) = stdin.as_mut() {
+            let _ = pipe.write_all(format!("{secret}\n").as_bytes()).and_then(|()| pipe.flush());
+        }
 
         runners.insert(
             req.thread_id.clone(),
-            RunnerProcess { child, port, secret: secret.clone(), log_path: log_path.clone(), stdin: None },
+            RunnerProcess { child, port, secret: secret.clone(), log_path: log_path.clone(), stdin },
         );
         (RunnerInfo { port, secret }, log_path)
     };
@@ -502,7 +516,6 @@ pub(crate) fn wait_until_ready(app: &AppHandle, thread_id: &str, port: u16, log_
 
 /// GET /healthz through the port; true when the runner for this thread answers.
 fn answers_health(addr: &SocketAddr, thread_id: &str) -> bool {
-    use std::io::Write;
     let Ok(mut stream) = TcpStream::connect_timeout(addr, Duration::from_millis(500)) else { return false };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
@@ -515,9 +528,9 @@ fn answers_health(addr: &SocketAddr, thread_id: &str) -> bool {
     text.starts_with("HTTP/1.1 200") && text.contains(&format!("\"threadId\":\"{thread_id}\""))
 }
 
-/// Stops a runner. For one on another machine, closing the ssh session's stdin first lets
-/// the remote runner stop cleanly (it stops when its stdin closes); then the ssh process is
-/// ended like a local runner.
+/// Stops a runner. Closing its stdin first lets it stop cleanly (it stops when its stdin
+/// closes), which for one on another machine also ends the ssh session; a runner still
+/// there after a while is ended the hard way.
 pub(crate) fn stop(p: RunnerProcess) {
     let RunnerProcess { mut child, stdin, .. } = p;
     if let Some(stdin) = stdin {

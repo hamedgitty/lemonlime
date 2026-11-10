@@ -32,10 +32,15 @@
       "csp": {
         "default-src": "'self'",
         "connect-src": "'self' ipc: http://ipc.localhost ws://127.0.0.1:* ws://localhost:* http: https: ws: wss:",
-        "img-src": "'self' data: asset: http://asset.localhost",
+        "img-src": "'self' data: blob: asset: http://asset.localhost",
+        "media-src": "'self' blob:",
         "style-src": "'self' 'unsafe-inline'",
         "font-src": "'self' data:",
-        "frame-src": "http://127.0.0.1:* http://localhost:*"
+        "frame-src": "http://127.0.0.1:* http://localhost:* blob:",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'self'",
+        "frame-ancestors": "'none'"
       }
     }
   },
@@ -46,7 +51,7 @@
     "shortDescription": "Run coding agents on your computer or in cloud sandboxes.",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "createUpdaterArtifacts": true,
-    "macOS": { "entitlements": "Entitlements.plist", "hardenedRuntime": true },
+    "macOS": { "entitlements": "Entitlements.plist", "hardenedRuntime": true, "minimumSystemVersion": "13.3" },
     "externalBin": ["binaries/lemonlime-runner"],
     "resources": {
       "../../../packages/runner/skills/": "skills/",

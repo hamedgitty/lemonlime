@@ -14,23 +14,46 @@ fn entry(name: &str) -> Result<Entry, String> {
     Entry::new(SERVICE, name).map_err(|e| format!("Could not open the keychain: {e}"))
 }
 
-#[tauri::command]
-pub fn secret_get(name: String) -> Result<Option<String>, String> {
-    match entry(&name)?.get_password() {
+fn read(name: &str) -> Result<Option<String>, String> {
+    match entry(name)?.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(format!("Could not read from the keychain: {e}")),
     }
 }
 
-#[tauri::command]
-pub fn secret_set(name: String, value: String) -> Result<(), String> {
-    let e = entry(&name)?;
+fn write(name: &str, value: &str) -> Result<(), String> {
+    let e = entry(name)?;
     if value.is_empty() {
         return match e.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(err) => Err(format!("Could not remove it from the keychain: {err}")),
         };
     }
-    e.set_password(&value).map_err(|err| format!("Could not save to the keychain: {err}"))
+    e.set_password(value).map_err(|err| format!("Could not save to the keychain: {err}"))
+}
+
+// The keychain can stop to ask the user for permission, so it is never used on the
+// threads that keep the window responsive.
+
+#[tauri::command]
+pub async fn secret_get(name: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || read(&name)).await.map_err(|e| format!("Could not read from the keychain: {e}"))?
+}
+
+#[tauri::command]
+pub async fn secret_set(name: String, value: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || write(&name, &value)).await.map_err(|e| format!("Could not save to the keychain: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_stores_the_names_it_knows() {
+        assert!(entry("anything-else").is_err());
+        assert!(read("../control-plane-token").is_err());
+        assert!(write("", "x").is_err());
+    }
 }

@@ -794,14 +794,23 @@ pub struct InstallResult {
     skipped: Vec<String>,
 }
 
-/// Install every plugin `source_root` holds into `dir`. One plugin is turned on straight away;
-/// several from a marketplace are installed off, for the user to pick from.
-fn install_from(dir: &Path, source_root: &Path, source: &str, git_ref: Option<String>, commit: Option<String>) -> Result<InstallResult, String> {
+/// Install every plugin `source_root` holds into `dir`. One plugin is turned on straight away
+/// when `turn_on` says so; several from a marketplace are always installed off, for the user
+/// to pick from.
+fn install_from(dir: &Path, source_root: &Path, source: &str, git_ref: Option<String>, commit: Option<String>, turn_on: bool) -> Result<InstallResult, String> {
     let (candidates, skipped, _) = find_plugins(source_root, None)?;
-    install_candidates(dir, &candidates, skipped, source, git_ref, commit)
+    install_candidates(dir, &candidates, skipped, source, git_ref, commit, turn_on)
 }
 
-fn install_candidates(dir: &Path, candidates: &[Candidate], mut skipped: Vec<String>, source: &str, git_ref: Option<String>, commit: Option<String>) -> Result<InstallResult, String> {
+fn install_candidates(
+    dir: &Path,
+    candidates: &[Candidate],
+    mut skipped: Vec<String>,
+    source: &str,
+    git_ref: Option<String>,
+    commit: Option<String>,
+    turn_on: bool,
+) -> Result<InstallResult, String> {
     let scratch = Scratch::new(dir)?;
     let single = candidates.len() == 1 && skipped.is_empty();
     let _guard = lock();
@@ -819,7 +828,7 @@ fn install_candidates(dir: &Path, candidates: &[Candidate], mut skipped: Vec<Str
                 name: m.name.clone(),
                 source: source.to_string(),
                 version: m.version.clone(),
-                enabled: single,
+                enabled: single && turn_on,
                 installed_at: now.clone(),
                 updated_at: now,
                 commit: commit.clone(),
@@ -852,7 +861,7 @@ pub fn install_folder_into(dir: &Path, folder: &Path) -> Result<InstallResult, S
     if folder.starts_with(dir) {
         return Err("That folder is already inside your plugins folder.".into());
     }
-    install_from(dir, &folder, &folder.to_string_lossy(), None, None)
+    install_from(dir, &folder, &folder.to_string_lossy(), None, None, true)
 }
 
 /// Run git with no prompts in the terminal, giving up after GIT_TIMEOUT.
@@ -939,7 +948,10 @@ fn pin(checkout: &Path, sha: &str, head: String) -> Result<String, String> {
 
 /// Install from a git repository: the plugin it is, every plugin its marketplace lists from
 /// its own folders, or with `only` just the named one (which may live in another repository).
-pub fn install_git_into(dir: &Path, url: &str, git_ref: Option<String>, only: Option<String>) -> Result<InstallResult, String> {
+/// Fetch a plugin, or a marketplace of them, from a Git address. What arrives can bring hooks,
+/// commands and servers that run on this computer in every new thread, so it stays turned off
+/// for the person to look over, unless `turn_on` says they picked that very plugin to use.
+pub fn install_git_into(dir: &Path, url: &str, git_ref: Option<String>, only: Option<String>, turn_on: bool) -> Result<InstallResult, String> {
     let url = url.trim();
     valid_git_url(url)?;
     let git_ref = git_ref.map(|r| r.trim().to_string()).filter(|r| !r.is_empty());
@@ -951,11 +963,11 @@ pub fn install_git_into(dir: &Path, url: &str, git_ref: Option<String>, only: Op
     let checkout = scratch.0.join("clone");
     let commit = clone(url, git_ref.as_deref(), &checkout)?;
     let Some(name) = only else {
-        return install_from(dir, &checkout, url, git_ref, Some(commit));
+        return install_from(dir, &checkout, url, git_ref, Some(commit), turn_on);
     };
     let (found, skipped, remote) = find_plugins(&checkout, Some(&name))?;
     if !found.is_empty() {
-        return install_candidates(dir, &found, skipped, url, git_ref, Some(commit));
+        return install_candidates(dir, &found, skipped, url, git_ref, Some(commit), turn_on);
     }
     let Some(r) = remote else {
         return Err(skipped.join(" "));
@@ -974,7 +986,7 @@ pub fn install_git_into(dir: &Path, url: &str, git_ref: Option<String>, only: Op
         return Err(format!("{}'s folder isn't in {}.", r.name, r.url));
     }
     let c = Candidate { name: r.name.clone(), folder, subpath: r.path.clone(), entry: Some(r.entry) };
-    install_candidates(dir, &[c], Vec::new(), &r.url, r.git_ref, Some(head))
+    install_candidates(dir, &[c], Vec::new(), &r.url, r.git_ref, Some(head), turn_on)
 }
 
 #[derive(Serialize, Debug)]
@@ -1140,8 +1152,8 @@ pub async fn read_plugin(name: String) -> Result<PluginDetail, String> {
 }
 
 #[tauri::command]
-pub async fn install_plugin_from_git(url: String, git_ref: Option<String>, plugin: Option<String>) -> Result<InstallResult, String> {
-    blocking(move || install_git_into(&require_dir()?, &url, git_ref, plugin)).await
+pub async fn install_plugin_from_git(url: String, git_ref: Option<String>, plugin: Option<String>, turn_on: Option<bool>) -> Result<InstallResult, String> {
+    blocking(move || install_git_into(&require_dir()?, &url, git_ref, plugin, turn_on.unwrap_or(false))).await
 }
 
 #[tauri::command]
@@ -1337,8 +1349,9 @@ mod tests {
         let Ok(url) = std::env::var("LEMONLIME_PLUGIN_TEST_URL") else { return };
         let home = TempDir::new("git");
         let only = std::env::var("LEMONLIME_PLUGIN_TEST_NAME").ok();
-        let result = install_git_into(&home.0, &url, None, only).unwrap();
+        let result = install_git_into(&home.0, &url, None, only, false).unwrap();
         assert!(!result.installed.is_empty());
+        assert!(result.installed.iter().all(|p| !p.enabled), "what was fetched starts off");
         assert!(result.installed[0].commit.as_deref().is_some_and(|c| c.len() == 40));
         let checks = check_updates_in(&home.0).unwrap();
         assert!(checks.iter().all(|c| c.error.is_none()), "{checks:?}");
@@ -1346,6 +1359,22 @@ mod tests {
         let name = result.installed[0].name.clone();
         update_in(&home.0, &name).unwrap();
         assert!(read_in(&home.0, &name).is_ok());
+    }
+
+    #[test]
+    fn a_fetched_plugin_starts_off_unless_it_was_picked_to_use() {
+        let src = TempDir::new("fetched");
+        make_plugin(&src.0, "kit");
+        let commit = Some("c".repeat(40));
+        let looked_over = TempDir::new("lookhome");
+        let result = install_from(&looked_over.0, &src.0, "https://example.com/kit.git", None, commit.clone(), false).unwrap();
+        assert_eq!(result.installed.len(), 1);
+        assert!(!result.installed[0].enabled);
+        let reg: Value = serde_json::from_str(&fs::read_to_string(looked_over.0.join(REGISTRY_FILE)).unwrap()).unwrap();
+        assert_eq!(reg["plugins"][0]["enabled"], false);
+        let picked = TempDir::new("pickhome");
+        let result = install_from(&picked.0, &src.0, "https://example.com/kit.git", None, commit, true).unwrap();
+        assert!(result.installed[0].enabled);
     }
 
     #[test]

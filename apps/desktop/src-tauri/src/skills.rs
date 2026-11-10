@@ -96,7 +96,7 @@ fn agent_skill_dirs() -> Vec<(PathBuf, &'static str)> {
     ]
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_skills(app: AppHandle) -> Vec<SkillInfo> {
     let mut out = bundled_dir(&app).map(|d| list_in(&d, "bundled")).unwrap_or_default();
     if let Some(dir) = user_skills_dir() {
@@ -156,7 +156,7 @@ fn files_in(dir: &Path, prefix: &str, out: &mut Vec<String>) {
 }
 
 /// A skill's SKILL.md and what else is in its folder, for the preview.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn read_skill(app: AppHandle, name: String, source: String) -> Result<SkillDetail, String> {
     let dir = skill_dir(&app, &name, &source)?;
     let bytes = fs::read(dir.join("SKILL.md")).map_err(|e| format!("Couldn't read it: {e}"))?;
@@ -168,7 +168,7 @@ pub fn read_skill(app: AppHandle, name: String, source: String) -> Result<SkillD
 
 /// Copy a bundled or agent skill into the user's skills, so it can be changed and reaches
 /// every agent and thread. `as_name` renames the copy.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn fork_skill(app: AppHandle, name: String, source: String, as_name: Option<String>) -> Result<String, String> {
     if source == "yours" {
         return Err("That skill is already yours.".into());
@@ -226,7 +226,7 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// Copy a skill folder (one holding SKILL.md) into the user's skills. Returns its name.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_skill(path: String) -> Result<String, String> {
     let from = PathBuf::from(&path);
     if !from.join("SKILL.md").is_file() {
@@ -260,7 +260,7 @@ pub struct DownloadedFile {
 /// Save a skill downloaded from a public catalogue into the user's skills, under `name`.
 /// The same rules as adding a folder: a SKILL.md, a plain name, under 20 MB, nothing
 /// outside its folder. It is written next to the skills first and moved in once complete.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_skill_files(name: String, files: Vec<DownloadedFile>) -> Result<String, String> {
     let dir = user_skills_dir().ok_or("Couldn't find your home folder.")?;
     add_files_into(&dir, &name, files)
@@ -338,7 +338,7 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 }
 
 /// Remove one of the user's skills (never a bundled one).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_skill(name: String) -> Result<(), String> {
     if !valid_name(&name) {
         return Err("Not a skill name.".into());
@@ -352,7 +352,7 @@ pub fn remove_skill(name: String) -> Result<(), String> {
 }
 
 /// Where the user's skills live, created if missing (for "Open folder").
-#[tauri::command]
+#[tauri::command(async)]
 pub fn skills_folder() -> Result<String, String> {
     let dir = user_skills_dir().ok_or("Couldn't find your home folder.")?;
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -395,7 +395,7 @@ fn collect_text(dir: &Path, prefix: &str, out: &mut std::collections::BTreeMap<S
 }
 
 /// The text files of some of the user's skills, to upload for cloud sandboxes.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn export_skills(names: Vec<String>) -> Result<Vec<ExportedSkill>, String> {
     let dir = user_skills_dir().ok_or("Couldn't find your home folder.")?;
     let mut total = 0;

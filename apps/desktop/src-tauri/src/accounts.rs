@@ -11,7 +11,7 @@ use std::thread;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::paths;
 use crate::runner::runner_command;
@@ -149,7 +149,7 @@ pub async fn agent_accounts(
 
 /// Signs an account in (its agent's own sign-in, in the account's folder). Progress
 /// arrives as `account-login` events; a new sign-in replaces one still running.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn account_login_start(app: AppHandle, state: State<'_, AccountLogin>, agent: String, id: String, runner_path: Option<String>) -> Result<(), String> {
     let args = checked_args("login", Some(&agent), Some(&id), None, None)?;
     state.stop();
@@ -161,6 +161,7 @@ pub fn account_login_start(app: AppHandle, state: State<'_, AccountLogin>, agent
     let stdout = child.stdout.take().ok_or("The runner's output couldn't be read.")?;
     let stderr = child.stderr.take();
     let stdin = child.stdin.take();
+    let pid = child.id();
     *state.lock() = Some((child, stdin));
     thread::spawn(move || {
         let mut finished = false;
@@ -178,6 +179,21 @@ pub fn account_login_start(app: AppHandle, state: State<'_, AccountLogin>, agent
             let message = failure(&err);
             let _ = app.emit("account-login", LoginEvent { line: serde_json::json!({ "login": { "state": "failed", "message": message } }) });
             let _ = app.emit("account-login", LoginEvent { line: serde_json::json!({ "done": true, "ok": false }) });
+        }
+        // The sign-in ended by itself: collect its process, unless a newer sign-in has
+        // taken its place (that one is collected when it ends, is cancelled or replaced).
+        let ended = {
+            let login = app.state::<AccountLogin>();
+            let mut slot = login.lock();
+            if slot.as_ref().is_some_and(|(c, _)| c.id() == pid) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        if let Some((mut child, stdin)) = ended {
+            drop(stdin);
+            let _ = child.wait();
         }
     });
     Ok(())

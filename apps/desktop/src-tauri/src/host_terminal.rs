@@ -8,16 +8,28 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Mutex;
 use std::thread;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::paths;
 
+/// How many pieces of typed text may wait for a shell that has stopped reading.
+const TYPED_AHEAD: usize = 1024;
+
 struct Term {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// What the user types, on its way to the shell. A thread of its own does the writing,
+    /// so a shell that has stopped reading can't hold up the window or the other terminals.
+    typed: SyncSender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
+}
+
+/// Ends a shell and collects it, so nothing of it is left behind.
+fn end(mut t: Term) {
+    let _ = t.child.kill();
+    let _ = t.child.wait();
 }
 
 #[derive(Default)]
@@ -30,8 +42,10 @@ impl HostTerminals {
 
     /// Ends every shell. Called when the app exits.
     pub fn close_all(&self) {
-        for (_, mut t) in self.lock().drain() {
-            let _ = t.child.kill();
+        let terms: Vec<Term> = self.lock().drain().map(|(_, t)| t).collect();
+        let ending: Vec<_> = terms.into_iter().map(|t| thread::spawn(move || end(t))).collect();
+        for e in ending {
+            let _ = e.join();
         }
     }
 }
@@ -89,7 +103,7 @@ fn split_utf8(buf: &[u8]) -> (String, Vec<u8>) {
 }
 
 /// Starts a shell in `cwd` (or the home folder) and streams what it prints.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn host_terminal_open(app: AppHandle, state: State<'_, HostTerminals>, cols: u16, rows: u16, cwd: Option<String>) -> Result<Opened, String> {
     let pty = native_pty_system()
         .openpty(PtySize { rows: rows.max(2), cols: cols.max(10), pixel_width: 0, pixel_height: 0 })
@@ -108,9 +122,19 @@ pub fn host_terminal_open(app: AppHandle, state: State<'_, HostTerminals>, cols:
     let child = pty.slave.spawn_command(cmd).map_err(|e| format!("Couldn't start {shell}: {e}"))?;
     drop(pty.slave);
     let mut reader = pty.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pty.master.take_writer().map_err(|e| e.to_string())?;
+    let mut writer = pty.master.take_writer().map_err(|e| e.to_string())?;
+    let (typed, typing) = sync_channel::<Vec<u8>>(TYPED_AHEAD);
     let id = NEXT_ID.fetch_add(1, Ordering::SeqCst);
-    state.lock().insert(id, Term { master: pty.master, writer, child });
+    state.lock().insert(id, Term { master: pty.master, typed, child });
+
+    // Ends when the terminal is closed (nothing can be typed any more) or the shell is gone.
+    thread::spawn(move || {
+        for bytes in typing {
+            if writer.write_all(&bytes).and_then(|()| writer.flush()).is_err() {
+                break;
+            }
+        }
+    });
 
     thread::spawn(move || {
         let mut buf = [0u8; 16 * 1024];
@@ -128,6 +152,12 @@ pub fn host_terminal_open(app: AppHandle, state: State<'_, HostTerminals>, cols:
                 }
             }
         }
+        // The shell is gone: forget it here too, so its process is collected and typing
+        // into it says so.
+        let gone = app.state::<HostTerminals>().lock().remove(&id);
+        if let Some(t) = gone {
+            end(t);
+        }
         let _ = app.emit("host-terminal", Output { id, data: None, exited: true });
     });
 
@@ -137,9 +167,12 @@ pub fn host_terminal_open(app: AppHandle, state: State<'_, HostTerminals>, cols:
 
 #[tauri::command]
 pub fn host_terminal_write(state: State<'_, HostTerminals>, id: u32, data: String) -> Result<(), String> {
-    let mut terms = state.lock();
-    let t = terms.get_mut(&id).ok_or("That terminal has closed.")?;
-    t.writer.write_all(data.as_bytes()).and_then(|_| t.writer.flush()).map_err(|e| e.to_string())
+    let terms = state.lock();
+    let t = terms.get(&id).ok_or("That terminal has closed.")?;
+    t.typed.try_send(data.into_bytes()).map_err(|e| match e {
+        TrySendError::Full(_) => "The terminal isn't reading what you type right now.".to_string(),
+        TrySendError::Disconnected(_) => "That terminal has closed.".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -151,8 +184,10 @@ pub fn host_terminal_resize(state: State<'_, HostTerminals>, id: u32, cols: u16,
 
 #[tauri::command]
 pub fn host_terminal_close(state: State<'_, HostTerminals>, id: u32) {
-    if let Some(mut t) = state.lock().remove(&id) {
-        let _ = t.child.kill();
+    let closed = state.lock().remove(&id);
+    if let Some(t) = closed {
+        // Ending a shell can take a moment; the window doesn't wait for it.
+        thread::spawn(move || end(t));
     }
 }
 

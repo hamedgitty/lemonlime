@@ -20,10 +20,12 @@ tauri-plugin-opener = "2"
 tauri-plugin-http = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
 tauri-plugin-notification = "2"
 # The window opens where it was left, at the size it had.
 tauri-plugin-window-state = "2"
+# One running copy of the app: a second launch, or a sign-in link opened from the browser,
+# goes to the window that is already open.
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 # Terminals on this computer (the side panel), outside any thread.
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }

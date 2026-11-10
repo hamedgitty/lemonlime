@@ -82,17 +82,11 @@ fn kill(pid: u32) {
     }
 }
 
-/// On Windows npm installs `.cmd` shims, which must be run through the shell.
+/// A command that runs `path`. On Windows npm installs `.cmd` shims, which only the shell
+/// can run. The standard library does that itself and makes every argument safe for the
+/// shell (or refuses to start when one can't be), which a hand-built `cmd /C` line did not:
+/// a folder name with `&` in it would have been read as a second command.
 fn program_command(path: &PathBuf) -> Command {
-    #[cfg(windows)]
-    {
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if ext == "cmd" || ext == "bat" {
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(path);
-            return c;
-        }
-    }
     Command::new(path)
 }
 
@@ -392,7 +386,7 @@ fn hold_awake(display: bool) -> Result<AwakeHold, String> {
 
 /// Keep the computer from sleeping (on) or let it (off). `display` keeps the screen on too.
 /// Closing a laptop's lid still sleeps it: that's the OS's call.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_keep_awake(state: State<'_, Awake>, on: bool, display: bool) -> Result<bool, String> {
     let mut slot = state.0.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(hold) = slot.as_ref() {
@@ -458,8 +452,18 @@ pub async fn list_editors() -> Vec<EditorInfo> {
         .unwrap_or_default()
 }
 
+/// Starts a program the app doesn't wait for, and collects it when it ends so it never
+/// lingers as a finished process nobody asked about.
+fn start_and_forget(mut cmd: Command) -> std::io::Result<()> {
+    let mut child = cmd.spawn()?;
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// Opens a folder or file in one of the editors above.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_in_editor(editor: String, path: String) -> Result<(), String> {
     let e = EDITORS.iter().find(|e| e.id == editor).ok_or("Unknown editor.")?;
     let target = PathBuf::from(&path);
@@ -468,23 +472,22 @@ pub fn open_in_editor(editor: String, path: String) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     if mac_app_exists(e.mac_app) {
-        return Command::new("/usr/bin/open")
-            .args(["-a", e.mac_app])
-            .arg(&target)
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| format!("Couldn't open {}: {err}", e.name));
+        let mut open = Command::new("/usr/bin/open");
+        open.args(["-a", e.mac_app]).arg(&target);
+        return start_and_forget(open).map_err(|err| format!("Couldn't open {}: {err}", e.name));
     }
     let cli = paths::find_program(e.cli).ok_or_else(|| format!("{} isn't installed.", e.name))?;
     let mut c = program_command(&cli);
     c.arg(&target).env("PATH", paths::search_path()).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-    c.spawn().map(|_| ()).map_err(|err| format!("Couldn't open {}: {err}", e.name))
+    start_and_forget(c).map_err(|err| format!("Couldn't open {}: {err}", e.name))
 }
 
 /// Asks where to save an export in a native save dialog, then writes the text there. The
-/// place always comes from the person, never from the web view, so a script that got into
-/// the window can't use this to write a file of its choosing (say, an agent's settings file
-/// with hooks that run code). Only text exports, never over a folder. False if cancelled.
+/// place always comes from the person, never from the web view, so this command can't be
+/// handed a path to write to (say, an agent's settings file with hooks that run code).
+/// That keeps a slip in the window's code from turning into a file written anywhere; it is
+/// not a wall around the window, which can already start local agents and terminals.
+/// Only text exports, never over a folder. False if cancelled.
 #[tauri::command]
 pub async fn save_text_file(app: tauri::AppHandle, default_name: String, content: String, filter_name: String, extensions: Vec<String>) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;

@@ -1,12 +1,13 @@
-//! What a cloud agent may do on this computer, once the window has decided the thread's
-//! setting allows it (and asked the user if it should). Paths must be absolute and are
-//! never followed through symlinks, so a link can't point a read somewhere else.
+//! What a cloud agent may do on this computer: each thread's setting is kept and checked
+//! here, and the person is asked in a native dialog when it says to. Paths must be absolute
+//! and are never followed through symlinks, so a link can't point a read somewhere else.
 
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,6 +15,17 @@ use std::time::{Duration, Instant};
 const MAX_READ: u64 = 1024 * 1024;
 const MAX_OUTPUT: usize = 256 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// A request longer than this can't be read in a dialog, so it is refused rather than asked.
+const MAX_ASK_CHARS: usize = 2000;
+/// How many questions may wait behind the one on screen.
+const MAX_WAITING: usize = 3;
+/// After a "no", how long a thread waits before it can ask again.
+const AFTER_NO: Duration = Duration::from_secs(10);
+/// An "allow" this soon after the dialog opened was a click meant for something else.
+const TOO_FAST: Duration = Duration::from_millis(500);
+/// No console window for helper processes (Windows).
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// An absolute path with no `..`, no part of which is a symlink.
 fn safe_path(path: &str) -> Result<PathBuf, String> {
@@ -23,6 +35,11 @@ fn safe_path(path: &str) -> Result<PathBuf, String> {
     }
     if p.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err("Paths with .. aren't allowed.".into());
+    }
+    // On Windows, ordinary drive paths only (C:\…). A network share would send this computer's
+    // sign-in to another machine, and a device path reaches things that aren't files.
+    if p.components().any(|c| matches!(c, Component::Prefix(prefix) if !matches!(prefix.kind(), std::path::Prefix::Disk(_)))) {
+        return Err("Only paths on this computer's own drives are allowed.".into());
     }
     let mut so_far = PathBuf::new();
     for c in p.components() {
@@ -123,6 +140,19 @@ fn stop_group(child: &mut std::process::Child) {
     {
         let _ = Command::new("kill").arg("-KILL").arg("--").arg(format!("-{}", child.id())).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
+    // Windows has no process groups to signal: while the command is still going (a timeout),
+    // take down everything it started along with it.
+    #[cfg(windows)]
+    if matches!(child.try_wait(), Ok(None)) {
+        use std::os::windows::process::CommandExt;
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
     let _ = child.kill();
 }
 
@@ -135,10 +165,14 @@ async fn run_command_at(command: String, cwd: Option<String>) -> Result<String, 
         return Err("That folder doesn't exist.".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        // cmd has quoting rules of its own, so it gets the line exactly as written: with /S it
+        // drops the outer pair of quotes and runs what is between them.
         #[cfg(windows)]
         let mut cmd = {
+            use std::os::windows::process::CommandExt;
             let mut c = Command::new("cmd");
-            c.arg("/C").arg(&command);
+            c.raw_arg(format!("/S /C \"{command}\""));
+            c.creation_flags(CREATE_NO_WINDOW);
             c
         };
         #[cfg(not(windows))]
@@ -197,11 +231,67 @@ async fn run_command_at(command: String, cwd: Option<String>) -> Result<String, 
     .map_err(|e| e.to_string())?
 }
 
+/// Whether a file usually holds keys, tokens or passwords, going by where it is and what it
+/// is called. Reading one is always put to the person first, short of full access.
+fn holds_secrets(path: &Path) -> bool {
+    const FOLDERS: &[&str] = &[".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".password-store", "keychains"];
+    const FOLDER_PAIRS: &[(&str, &str)] = &[(".config", "gh"), (".config", "gcloud"), (".lemonlime", "accounts")];
+    const NAMES: &[&str] = &[
+        ".netrc",
+        "_netrc",
+        ".npmrc",
+        ".pypirc",
+        ".pgpass",
+        ".my.cnf",
+        ".git-credentials",
+        ".credentials.json",
+        "credentials.json",
+        "credentials",
+        "auth.json",
+        ".claude.json",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "login data",
+        "cookies",
+        "cookies.sqlite",
+        "logins.json",
+        "key4.db",
+        "wallet.dat",
+    ];
+    const ENDINGS: &[&str] = &[".pem", ".key", ".p12", ".pfx", ".keystore", ".jks", ".kdbx", ".ppk"];
+    const HARMLESS_ENV: &[&str] = &[".example", ".sample", ".template"];
+
+    let parts: Vec<String> = path
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+            _ => None,
+        })
+        .collect();
+    let Some((name, folders)) = parts.split_last() else { return false };
+    let name = name.as_str();
+    folders.iter().any(|f| FOLDERS.contains(&f.as_str()))
+        || parts.windows(2).any(|w| FOLDER_PAIRS.contains(&(w[0].as_str(), w[1].as_str())))
+        || NAMES.contains(&name)
+        || ENDINGS.iter().any(|e| name.ends_with(e))
+        || name == ".env"
+        || (name.starts_with(".env.") && !HARMLESS_ENV.iter().any(|e| name.ends_with(e)))
+        // Shell and database history: what was typed, passwords included.
+        || (name.starts_with('.') && name.ends_with("_history"))
+        // A running program's environment (Linux).
+        || (name == "environ" && parts.first().is_some_and(|p| p == "proc"))
+}
+
 // ── Who may do what ──────────────────────────────────────────────────────────
 //
-// Each cloud thread's level of access to this computer is kept here, in a file only the app
-// writes, and checked here before every request: the window's own code can't grant itself
-// more. Raising a level and each "ask first" request are confirmed in a native dialog.
+// Each cloud thread's level of access to this computer is kept here and checked here before
+// every request, whatever the window sent. Raising a level and each "ask first" request are
+// put to the person in a native dialog, which a page in the window can't click. That guards
+// against a slip in the window's code and against an agent that asks for more than it was
+// given; it is not a wall around the window, which can already start local agents and
+// terminals on this computer.
 
 /// A thread's access, lowest to highest.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -233,7 +323,7 @@ impl Level {
     fn describe(self) -> &'static str {
         match self {
             Level::Off => "no access to this computer",
-            Level::Read => "read files and list folders on this computer",
+            Level::Read => "read files and list folders on this computer (it still asks before files that usually hold keys or passwords)",
             Level::Ask => "ask you before each request on this computer",
             Level::Full => "read files, list folders and run commands on this computer without asking",
         }
@@ -241,7 +331,15 @@ impl Level {
 }
 
 #[derive(Default)]
-pub struct ComputerAccess(Mutex<Option<HashMap<String, String>>>);
+pub struct ComputerAccess {
+    levels: Mutex<Option<HashMap<String, String>>>,
+    /// Held while a question is on screen, so there is only ever one.
+    asking: tauri::async_runtime::Mutex<()>,
+    /// How many questions are waiting for that turn.
+    waiting: AtomicUsize,
+    /// When each thread was last told no.
+    refused: Mutex<HashMap<String, Instant>>,
+}
 
 fn access_file() -> Option<PathBuf> {
     crate::skills::user_skills_dir().and_then(|d| d.parent().map(|p| p.join("computer-access.json")))
@@ -253,7 +351,7 @@ fn valid_thread_id(id: &str) -> bool {
 
 impl ComputerAccess {
     fn with<T>(&self, f: impl FnOnce(&mut HashMap<String, String>) -> T) -> T {
-        let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.levels.lock().unwrap_or_else(|e| e.into_inner());
         let map = guard.get_or_insert_with(|| {
             access_file()
                 .and_then(|f| fs::read_to_string(f).ok())
@@ -286,6 +384,17 @@ impl ComputerAccess {
             fs::rename(&tmp, &file).map_err(|e| e.to_string())
         })
     }
+
+    /// Whether the person said no to this thread a moment ago.
+    fn just_refused(&self, thread_id: &str) -> bool {
+        let mut refused = self.refused.lock().unwrap_or_else(|e| e.into_inner());
+        refused.retain(|_, at| at.elapsed() < AFTER_NO);
+        refused.contains_key(thread_id)
+    }
+
+    fn note_refusal(&self, thread_id: &str) {
+        self.refused.lock().unwrap_or_else(|e| e.into_inner()).insert(thread_id.to_string(), Instant::now());
+    }
 }
 
 /// A string shown exactly as it is: control and invisible characters, and anything outside
@@ -304,15 +413,73 @@ fn shown_exactly(s: &str) -> String {
     out
 }
 
-/// Asks in a native dialog, which the window's own code can't answer for the person.
-fn confirm(app: &tauri::AppHandle, title: &str, message: &str, yes: &str) -> bool {
+const DONT_ALLOW: &str = "Don't allow";
+
+/// Only a click on the allow button is a yes. Whatever else a dialog can come back with (the
+/// other buttons, Escape, a closed window, a platform's stock answers) is a no.
+fn said_yes(answer: &tauri_plugin_dialog::MessageDialogResult, allow: &str) -> bool {
+    allow != DONT_ALLOW && matches!(answer, tauri_plugin_dialog::MessageDialogResult::Custom(label) if label == allow)
+}
+
+/// Asks in a native dialog, which a page in the window can't answer for the person. "Don't
+/// allow" comes first, so it is the button Return presses.
+fn confirm(app: &tauri::AppHandle, title: &str, message: &str, allow: &str) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-    app.dialog()
-        .message(message)
-        .title(title)
-        .kind(MessageDialogKind::Warning)
-        .buttons(MessageDialogButtons::OkCancelCustom(yes.to_string(), "Don't allow".to_string()))
-        .blocking_show()
+    for _ in 0..2 {
+        let opened = Instant::now();
+        let answer = app
+            .dialog()
+            .message(message)
+            .title(title)
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::YesNoCancelCustom(DONT_ALLOW.to_string(), allow.to_string(), "Cancel".to_string()))
+            .blocking_show_with_result();
+        if !said_yes(&answer, allow) {
+            return false;
+        }
+        // Too quick to be an answer: the dialog opened under a click meant for something else. Ask again.
+        if opened.elapsed() >= TOO_FAST {
+            return true;
+        }
+    }
+    false
+}
+
+/// What a thread's level means for one request: refused, allowed outright (`None`), or the
+/// question to put to the person first.
+fn verdict(level: Level, runs: bool, secret: bool, what: &str) -> Result<Option<String>, String> {
+    match level {
+        Level::Off => Err("The user hasn't given this thread access to their computer.".into()),
+        Level::Read if runs => Err("Not allowed: this thread can only read files and list folders.".into()),
+        Level::Full => Ok(None),
+        Level::Read if !secret => Ok(None),
+        Level::Read | Level::Ask => {
+            if what.chars().count() > MAX_ASK_CHARS {
+                return Err("Too long to show the user in full (over 2,000 characters). Ask in smaller steps.".into());
+            }
+            let warning = if secret { "\n\nThis file usually holds keys or passwords." } else { "" };
+            Ok(Some(format!("A cloud agent wants to:\n\n{what}{warning}\n\nAllow it once?")))
+        }
+    }
+}
+
+/// One place in the line for the dialog, given back when dropped.
+struct Waiting<'a>(&'a AtomicUsize);
+
+impl<'a> Waiting<'a> {
+    fn join(count: &'a AtomicUsize) -> Option<Self> {
+        if count.fetch_add(1, Ordering::SeqCst) >= MAX_WAITING {
+            count.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Waiting(count))
+    }
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// Every cloud thread's level, for the window to show.
@@ -329,52 +496,76 @@ pub async fn computer_set_access(app: tauri::AppHandle, state: tauri::State<'_, 
         return Err("That isn't a thread.".into());
     }
     let next = Level::parse(&level).ok_or("That isn't an access level.")?;
-    let now = state.level(&thread_id);
-    if next > now {
-        let question = format!("Let the cloud agent in this thread {}?", next.describe());
-        let app2 = app.clone();
-        let ok = tauri::async_runtime::spawn_blocking(move || confirm(&app2, "Access to this computer", &question, "Allow"))
-            .await
-            .map_err(|e| e.to_string())?;
-        if !ok {
-            return Ok(now.name().to_string());
+    if next > state.level(&thread_id) {
+        let _turn = state.asking.lock().await;
+        // Read again: it may have changed while another question was on screen.
+        let now = state.level(&thread_id);
+        if next > now {
+            let question = format!("Let the cloud agent in this thread {}?", next.describe());
+            let app2 = app.clone();
+            let ok = tauri::async_runtime::spawn_blocking(move || confirm(&app2, "Access to this computer", &question, "Allow"))
+                .await
+                .map_err(|e| e.to_string())?;
+            if !ok {
+                return Ok(now.name().to_string());
+            }
         }
     }
     state.set(&thread_id, next)?;
     Ok(next.name().to_string())
 }
 
-/// Checks the thread's level for a request, asking in a native dialog at "ask first".
-async fn allowed(app: &tauri::AppHandle, state: &ComputerAccess, thread_id: &str, runs: bool, what: String) -> Result<(), String> {
-    match state.level(thread_id) {
-        Level::Off => Err("The user hasn't given this thread access to their computer.".into()),
-        Level::Read if runs => Err("Not allowed: this thread can only read files and list folders.".into()),
-        Level::Read | Level::Full => Ok(()),
-        Level::Ask => {
-            let app2 = app.clone();
-            let message = format!("A cloud agent wants to:\n\n{what}\n\nAllow it once?");
-            let ok = tauri::async_runtime::spawn_blocking(move || confirm(&app2, "A cloud agent is asking", &message, "Allow once"))
-                .await
-                .map_err(|e| e.to_string())?;
-            if ok {
-                Ok(())
-            } else {
-                Err("The user said no.".into())
-            }
-        }
+/// Checks the thread's level for a request, asking in a native dialog when it says to. There
+/// is only ever one question on screen; a few more may wait their turn, and a thread that
+/// was just told no can't ask again straight away.
+async fn allowed(app: &tauri::AppHandle, state: &ComputerAccess, thread_id: &str, runs: bool, secret: bool, what: String) -> Result<(), String> {
+    const JUST_SAID_NO: &str = "The user said no a moment ago. Wait a little before asking again.";
+    if verdict(state.level(thread_id), runs, secret, &what)?.is_none() {
+        return Ok(());
     }
+    if state.just_refused(thread_id) {
+        return Err(JUST_SAID_NO.into());
+    }
+    let Some(place) = Waiting::join(&state.waiting) else {
+        return Err("Too many requests are already waiting for the user's answer.".into());
+    };
+    let _turn = state.asking.lock().await;
+    drop(place);
+    // The setting may have changed, or the person may have said no, while this one waited.
+    let Some(message) = verdict(state.level(thread_id), runs, secret, &what)? else {
+        return Ok(());
+    };
+    if state.just_refused(thread_id) {
+        return Err(JUST_SAID_NO.into());
+    }
+    let app2 = app.clone();
+    let ok = tauri::async_runtime::spawn_blocking(move || confirm(&app2, "A cloud agent is asking", &message, "Allow once"))
+        .await
+        .map_err(|e| e.to_string())?;
+    if ok {
+        Ok(())
+    } else {
+        state.note_refusal(thread_id);
+        Err("The user said no.".into())
+    }
+}
+
+/// File work, off the threads that keep the window responsive.
+async fn off_thread(work: impl FnOnce() -> Result<String, String> + Send + 'static) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn computer_read_file(app: tauri::AppHandle, state: tauri::State<'_, ComputerAccess>, thread_id: String, path: String) -> Result<String, String> {
-    allowed(&app, &state, &thread_id, false, format!("Read the file {}", shown_exactly(&path))).await?;
-    read_file_at(&path)
+    let secret = holds_secrets(Path::new(&path));
+    allowed(&app, &state, &thread_id, false, secret, format!("Read the file {}", shown_exactly(&path))).await?;
+    off_thread(move || read_file_at(&path)).await
 }
 
 #[tauri::command]
 pub async fn computer_list_dir(app: tauri::AppHandle, state: tauri::State<'_, ComputerAccess>, thread_id: String, path: String) -> Result<String, String> {
-    allowed(&app, &state, &thread_id, false, format!("List the folder {}", shown_exactly(&path))).await?;
-    list_dir_at(&path)
+    allowed(&app, &state, &thread_id, false, false, format!("List the folder {}", shown_exactly(&path))).await?;
+    off_thread(move || list_dir_at(&path)).await
 }
 
 #[tauri::command]
@@ -389,7 +580,7 @@ pub async fn computer_run_command(
         Some(c) => format!(" in {}", shown_exactly(c)),
         None => " in your home folder".into(),
     };
-    allowed(&app, &state, &thread_id, true, format!("Run this command{place}:\n\n{}", shown_exactly(&command))).await?;
+    allowed(&app, &state, &thread_id, true, false, format!("Run this command{place}:\n\n{}", shown_exactly(&command))).await?;
     run_command_at(command, cwd).await
 }
 
@@ -407,6 +598,93 @@ mod tests {
         assert!(valid_thread_id("thread-abc123"));
         assert!(!valid_thread_id("../etc"));
         assert!(!valid_thread_id("-abcdef"));
+    }
+
+    #[test]
+    fn only_a_click_on_allow_is_a_yes() {
+        use tauri_plugin_dialog::MessageDialogResult as R;
+        assert!(said_yes(&R::Custom("Allow once".into()), "Allow once"));
+        // Return presses "Don't allow"; Escape and closing the dialog come back as "Cancel".
+        for no in [R::Custom(DONT_ALLOW.into()), R::Custom("Cancel".into()), R::Custom("Allow".into()), R::Ok, R::Yes, R::No, R::Cancel] {
+            assert!(!said_yes(&no, "Allow once"), "{no:?}");
+        }
+        assert!(!said_yes(&R::Custom(DONT_ALLOW.into()), DONT_ALLOW));
+    }
+
+    #[test]
+    fn each_level_refuses_allows_or_asks() {
+        let read = "Read the file /tmp/notes.txt";
+        assert!(verdict(Level::Off, false, false, read).is_err());
+        assert_eq!(verdict(Level::Read, false, false, read), Ok(None));
+        assert!(verdict(Level::Read, true, false, "Run this command").unwrap_err().contains("only read"));
+        assert_eq!(verdict(Level::Full, true, false, "Run this command"), Ok(None));
+        assert_eq!(verdict(Level::Full, false, true, read), Ok(None));
+        assert!(verdict(Level::Ask, false, false, read).unwrap().unwrap().contains(read));
+        // Files that hold keys are asked about even when reading is allowed.
+        let asked = verdict(Level::Read, false, true, "Read the file /home/me/.ssh/id_ed25519").unwrap().unwrap();
+        assert!(asked.contains("keys or passwords") && asked.contains("id_ed25519"));
+        assert!(verdict(Level::Ask, false, true, read).unwrap().unwrap().contains("keys or passwords"));
+        // Nothing too long to read is ever asked.
+        let long = "x".repeat(MAX_ASK_CHARS + 1);
+        assert!(verdict(Level::Ask, true, false, &long).unwrap_err().contains("Too long"));
+        assert!(verdict(Level::Ask, true, false, &"x".repeat(MAX_ASK_CHARS)).unwrap().is_some());
+        assert_eq!(verdict(Level::Full, true, false, &long), Ok(None));
+    }
+
+    #[test]
+    fn knows_the_files_that_hold_keys_and_passwords() {
+        for secret in [
+            "/Users/me/.ssh/id_ed25519",
+            "/Users/me/.ssh/config",
+            "/home/me/.aws/credentials",
+            "/home/me/.config/gh/hosts.yml",
+            "/home/me/.lemonlime/accounts/work/auth.json",
+            "/Users/me/Library/Keychains/login.keychain-db",
+            "/Users/me/.netrc",
+            "/Users/me/.zsh_history",
+            "/Users/me/code/app/.env",
+            "/Users/me/code/app/.ENV.production",
+            "/Users/me/code/app/certs/server.KEY",
+            "/Users/me/.claude/.credentials.json",
+            "/Users/me/.codex/auth.json",
+            "/proc/1/environ",
+            "C:\\Users\\me\\.ssh\\id_rsa",
+        ] {
+            // Windows-style paths only split into parts on Windows.
+            if secret.contains('\\') && !cfg!(windows) {
+                continue;
+            }
+            assert!(holds_secrets(Path::new(secret)), "{secret}");
+        }
+        for plain in [
+            "/Users/me/code/app/README.md",
+            "/Users/me/code/app/.env.example",
+            "/Users/me/code/app/src/keyboard.ts",
+            "/Users/me/code/app/order_history",
+            "/Users/me/.config/git/config",
+            "/Users/me/code/environ",
+            "/",
+        ] {
+            assert!(!holds_secrets(Path::new(plain)), "{plain}");
+        }
+    }
+
+    #[test]
+    fn only_a_few_questions_wait_and_a_no_holds_for_a_while() {
+        let count = AtomicUsize::new(0);
+        let held: Vec<_> = (0..MAX_WAITING).map(|_| Waiting::join(&count).expect("room")).collect();
+        assert!(Waiting::join(&count).is_none());
+        drop(held);
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert!(Waiting::join(&count).is_some());
+
+        let access = ComputerAccess::default();
+        assert!(!access.just_refused("thread-abc123"));
+        access.note_refusal("thread-abc123");
+        assert!(access.just_refused("thread-abc123"));
+        assert!(!access.just_refused("thread-other1"));
+        access.refused.lock().unwrap().insert("thread-abc123".into(), Instant::now() - AFTER_NO);
+        assert!(!access.just_refused("thread-abc123"));
     }
 
     #[test]

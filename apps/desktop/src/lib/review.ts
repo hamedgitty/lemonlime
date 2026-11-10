@@ -134,6 +134,11 @@ export function numberHunk(h: DiffHunk): ReviewLine[] {
   });
 }
 
+/** Whether two runs of diff lines are the same lines, so a pick can outlive a reload. */
+export function sameLines(a: readonly ReviewLine[], b: readonly ReviewLine[]): boolean {
+  return a.length === b.length && a.every((l, i) => l.kind === b[i]!.kind && l.oldNo === b[i]!.oldNo && l.newNo === b[i]!.newNo && l.text === b[i]!.text);
+}
+
 export interface SplitRow {
   left: ReviewLine | null;
   right: ReviewLine | null;

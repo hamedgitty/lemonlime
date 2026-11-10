@@ -73,7 +73,8 @@ export function toast(o: ToastOptions): string {
     title: o.title,
     ...(o.description ? { description: o.description } : { description: undefined }),
     type: o.tone ?? "info",
-    timeout: o.timeout ?? (action ? 6000 : 4000),
+    // A problem takes longer to read than "Archived".
+    timeout: o.timeout ?? (o.tone === "error" ? 8000 : action ? 6000 : 4000),
     priority: o.tone === "error" ? "high" : "low",
     actionProps: action ? actionProps(id, action) : undefined,
     onClose: () => {
@@ -116,9 +117,12 @@ function ToastList() {
     <Toast.Root
       key={t.id}
       toast={t}
+      // What went wrong can be selected and copied, so dragging across it doesn't swipe it away.
+      swipeDirection={t.type === "error" ? [] : undefined}
       className={cx(
         // Rise 16px from 0.97 with a slight blur in, leave faster (motion.md, Toasts).
-        "relative rounded-xl border bg-paper shadow-pop outline-none select-none",
+        "relative rounded-xl border bg-paper shadow-pop outline-none",
+        t.type === "error" ? "select-text" : "select-none",
         "transition-[opacity,transform,filter] duration-[350ms] ease-(--ease-out) data-[ending-style]:duration-[250ms]",
         "data-[starting-style]:translate-y-4 data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0 data-[starting-style]:blur-[2px]",
         "data-[ending-style]:translate-y-2 data-[ending-style]:opacity-0 data-[limited]:opacity-0",
@@ -130,7 +134,7 @@ function ToastList() {
       <Toast.Content className="flex items-center gap-3 py-2.5 pr-2 pl-3.5">
         <div className="min-w-0 flex-1">
           <Toast.Title className={cx("text-[14px] font-medium", t.type === "error" ? "text-danger" : "text-ink")} />
-          <Toast.Description className="mt-0.5 text-[13px] text-ink-soft" />
+          <Toast.Description className="mt-0.5 text-[13px] break-words text-ink-soft" />
         </div>
         {t.actionProps && (
           <Toast.Action className="inline-flex h-8 shrink-0 items-center rounded-lg border border-line-strong bg-paper px-2.5 text-[13px] font-semibold text-ink hover:bg-cream active:scale-[0.97]" />

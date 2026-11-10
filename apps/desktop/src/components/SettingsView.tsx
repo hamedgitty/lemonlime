@@ -29,6 +29,7 @@ import { KeyboardPage } from "./settings/KeyboardPage.tsx";
 import { MachinesPage } from "./settings/MachinesPage.tsx";
 import { ProjectsPage } from "./settings/ProjectsPage.tsx";
 import { UpdatesPage } from "./settings/UpdatesPage.tsx";
+import { composing } from "../lib/ime.ts";
 
 export type { SettingsCtx } from "./settings/context.ts";
 
@@ -168,11 +169,15 @@ export function SettingsSidebar({
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={e => {
+              if (composing(e)) return;
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 if (!results.length) return;
                 e.preventDefault();
                 const step = e.key === "ArrowDown" ? 1 : -1;
-                setActive((activeIndex + step + results.length) % results.length);
+                const next = (activeIndex + step + results.length) % results.length;
+                setActive(next);
+                // Keep the highlighted row in sight when the list is longer than its box.
+                document.getElementById(optionId(next))?.scrollIntoView({ block: "nearest" });
               }
               if (e.key === "Enter" && results[activeIndex]) {
                 e.preventDefault();
@@ -211,7 +216,8 @@ export function SettingsSidebar({
                 role="option"
                 aria-selected={selected}
                 onMouseDown={e => e.preventDefault()}
-                onMouseMove={() => !selected && setActive(i)}
+                // Only a pointer that really moved: the list sliding under a still one doesn't count.
+                onMouseMove={e => (e.movementX || e.movementY) && !selected && setActive(i)}
                 onClick={() => pick(r)}
                 className={cx(
                   "flex min-h-[30px] cursor-default items-center gap-2.5 rounded-lg px-2 text-[14px]",

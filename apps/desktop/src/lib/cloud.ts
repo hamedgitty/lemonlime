@@ -93,7 +93,7 @@ export class CloudApi {
   }
 
   async createAutomation(
-    input: Omit<AutomationInfo, "id" | "enabled" | "nextRunAt" | "recentRuns" | "hasWebhook" | "pausedReason"> & { enabled?: boolean },
+    input: Omit<AutomationInfo, "id" | "enabled" | "nextRunAt" | "recentRuns" | "hasWebhook" | "pausedReason" | "canManage"> & { enabled?: boolean },
   ): Promise<AutomationInfo> {
     return ((await this.request("POST", "/api/automations", input)) as { automation: AutomationInfo }).automation;
   }
@@ -226,6 +226,12 @@ export class CloudApi {
   async saveWorkspaceSettings(patch: Partial<Omit<WorkspaceCloudSettings, "skills" | "canEdit">>): Promise<WorkspaceCloudSettings> {
     const body = (await this.request("PUT", "/api/workspace/settings", patch)) as { canEdit?: boolean; settings?: Partial<WorkspaceCloudSettings> } | null;
     return { ...DEFAULT_WORKSPACE_SETTINGS, ...body?.settings, canEdit: body?.canEdit !== false };
+  }
+
+  /** The skills cloud sandboxes get, with their files. */
+  async workspaceSkills(): Promise<{ name: string; files: Record<string, string> }[]> {
+    const body = (await this.request("GET", "/api/workspace/skills")) as { skills?: { name: string; files: Record<string, string> }[] } | null;
+    return Array.isArray(body?.skills) ? body.skills : [];
   }
 
   /** Replace the skills cloud sandboxes get. */
@@ -393,6 +399,8 @@ export interface AutomationInfo {
   /** Why it turned itself off; null when on or paused by hand. */
   pausedReason?: string | null;
   hasWebhook?: boolean;
+  /** False when someone else set it up and this person isn't a workspace owner: they can look, not change. */
+  canManage?: boolean;
   nextRunAt: string | null;
   recentRuns?: AutomationRun[];
 }
@@ -418,3 +426,27 @@ export const DEFAULT_WORKSPACE_SETTINGS: WorkspaceCloudSettings = {
   autoDeleteDays: null,
   skills: [],
 };
+
+/**
+ * What syncing skills from this computer does. Syncing replaces the cloud's whole list, so
+ * skills another computer added have to be sent back (`keep`) or they are lost (`drop`).
+ * Only skills this computer has can be read from it (`send`).
+ */
+export function planSkillSync(picked: Iterable<string>, mine: readonly string[], cloud: readonly string[]): { send: string[]; keep: string[]; drop: string[] } {
+  const on = new Set(picked);
+  const here = new Set(mine);
+  const elsewhere = cloud.filter(name => !here.has(name));
+  return {
+    send: mine.filter(name => on.has(name)),
+    keep: elsewhere.filter(name => on.has(name)),
+    drop: elsewhere.filter(name => !on.has(name)),
+  };
+}
+
+/** Whether the picked skills are a different set from the one the cloud has now. */
+export function skillsUnsynced(picked: Iterable<string>, mine: readonly string[], cloud: readonly string[]): boolean {
+  const plan = planSkillSync(picked, mine, cloud);
+  const next = [...plan.send, ...plan.keep];
+  const now = new Set(cloud);
+  return next.length !== now.size || next.some(name => !now.has(name));
+}

@@ -44,6 +44,17 @@ const LABELS: Record<TerminalState, string> = {
 };
 
 /**
+ * Whether a terminal may take the keyboard: only when nothing has it, or something in the
+ * terminal's own panel does. A tab reached with the arrow keys keeps it, so the keys can move on.
+ */
+function mayTakeKeyboard(host: HTMLElement | null): boolean {
+  const at = document.activeElement;
+  if (!at || at === document.body) return true;
+  if (at.getAttribute("role") === "tab" && at.matches(":focus-visible")) return false;
+  return Boolean(host?.closest("aside")?.contains(at));
+}
+
+/**
  * A shell in the thread's own folder (its branch), on the computer or sandbox where the
  * agent runs. It keeps running when the panel closes; reopening picks up where it was.
  * A thread can have several, each with its own `terminal` id.
@@ -153,7 +164,8 @@ export function TerminalPanel({
     });
     observer.observe(host.current);
     client.connect();
-    term.focus();
+    // This runs again on every reconnect, so it must not pull the keyboard away from the message box.
+    if (mayTakeKeyboard(host.current)) term.focus();
     return () => {
       observer.disconnect();
       title.dispose();
@@ -194,7 +206,7 @@ export function TerminalPanel({
     if (!t) return;
     requestAnimationFrame(() => {
       try {
-        t.focus();
+        if (mayTakeKeyboard(host.current)) t.focus();
       } catch {
         /* disposed */
       }

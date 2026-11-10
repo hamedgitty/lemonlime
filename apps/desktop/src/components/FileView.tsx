@@ -73,7 +73,9 @@ export function FileView({
         let kind = fileKind(path);
         if (kind === "text" && (looksBinary(buf) || type === "application/octet-stream")) kind = "binary";
         const text = kind === "text" || kind === "csv" ? new TextDecoder().decode(buf.subarray(0, TEXT_SHOW_MAX_CHARS * 2)) : null;
-        if (kind === "image" || kind === "pdf" || kind === "audio" || kind === "video") url = URL.createObjectURL(new Blob([buf], { type: type || undefined }));
+        // A PDF opens in a frame, so its type is ours to set: a frame would run whatever type the runner named.
+        if (kind === "pdf") url = URL.createObjectURL(new Blob([buf], { type: "application/pdf" }));
+        else if (kind === "image" || kind === "audio" || kind === "video") url = URL.createObjectURL(new Blob([buf], { type: type || undefined }));
         setLoaded({ state: "ready", kind, size: buf.length, text, url, type });
       } catch (err) {
         if (!ctl.signal.aborted) setLoaded({ state: "error", message: err instanceof Error ? err.message : String(err) });
@@ -132,7 +134,7 @@ function Body({ loaded, path, line }: { loaded: Extract<Loaded, { state: "ready"
     case "image":
       return (
         <div className="scroll-thin flex min-h-0 flex-1 items-center justify-center overflow-auto bg-cream-deep/50 p-4">
-          <img src={loaded.url!} alt={name} className="max-h-full max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-black/10" />
+          <img src={loaded.url!} alt={name} className="max-h-full max-w-full rounded-md object-contain outline outline-1 -outline-offset-1 outline-line" />
         </div>
       );
     case "pdf":

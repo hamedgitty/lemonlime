@@ -4,6 +4,19 @@ import type { LoginUpdate } from "../lib/useThreadSession.ts";
 import { Button, Spinner, TextInput, openExternal } from "./ui.tsx";
 
 /**
+ * The sign-in link to offer, or null if it isn't a secure web link. The link comes from the
+ * sandbox, so it is only opened when it can't be anything but an ordinary https page.
+ */
+export function secureLink(url: string | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Sign a cloud thread's agent in to the user's own account, inside the sandbox: open the
  * page, approve, paste back the code. Nothing here is recorded in the thread, and the next
  * cloud threads with this agent start signed in.
@@ -20,6 +33,7 @@ export function SignInPanel({
   const [code, setCode] = useState("");
   const [sent, setSent] = useState(false);
   const u = login.update;
+  const link = secureLink(u?.url);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!code.trim()) return;
@@ -63,9 +77,10 @@ export function SignInPanel({
               <Spinner /> Starting sign-in in the sandbox…
             </p>
           )}
-          {u.url && (
+          {u.url && !link && <p className="text-danger">The sandbox sent a sign-in link that isn't safe to open. Close this and try again.</p>}
+          {link && (
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="secondary" onClick={() => void openExternal(u.url!)}>
+              <Button size="sm" variant="secondary" onClick={() => void openExternal(link)}>
                 <ExternalLink aria-hidden="true" className="size-3.5" />
                 Open the sign-in page
               </Button>

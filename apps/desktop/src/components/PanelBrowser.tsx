@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronUp, ExternalLink, FileSearch, Globe, RotateCw, Search, SquareTerminal, X } from "lucide-react";
 import {
   canGoBack,
@@ -9,6 +9,7 @@ import {
   goForward,
   loadRecentAddresses,
   normalizeUrl,
+  panelAddress,
   rememberAddress,
   shortAddress,
   startHistory,
@@ -16,6 +17,7 @@ import {
 } from "../lib/browser.ts";
 import { Kbd, Tip } from "./primitives.tsx";
 import { Button, ICON_BUTTON, cx, openExternal, rowFill } from "./ui.tsx";
+import { composing } from "../lib/ime.ts";
 
 /**
  * The browser in the side panels: Back, Forward and Reload, an address field, find in page
@@ -58,9 +60,12 @@ export function BrowserView({
   onAddress?: (url: string) => void;
   title: string;
 }) {
-  const [history, setHistory] = useState(() => startHistory(url));
-  const [load, setLoad] = useState({ src: url, n: 0 });
+  const [history, setHistory] = useState(() => startHistory(panelAddress(url) ?? url));
+  const [load, setLoad] = useState(() => ({ src: panelAddress(url) ?? url, n: 0 }));
   const here = currentAddress(history);
+  // Only pages from this computer can be shown here. Anything else opens in the person's own browser.
+  const shown = panelAddress(load.src);
+  const [outside, setOutside] = useState<string | null>(null);
   const [typed, setTyped] = useState(() => fromAddress(url));
   const [find, setFind] = useState<number | null>(null);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -105,8 +110,16 @@ export function BrowserView({
       <form
         onSubmit={e => {
           e.preventDefault();
-          const next = toAddress(typed);
-          if (!next) return;
+          const typedAddress = toAddress(typed);
+          if (!typedAddress) return;
+          const next = panelAddress(typedAddress);
+          if (!next) {
+            void openExternal(typedAddress);
+            setOutside(typedAddress);
+            setTyped(fromAddress(here));
+            return;
+          }
+          setOutside(null);
           if (next === here) reload();
           else open(visit(history, next));
         }}
@@ -140,15 +153,35 @@ export function BrowserView({
         </ToolButton>
       </form>
       {find !== null && <FindInPage frame={frame} address={here} nonce={find} onClose={() => setFind(null)} onOpenOutside={() => void openExternal(here)} />}
-      <iframe
-        key={load.n}
-        ref={frame}
-        title={title}
-        src={load.src}
-        onLoad={onLoad}
-        sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
-        className="min-h-0 w-full flex-1 bg-paper"
-      />
+      {outside && (
+        <div role="status" className="flex items-center gap-2 border-b border-line bg-cream-deep/60 px-3 py-2 text-[13px] text-ink-soft">
+          <span className="min-w-0 flex-1 text-pretty">Opened {shortAddress(outside)} in your browser. Only pages from this computer can be shown here.</span>
+          <button type="button" aria-label="Dismiss" className={ICON_BUTTON} onClick={() => setOutside(null)}>
+            <X aria-hidden="true" />
+          </button>
+        </div>
+      )}
+      {shown ? (
+        <iframe
+          key={load.n}
+          ref={frame}
+          title={title}
+          src={shown}
+          onLoad={onLoad}
+          sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals"
+          className="min-h-0 w-full flex-1 bg-paper"
+        />
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="max-w-[340px] text-[14px] text-pretty text-ink-soft">
+            Only pages from this computer, like localhost:3000, can be shown here. {shortAddress(load.src)} opens in your browser.
+          </p>
+          <Button onClick={() => void openExternal(load.src)}>
+            <ExternalLink aria-hidden="true" className="size-4" />
+            Open in your browser
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -248,6 +281,7 @@ function FindInPage({
         value={query}
         onChange={e => setQuery(e.target.value)}
         onKeyDown={e => {
+          if (composing(e)) return;
           if (e.key === "Escape") {
             e.preventDefault();
             onClose();
@@ -298,6 +332,15 @@ export function NewTabPage({
   const [url, setUrl] = useState("");
   const [error, setError] = useState(false);
   const [recents, setRecents] = useState(loadRecentAddresses);
+  const recentsId = useId();
+  // Only pages from this computer can be shown here. Anything else opens in the person's own browser.
+  const [outside, setOutside] = useState<string | null>(null);
+  const go = (address: string) => {
+    const here = panelAddress(address);
+    if (here) return onBrowser(here);
+    void openExternal(address);
+    setOutside(address);
+  };
   return (
     <div className="scroll-thin flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-8">
       <div className="mx-auto flex w-full max-w-[380px] flex-col gap-5">
@@ -307,14 +350,15 @@ export function NewTabPage({
             e.preventDefault();
             const u = normalizeUrl(url || placeholder);
             setError(!u);
-            if (u) onBrowser(u);
+            setOutside(null);
+            if (u) go(u);
           }}
           className="flex flex-col gap-1.5"
         >
           <span className="flex gap-2">
             <input
               value={url}
-              onChange={e => (setUrl(e.target.value), setError(false))}
+              onChange={e => (setUrl(e.target.value), setError(false), setOutside(null))}
               placeholder={placeholder}
               aria-label="Address to open"
               aria-invalid={error}
@@ -329,6 +373,11 @@ export function NewTabPage({
           {error && (
             <span role="alert" className="text-[13px] text-danger">
               That isn't an address. Try something like localhost:3000.
+            </span>
+          )}
+          {outside && (
+            <span role="status" className="text-[13px] text-pretty text-ink-soft">
+              Opened {shortAddress(outside)} in your browser. Only pages from this computer can be shown here.
             </span>
           )}
         </form>
@@ -360,9 +409,9 @@ export function NewTabPage({
           </div>
         )}
         {recents.length > 0 && (
-          <section aria-labelledby="browser-recents">
+          <section aria-labelledby={recentsId}>
             <div className="flex items-baseline justify-between px-1 pb-1">
-              <h3 id="browser-recents" className="font-sans text-[13px] font-medium tracking-normal text-ink-soft">
+              <h3 id={recentsId} className="font-sans text-[13px] font-medium tracking-normal text-ink-soft">
                 Recent
               </h3>
               <button
@@ -381,7 +430,7 @@ export function NewTabPage({
                 <li key={r}>
                   <button
                     type="button"
-                    onClick={() => onBrowser(r)}
+                    onClick={() => go(r)}
                     className={cx(
                       "flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[14px] text-ink transition-colors duration-100",
                       rowFill(false),
@@ -395,7 +444,9 @@ export function NewTabPage({
             </ul>
           </section>
         )}
-        <p className="text-center text-[13px] text-pretty text-ink-faint">Local dev servers work best; many websites refuse to be shown inside another app.</p>
+        <p className="text-center text-[13px] text-pretty text-ink-faint">
+          Pages from this computer, like localhost:3000, open here. Other addresses open in your browser.
+        </p>
       </div>
     </div>
   );

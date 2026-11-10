@@ -25,6 +25,7 @@ import { snoozeChoices, threadMenuGroups, type ThreadMenuEntry, type ThreadMenuI
 import { ContextMenu, Menu, MenuItem, MenuSeparator, SubMenu } from "./primitives.tsx";
 import { toast } from "./Toaster.tsx";
 import { cx } from "./ui.tsx";
+import { composing } from "../lib/ime.ts";
 
 /** What a place can do to the thread; a missing handler leaves its item out. */
 export interface ThreadMenuHandlers {
@@ -228,6 +229,7 @@ export function RenameField({ initial, onDone, className = "text-[14px]" }: { in
       aria-label="Thread name"
       onChange={e => setValue(e.target.value)}
       onKeyDown={e => {
+        if (composing(e)) return;
         if (e.key === "Enter") finish(value);
         else if (e.key === "Escape") finish(null);
       }}

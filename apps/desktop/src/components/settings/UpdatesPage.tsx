@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { inDesktopShell } from "../../lib/native.ts";
-import { checkForUpdate, type AvailableUpdate } from "../../lib/updates.ts";
+import { checkForUpdateNow, type AvailableUpdate } from "../../lib/updates.ts";
 import { AGENT_LABELS } from "../../lib/format.ts";
 import { Button, Spinner, openExternal } from "../ui.tsx";
 import { needsUpdate } from "../../lib/models.ts";
@@ -17,14 +17,18 @@ const LINKS: [string, string, string][] = [
 ];
 
 export function UpdatesPage({ ctx }: { ctx: SettingsCtx }) {
-  const [state, setState] = useState<"idle" | "checking" | "current" | "available" | "installing" | "error">("idle");
+  const [state, setState] = useState<"idle" | "checking" | "current" | "available" | "installing" | "error" | "unchecked">("idle");
   const [update, setUpdate] = useState<AvailableUpdate | null>(null);
   const [progress, setProgress] = useState(0);
   const check = async () => {
     setState("checking");
-    const u = await checkForUpdate();
-    setUpdate(u);
-    setState(u ? "available" : "current");
+    try {
+      const u = await checkForUpdateNow();
+      setUpdate(u);
+      setState(u ? "available" : "current");
+    } catch {
+      setState("unchecked");
+    }
   };
   const install = async () => {
     if (!update) return;
@@ -55,9 +59,11 @@ export function UpdatesPage({ ctx }: { ctx: SettingsCtx }) {
                   ? `Installing${progress ? ` (${Math.round(progress * 100)}%)` : ""}… LemonLime restarts when it's done.`
                   : state === "error"
                     ? "The update didn't install. Try again later."
-                    : inDesktopShell()
-                      ? "Check whether a newer version is out."
-                      : "Updates only work in the desktop app."
+                    : state === "unchecked"
+                      ? "Couldn't check for updates. Check your internet connection and try again."
+                      : inDesktopShell()
+                        ? "Check whether a newer version is out."
+                        : "Updates only work in the desktop app."
           }
         >
           {state === "available" ? (

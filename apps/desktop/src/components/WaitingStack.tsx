@@ -1,9 +1,10 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ArrowDownToLine, ArrowUpToLine, ChevronDown, Clock, MoreHorizontal, Pencil, ShieldQuestionMark, Trash2, X } from "lucide-react";
 import type { ApprovalItem, QueuedMessage } from "../lib/timeline.ts";
 import type { EditDraft } from "../lib/messageActions.ts";
 import type { EditQueuedFn } from "../lib/useThreadSession.ts";
 import { clockTime } from "../lib/format.ts";
+import { composing } from "../lib/ime.ts";
 import { Menu, MenuItem, MenuSeparator } from "./primitives.tsx";
 import { Button, Spinner, cx } from "./ui.tsx";
 
@@ -24,6 +25,12 @@ const COMMAND_TOOLS = /^(bash|shell|execute|run|terminal)/i;
 /** The agent asks to do something: a paper card with a lemon edge, so it isn't mistaken for your own message. */
 export function ApprovalCard({ item, onApprove, more }: { item: ApprovalItem; onApprove?: ApproveFn | undefined; more: number }) {
   const [sent, setSent] = useState<"allow" | "deny" | null>(null);
+  // If the answer never arrived (the connection dropped as it left), the buttons come back.
+  useEffect(() => {
+    if (!sent) return;
+    const t = setTimeout(() => setSent(null), 10_000);
+    return () => clearTimeout(t);
+  }, [sent]);
   const isCommand = COMMAND_TOOLS.test(item.tool);
   const answer = (decision: "allow" | "deny") => {
     if (sent || !onApprove) return;
@@ -89,9 +96,21 @@ function StackCard({ label, icon, title, summary, children }: { label: string; i
 const ordinal = (n: number) =>
   `${n}${n % 10 === 1 && n % 100 !== 11 ? "st" : n % 10 === 2 && n % 100 !== 12 ? "nd" : n % 10 === 3 && n % 100 !== 13 ? "rd" : "th"}`;
 
-/** Messages waiting for the agent: send one now, edit it, move it or take it back. */
-export function QueuedCard({ queued, onEdit }: { queued: QueuedMessage[]; onEdit: EditQueuedFn }) {
+/**
+ * Messages waiting for the agent: send one now, edit it, move it or take it back.
+ * `onLostEdit` gets the text of an edit that was still open when its message left the queue.
+ */
+export function QueuedCard({ queued, onEdit, onLostEdit }: { queued: QueuedMessage[]; onEdit: EditQueuedFn; onLostEdit?: (text: string) => void }) {
   const [more, setMore] = useState(false);
+  const waiting = useRef(queued);
+  waiting.current = queued;
+  const lost = useRef(onLostEdit);
+  lost.current = onLostEdit;
+  // A row that goes away mid-edit only lost its message if that message is no longer waiting
+  // (a row folded away under "Show fewer" still has it).
+  const rowGone = useRef((id: string, text: string) => {
+    if (!waiting.current.some(q => q.clientMsgId === id)) lost.current?.(text);
+  }).current;
   if (!queued.length) return null;
   const shown = more ? queued : queued.slice(0, ROWS_SHOWN);
   return (
@@ -104,7 +123,7 @@ export function QueuedCard({ queued, onEdit }: { queued: QueuedMessage[]; onEdit
       <ul>
         {shown.map(q => (
           <li key={q.clientMsgId}>
-            <QueuedRow q={q} onEdit={onEdit} />
+            <QueuedRow q={q} onEdit={onEdit} onGone={rowGone} />
           </li>
         ))}
         {queued.length > ROWS_SHOWN && (
@@ -123,10 +142,20 @@ export function QueuedCard({ queued, onEdit }: { queued: QueuedMessage[]; onEdit
   );
 }
 
-function QueuedRow({ q, onEdit }: { q: QueuedMessage; onEdit: EditQueuedFn }) {
+function QueuedRow({ q, onEdit, onGone }: { q: QueuedMessage; onEdit: EditQueuedFn; onGone: (id: string, text: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(q.text);
   const id = q.clientMsgId;
+  // The agent can take the message while it is being edited: what was typed is handed on, not dropped.
+  const open = useRef({ editing, draft, was: q.text });
+  open.current = { editing, draft, was: q.text };
+  useEffect(
+    () => () => {
+      const { editing, draft, was } = open.current;
+      if (editing && draft.trim() && draft.trim() !== was.trim()) onGone(id, draft);
+    },
+    [id, onGone],
+  );
   const save = () => {
     const next = draft.trim();
     if (next && next !== q.text) onEdit(id, { action: "update", text: next });
@@ -143,7 +172,7 @@ function QueuedRow({ q, onEdit }: { q: QueuedMessage; onEdit: EditQueuedFn }) {
           value={draft}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={e => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
               e.preventDefault();
               save();
             } else if (e.key === "Escape") {

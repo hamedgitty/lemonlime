@@ -15,7 +15,7 @@ import { appendEvents, contiguousSeq, type PendingMessage } from "./timeline.ts"
 import { forgetEvents, loadEvents, saveEvents, type LocalThreadMeta } from "./storage.ts";
 import { confirmAction, isLocalRunnerRunning } from "./native.ts";
 import { answerComputerRequest, type ComputerLevel } from "./computer.ts";
-import type { CloudApi } from "./cloud.ts";
+import { CloudError, type CloudApi } from "./cloud.ts";
 import { machineName, startThreadRunner } from "./threadRunner.ts";
 import { deliverFirstMessage, forgetFirstMessage, peekFirstMessage } from "./firstMessage.ts";
 import { newAttachmentId } from "./useAttachments.ts";
@@ -62,6 +62,8 @@ export interface Connection {
 }
 
 const CLIENT_TOKEN_TTL_S = 10 * 60;
+/** How long a side chat has to start before the question is handed back. */
+const SIDE_ASK_TIMEOUT_MS = 30_000;
 
 export interface ThreadSession {
   events: ThreadEvent[];
@@ -73,7 +75,8 @@ export interface ThreadSession {
   /** Send a message, with ids of finished uploads (live connections only). */
   /** `steer` sends it now (stopping the current turn) instead of queueing it. */
   /** Says whether the message was taken; when it wasn't, the caller keeps the text. */
-  send: (text: string, attachments?: string[], opts?: { steer?: boolean }) => boolean;
+  /** `onFailed` is told when a message that was taken couldn't be delivered after all, so the caller can give it back. */
+  send: (text: string, attachments?: string[], opts?: { steer?: boolean; onFailed?: (err: unknown) => void }) => boolean;
   interrupt: () => void;
   /** Answer the agent's request for permission. */
   approve: (requestId: string, decision: "allow" | "deny") => void;
@@ -116,6 +119,8 @@ export interface ThreadSession {
   restart: () => void;
   /** Close the connection on purpose and show the thread as offline. */
   disconnect: () => void;
+  /** Stop showing the current error; the next one shows again. */
+  dismissError: () => void;
 }
 
 /** Owns the RunnerClient for one thread. Mount it with `key={threadId}`. */
@@ -133,7 +138,16 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const [loginUpdate, setLoginUpdate] = useState<LoginUpdate | null>(null);
   const [sideChats, setSideChats] = useState<SideChatSummary[]>([]);
   const [sideEvents, setSideEvents] = useState<Record<string, ThreadEvent[]>>({});
-  const sideWaiters = useRef(new Map<string, (sideId: string) => void>());
+  const sideWaiters = useRef(new Map<string, { resolve: (sideId: string) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>());
+  /** Side-chat questions still waiting to hear they started won't: say why, so each gets its text back. */
+  const failSideAsks = useCallback((message: string) => {
+    const waiting = [...sideWaiters.current.values()];
+    sideWaiters.current.clear();
+    for (const w of waiting) {
+      clearTimeout(w.timer);
+      w.reject(new Error(message));
+    }
+  }, []);
 
   const eventsRef = useRef(events);
   eventsRef.current = events;
@@ -142,7 +156,6 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
   const clientRef = useRef<RunnerClient | null>(null);
-  const forceFullReplay = useRef(false);
   const disconnectedRef = useRef(false);
 
   // Persist the cache and report progress, debounced.
@@ -190,13 +203,6 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       setState("starting");
       setError(null);
 
-      if (forceFullReplay.current) {
-        forceFullReplay.current = false;
-        forgetEvents(threadId);
-        eventsRef.current = [];
-        setEvents([]);
-      }
-
       let conn: Connection | null;
       try {
         conn = await resolveConnection(targetRef.current);
@@ -242,19 +248,25 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         // Torn down before it was live: the next connection hands the first message over.
         failLive = () => reject(new Error("closed"));
       });
+      // Nothing may be waiting on it when it's torn down; that isn't an error to report.
+      live.catch(() => {});
       client = new RunnerClient({
         url: conn.url,
         token: conn.token,
         resumeFrom,
-        onWelcome: (thread, latestSeq, current) => {
+        onWelcome: (thread, _latestSeq, current) => {
           if (cancelled) return;
           updateStatus(thread.status);
           if (current) setOptionsState(current);
-          // The runner holds less history than we cached: its store was reset.
-          if (latestSeq < resumeFrom) {
-            forceFullReplay.current = true;
-            setGeneration(g => g + 1);
-          }
+        },
+        // The runner's history started over, so what is cached belongs to the old one. The
+        // client asks for all of it again; events with the old numbers must not stay in the way.
+        onReset: () => {
+          if (cancelled) return;
+          buffer = [];
+          forgetEvents(threadId);
+          eventsRef.current = [];
+          setEvents([]);
         },
         ...(targetRef.current.mode === "cloud"
           ? {
@@ -271,9 +283,11 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         onSideEvent: (sideId, e) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: [...(m[sideId] ?? []).filter(x => x.seq < e.seq), e] })),
         onSideHistory: (sideId, events) => !cancelled && setSideEvents(m => ({ ...m, [sideId]: events })),
         onSideStarted: (sideId, requestId) => {
-          if (!requestId) return;
-          sideWaiters.current.get(requestId)?.(sideId);
+          const waiter = requestId ? sideWaiters.current.get(requestId) : undefined;
+          if (!requestId || !waiter) return;
           sideWaiters.current.delete(requestId);
+          clearTimeout(waiter.timer);
+          waiter.resolve(sideId);
         },
         onEvent: ev => {
           if (cancelled) return;
@@ -296,6 +310,9 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
               .then(alive => {
                 if (cancelled || alive) return;
                 client?.close();
+                // Nothing more can go through it: a message sent now is refused, not swallowed.
+                if (clientRef.current === client) clientRef.current = null;
+                failSideAsks("The thread's runner stopped before the side chat started.");
                 setConnection(null);
                 setState("offline");
                 // Over SSH, the tunnel ending most often means the connection to the machine dropped.
@@ -310,6 +327,8 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         },
         onError: (message, code) => {
           if (cancelled) return;
+          // A refusal while a side chat is starting is about that question: it shows there, with the text given back.
+          if (code === "bad_request" && sideWaiters.current.size > 0) return failSideAsks(message);
           setError(code === "unauthorized" ? "The runner did not accept this app's token." : message);
         },
       });
@@ -332,13 +351,18 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       const first = peekFirstMessage(threadId);
       const text = t.mode === "local" ? t.meta.pendingPrompt : first?.text;
       if (first?.delivering) {
-        /* already being handed over by an earlier connection */
+        // An earlier connection is handing it over. If that one closes before the message
+        // has gone, this one connects again and takes it.
+        void first.settled?.then(() => {
+          if (!cancelled && peekFirstMessage(threadId) === first && !first.delivering) setGeneration(g => g + 1);
+        });
       } else if (first && (first.files.length || first.permission)) {
         first.delivering = true;
         const clientMsgId = newClientMsgId();
         if (text) setPending(p => [...p, { clientMsgId, text, at: new Date().toISOString() }]);
+        const unsent = () => setPending(p => p.filter(x => x.clientMsgId !== clientMsgId));
         const sendTo = client;
-        void deliverFirstMessage(first, text ?? "", {
+        first.settled = deliverFirstMessage(first, text ?? "", {
           ready: () => live,
           setPermission: permission => sendTo.setOptions({ permission }),
           upload: (picked, id) =>
@@ -364,15 +388,25 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
             if (failed.length && !cancelled) setError(`Couldn't attach ${failed.map(f => f.name).join(", ")}: ${failed[0]!.error}`);
           },
           () => {
+            // Closed before it went: the next connection hands it over, and shows it again.
             first.delivering = false;
+            unsent();
           },
         );
       } else if (text) {
-        forgetFirstMessage(threadId);
-        if (t.mode === "local") callbacksRef.current.onPromptSent?.(threadId);
         const clientMsgId = newClientMsgId();
         setPending(p => [...p, { clientMsgId, text, at: new Date().toISOString() }]);
-        client.send(text, clientMsgId);
+        const sendTo = client;
+        // The prompt counts as handed over only once the runner is listening. A connection
+        // closed before that leaves it with the thread, for the next one.
+        void live.then(
+          () => {
+            forgetFirstMessage(threadId);
+            if (t.mode === "local") callbacksRef.current.onPromptSent?.(threadId);
+            sendTo.send(text, clientMsgId);
+          },
+          () => setPending(p => p.filter(x => x.clientMsgId !== clientMsgId)),
+        );
       }
     };
 
@@ -383,6 +417,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     return () => {
       cancelled = true;
       failLive();
+      failSideAsks("The connection to the thread closed before the side chat started.");
       setConnection(null);
       removeWakeListeners();
       if (flushHandle) clearTimeout(flushHandle);
@@ -394,9 +429,9 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
       client?.close();
       if (clientRef.current === client) clientRef.current = null;
     };
-  }, [threadId, generation]);
+  }, [threadId, generation, failSideAsks]);
 
-  const send = useCallback((text: string, attachments: string[] = [], opts: { steer?: boolean } = {}) => {
+  const send = useCallback((text: string, attachments: string[] = [], opts: { steer?: boolean; onFailed?: (err: unknown) => void } = {}) => {
     const client = clientRef.current;
     const trimmed = text.trim();
     const t = targetRef.current;
@@ -416,6 +451,9 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     void t.api.sendWhilePaused(t.thread.id, { clientMsgId, text: trimmed }).then(
       () => setGeneration(g => g + 1),
       err => {
+        // It never left: take the waiting copy out again, so the thread doesn't show a message nobody has.
+        setPending(p => p.filter(x => x.clientMsgId !== clientMsgId));
+        if (opts.onFailed) return opts.onFailed(err);
         setError(err instanceof Error ? err.message : String(err));
         setState("error");
       },
@@ -439,7 +477,11 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
         const client = clientRef.current;
         if (!client) return reject(new Error("Not connected to the runner."));
         const requestId = client.sideAsk(text, sideId);
-        sideWaiters.current.set(requestId, resolve);
+        const timer = setTimeout(() => {
+          sideWaiters.current.delete(requestId);
+          reject(new Error("The side chat didn't start. Ask again in a moment."));
+        }, SIDE_ASK_TIMEOUT_MS);
+        sideWaiters.current.set(requestId, { resolve, reject, timer });
       }),
     [],
   );
@@ -447,10 +489,17 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     update: loginUpdate,
     start: useCallback(() => {
       setLoginUpdate({ state: "starting" });
-      // The dashboard only keeps a sign-in that a member asked for; say so first.
       const t = targetRef.current;
-      const asked = t.mode === "cloud" ? t.api.requestSignIn(t.thread.id).catch(() => undefined) : Promise.resolve();
-      void asked.then(() => clientRef.current?.startLogin());
+      if (t.mode !== "cloud") return void clientRef.current?.startLogin();
+      // The control plane only keeps a sign-in the thread's starter asked for; say so first.
+      t.api.requestSignIn(t.thread.id).then(
+        () => clientRef.current?.startLogin(),
+        err => {
+          // Someone else's thread: their sandbox is no place for this person's account.
+          if (err instanceof CloudError && err.status === 403) setLoginUpdate({ state: "failed", message: err.message });
+          else clientRef.current?.startLogin();
+        },
+      );
     }, []),
     input: useCallback((text: string) => clientRef.current?.loginInput(text), []),
     cancel: useCallback(() => {
@@ -471,10 +520,12 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     disconnectedRef.current = true;
     clientRef.current?.close();
     clientRef.current = null;
+    failSideAsks("The thread was disconnected before the side chat started.");
     setConnection(null);
     setState("offline");
     setError(null);
-  }, []);
+  }, [failSideAsks]);
+  const dismissError = useCallback(() => setError(null), []);
 
   return {
     events,
@@ -499,6 +550,7 @@ export function useThreadSession(target: SessionTarget, callbacks: SessionCallba
     side,
     restart,
     disconnect,
+    dismissError,
   };
 }
 

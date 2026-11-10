@@ -86,10 +86,29 @@ export async function readPlugin(name: string): Promise<PluginDetail> {
 /**
  * Clone an https repository (a plugin or a marketplace of them) and install what it holds.
  * With `plugin`, install just that plugin from a marketplace, even one kept in another repository.
+ * What is fetched arrives turned off, to be looked over first. `turnOn` turns a single plugin
+ * on straight away, for when the person picked that very plugin to use.
  */
-export async function installPluginFromGit(url: string, ref?: string, plugin?: string): Promise<PluginInstallResult> {
+export async function installPluginFromGit(url: string, ref?: string, plugin?: string, o?: { turnOn?: boolean }): Promise<PluginInstallResult> {
   requireShell();
-  return invoke<PluginInstallResult>("install_plugin_from_git", { url: url.trim(), gitRef: ref?.trim() || null, plugin: plugin?.trim() || null });
+  return invoke<PluginInstallResult>("install_plugin_from_git", gitInstallArgs(url, ref, plugin, o));
+}
+
+/** What the install command is sent. Nothing is turned on unless asked. */
+export function gitInstallArgs(url: string, ref?: string, plugin?: string, o?: { turnOn?: boolean }) {
+  return { url: url.trim(), gitRef: ref?.trim() || null, plugin: plugin?.trim() || null, turnOn: o?.turnOn ?? false };
+}
+
+/** What to say after an install: whether the plugin is in use yet, and what was left out. */
+export function installNotice(result: PluginInstallResult): string {
+  const skipped = result.skipped.length ? ` Not installed: ${result.skipped.join(" ")}` : "";
+  const [first] = result.installed;
+  if (!first) return `Nothing was installed.${skipped}`;
+  if (result.installed.length > 1)
+    return `Installed ${result.installed.length} plugins from this marketplace. They start turned off, so turn on the ones you want.${skipped}`;
+  return first.enabled
+    ? `Installed ${first.name}. New threads get it.${skipped}`
+    : `Installed ${first.name}. It's turned off: look over what it adds, then turn it on.${skipped}`;
 }
 
 /** Install from a folder on this computer. */

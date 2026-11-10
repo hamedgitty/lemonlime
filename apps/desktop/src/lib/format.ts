@@ -31,6 +31,12 @@ export function repoName(pathOrUrl: string): string {
   return parts[parts.length - 1] ?? pathOrUrl;
 }
 
+/** Names as a phrase: "a", "a and b", "a, b and c". */
+export function listOf(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 export function relativeTime(iso: string, now: number = Date.now()): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "";

@@ -20,6 +20,13 @@ describe("shortcuts", () => {
     expect(comboOf(key("Shift", { shiftKey: true }))).toBeNull();
   });
 
+  it("leaves AltGr alone, which types characters on many keyboards", () => {
+    const altGr = { ...key("q", { ctrlKey: true, altKey: true }), getModifierState: (name: string) => name === "AltGraph" };
+    expect(comboOf(altGr)).toBeNull();
+    const plain = { ...key("q", { ctrlKey: true, altKey: true }), getModifierState: () => false };
+    expect(comboOf(plain)).not.toBeNull();
+  });
+
   it("lets people override and turn shortcuts off", () => {
     expect(keysFor("new-thread", {})).toBe("mod+n");
     expect(keysFor("new-thread", { "new-thread": "mod+shift+n" })).toBe("mod+shift+n");

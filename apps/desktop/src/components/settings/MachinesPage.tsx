@@ -5,6 +5,7 @@ import { checkSshMachine, confirmAction, inDesktopShell, type SshCheck } from ".
 import { Button, IconButton, Spinner, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
 import { code, ErrorText, Section } from "./parts.tsx";
+import { composing } from "../../lib/ime.ts";
 
 const EMPTY: MachineInput = { name: "", host: "", runnerPath: "" };
 
@@ -179,6 +180,7 @@ function MachineForm({
     setForm(EMPTY);
   };
   const onKey = (e: KeyboardEvent) => {
+    if (composing(e)) return;
     if (e.key === "Enter") submit();
     if (e.key === "Escape" && onCancel) onCancel();
   };

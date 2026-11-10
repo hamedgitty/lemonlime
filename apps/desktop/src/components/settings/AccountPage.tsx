@@ -4,7 +4,7 @@ import { Cloud, Eye, EyeOff } from "lucide-react";
 import { GithubMark } from "../icons.tsx";
 import { CloudApi, CloudError, normalizeBaseUrl, type CloudWorkspace } from "../../lib/cloud.ts";
 import { AGENT_LABELS } from "../../lib/format.ts";
-import { startBrowserSignIn } from "../../lib/desktopAuth.ts";
+import { onSignInRefused, startBrowserSignIn } from "../../lib/desktopAuth.ts";
 import { confirmAction, inDesktopShell } from "../../lib/native.ts";
 import { Button, Spinner, TextInput, cx, inputClass, openExternal } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
@@ -38,6 +38,26 @@ function AccountTab({ ctx }: { ctx: SettingsCtx }) {
   const [saved, markSaved] = useSaved();
   const validUrl = (value: string) => value.trim() === "" || /^https?:\/\/[^\s]+$/i.test(value.trim());
   const connected = Boolean(settings.controlPlaneUrl && settings.accessToken);
+  // A browser sign-in started from here, and why it didn't work if it didn't.
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+  const browserSignIn = async () => {
+    setSignInError(null);
+    try {
+      await startBrowserSignIn(url.trim() || "https://app.lemonlime.dev");
+      setSigningIn(true);
+    } catch (err) {
+      setSigningIn(false);
+      setSignInError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  useEffect(() => {
+    if (!signingIn) return;
+    return onSignInRefused(() => {
+      setSigningIn(false);
+      setSignInError("The sign-in from your browser wasn't accepted. Try again.");
+    });
+  }, [signingIn]);
 
   const save = () => {
     if (!validUrl(url)) return setUrlError("Use a full URL starting with http:// or https://");
@@ -99,14 +119,18 @@ function AccountTab({ ctx }: { ctx: SettingsCtx }) {
         <Row
           label="Sign in with your browser"
           description={
-            justSignedIn ? (
+            signInError && !justSignedIn ? (
+              <span role="alert" className="text-danger">
+                {signInError}
+              </span>
+            ) : justSignedIn ? (
               <span className="text-leaf">Signed in. Cloud threads are connected.</span>
             ) : (
               "Opens your LemonLime dashboard to approve this computer."
             )
           }
         >
-          <Button variant="primary" onClick={() => void startBrowserSignIn(url.trim() || "https://app.lemonlime.dev")} disabled={!inDesktopShell()}>
+          <Button variant="primary" onClick={() => void browserSignIn()} disabled={!inDesktopShell()}>
             {connected ? "Sign in again" : "Sign in with your browser"}
           </Button>
         </Row>

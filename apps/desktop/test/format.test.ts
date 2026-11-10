@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shortPath, summarizeToolInput } from "../src/lib/format.ts";
+import { listOf, shortPath, summarizeToolInput } from "../src/lib/format.ts";
 
 describe("tool row summaries", () => {
   it("keep short paths as they are", () => {
@@ -28,5 +28,14 @@ describe("tool row summaries", () => {
     const path = "/private/tmp/some/very/long/folder/that/goes/on/and/on/repo/sum.js";
     expect(summarizeToolInput({ file_path: path })).toMatch(/^…\/.*repo\/sum\.js$/);
     expect(summarizeToolInput({ command: "node test.js" })).toBe("node test.js");
+  });
+});
+
+describe("names in a sentence", () => {
+  it("are joined the way a person would say them", () => {
+    expect(listOf([])).toBe("");
+    expect(listOf(["notes"])).toBe("notes");
+    expect(listOf(["notes", "tidy"])).toBe("notes and tidy");
+    expect(listOf(["notes", "tidy", "release"])).toBe("notes, tidy and release");
   });
 });

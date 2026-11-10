@@ -24,7 +24,7 @@ export function SideResizer({
   onWidth: (w: number, save: boolean) => void;
   onFold?: () => void;
 }) {
-  const drag = useRef<{ x: number; w: number } | null>(null);
+  const drag = useRef<{ x: number; w: number; moved: boolean } | null>(null);
   // The column may be shown narrower than its saved width (a small window caps it), so start from what's on screen.
   const vertical = edge === "top" || edge === "bottom";
   const shown = (el: HTMLElement) => {
@@ -57,11 +57,17 @@ export function SideResizer({
         if (e.button !== 0) return;
         e.preventDefault();
         e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { x: at(e), w: shown(e.currentTarget) };
+        drag.current = { x: at(e), w: shown(e.currentTarget), moved: false };
       }}
-      onPointerMove={e => move(at(e), false)}
+      onPointerMove={e => {
+        const d = drag.current;
+        if (!d || (!d.moved && at(e) === d.x)) return;
+        d.moved = true;
+        move(at(e), false);
+      }}
       onPointerUp={e => {
-        move(at(e), true);
+        // A click that never moved is not a resize: nothing changes and nothing is saved.
+        if (drag.current?.moved) move(at(e), true);
         drag.current = null;
       }}
       onPointerCancel={() => (drag.current = null)}

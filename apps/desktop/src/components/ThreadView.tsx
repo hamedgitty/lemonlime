@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   ArrowUpCircle,
   Cloud,
@@ -44,7 +44,8 @@ import { useThreadSession, type Connection, type SessionState, type SessionTarge
 import { useAttachments } from "../lib/useAttachments.ts";
 import { sendBlocker } from "../lib/composerSend.ts";
 import { attachmentLabel, pastedTextFile } from "../lib/pastedText.ts";
-import { FileLinksContext, type FileLinks } from "../lib/markdown.tsx";
+import { FileLinksContext, LinkMenuContext, type FileLinks } from "../lib/markdown.tsx";
+import { useStableCallback, useStableRows, useStableValue } from "../lib/stable.ts";
 import { focusFacts, pasteGoesToComposer, typingGoesToComposer } from "../lib/typeAnywhere.ts";
 import { useComposerSources } from "../lib/composerData.ts";
 import { uniquePrompts } from "../lib/promptHistory.ts";
@@ -61,6 +62,7 @@ import { localRunnerStatuses, type AgentInstall } from "../lib/system.ts";
 import { FindBar } from "./FindBar.tsx";
 import { SelectionQuote } from "./SelectionQuote.tsx";
 import { Composer, type ComposerHandle } from "./Composer.tsx";
+import { toast } from "./Toaster.tsx";
 import { SignInPanel } from "./SignInPanel.tsx";
 import { ThreadPanel } from "./ThreadPanel.tsx";
 import { QuickOpen } from "./QuickOpen.tsx";
@@ -69,7 +71,7 @@ import { ApprovalCard, EditingCard, QueuedCard } from "./WaitingStack.tsx";
 import { GitActionsButton, GitStrip, useGitState } from "./GitActions.tsx";
 import { ForkDialog } from "./GitDialogs.tsx";
 import { suggestNextPrompt } from "../lib/nextPrompt.ts";
-import { saveDraft } from "../lib/storage.ts";
+import { loadHeld, saveDraft, saveHeld } from "../lib/storage.ts";
 import { activeTab, loadPanelState, newTerminal, openFile, openScript, reopenTab, savePanelState, type PanelState } from "../lib/panel.ts";
 import { PanelButtons } from "./PanelButtons.tsx";
 import { KEYS, isVertical, usePlace } from "../lib/sideWidth.ts";
@@ -81,7 +83,9 @@ import { MenuChoice, MenuItem, MenuLabel, SubMenu, Tip } from "./primitives.tsx"
 import { RenameField, ThreadMenu, type AppThreadMenu, type ThreadMenuHandlers } from "./ThreadMenu.tsx";
 import { childRowKey, REVEAL_CHILD_EVENT, rememberPullRequest, removeThreadText, takeRevealChild } from "../lib/threadMenu.ts";
 import { flashItem } from "../lib/findInThread.ts";
-import { Button, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
+import { Button, IconButton, Spinner, StatusDot, cx, openExternal } from "./ui.tsx";
+import { ErrorBoundary, PartFailed } from "./ErrorBoundary.tsx";
+import { linkMenu } from "./LinkMenu.tsx";
 import { PaneButton, PaneHeader, type PaneControls } from "./SplitView.tsx";
 
 export interface ThreadViewProps {
@@ -167,7 +171,17 @@ export function ThreadView(props: ThreadViewProps) {
   }
   const target: SessionTarget =
     entry.mode === "local" ? { mode: "local", meta: entry.meta, runnerPath: props.runnerPath } : { mode: "cloud", thread: entry.thread, api: cloudApi! };
-  return <ThreadSessionView {...props} target={target} />;
+  return (
+    // A thread that fails to draw leaves the sidebar and the other threads working.
+    <ErrorBoundary
+      resetKey={entry.mode === "local" ? entry.meta.id : entry.thread.id}
+      fallback={(details, retry) => <PartFailed what="This thread" details={details} onRetry={retry} />}
+    >
+      <LinkMenuContext.Provider value={linkMenu}>
+        <ThreadSessionView {...props} target={target} />
+      </LinkMenuContext.Provider>
+    </ErrorBoundary>
+  );
 }
 
 function ThreadSessionView({
@@ -228,11 +242,14 @@ function ThreadSessionView({
   const machineId = entry.mode === "local" ? entry.meta.machine : undefined;
   const machine = machineId ? (machines.find(m => m.id === machineId)?.name ?? "a removed machine") : null;
   const onThisComputer = entry.mode === "local" && !machineId;
-  const items = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
+  const built = useMemo(() => buildTimeline(session.events, session.pending), [session.events, session.pending]);
+  // Every event rebuilds the list. Rows that say the same keep their earlier object, so
+  // while the agent writes only the row that grew is drawn again, not the whole thread.
+  const items = useStableRows(built);
   // Approvals and queued messages wait above the composer; the timeline keeps a record of approvals.
   const stack = useMemo(() => waitingOnYou(items), [items]);
   const timelineItems = useMemo(() => withoutQueued(items), [items]);
-  const subagents = useMemo(() => latestSubagents(session.events), [session.events]);
+  const subagents = useStableValue(useMemo(() => latestSubagents(session.events), [session.events]));
   const loadImage = useSentImageLoader(session.connection);
   // The agent is waiting on an approval or a question: tell the person if they aren't looking.
   const waiting = items.filter(i => (i.kind === "approval" || i.kind === "question") && i.state === "waiting").map(i => i.key);
@@ -258,6 +275,20 @@ function ThreadSessionView({
   // While connected the runner is the source of truth; otherwise the control plane (cloud) is.
   const liveStatus: ThreadStatus | null = entry.mode === "cloud" ? (connected ? (session.status ?? entry.thread.status) : entry.thread.status) : session.status;
   const working = liveStatus === "running" && connected;
+  // Stop was pressed: the button shows it's on its way, and after a while a way out is offered.
+  const [stopping, setStopping] = useState<"asked" | "slow" | null>(null);
+  useEffect(() => {
+    if (!working) setStopping(null);
+  }, [working]);
+  useEffect(() => {
+    if (stopping !== "asked") return;
+    const t = setTimeout(() => setStopping("slow"), 5000);
+    return () => clearTimeout(t);
+  }, [stopping]);
+  const interrupt = () => {
+    session.interrupt();
+    setStopping(s => s ?? "asked");
+  };
   // To-dos, an open question, the context meter and the thread's current options.
   const loop = useMemo(() => agentLoopState(session.events), [session.events]);
   const threadOptions: ThreadOptions = session.options ??
@@ -267,10 +298,10 @@ function ThreadSessionView({
       permission: entry.mode === "cloud" ? "full" : "edits",
       ...(summary.agent.fast ? { fast: true } : {}),
     };
-  const implementPlan = () => {
+  const implementPlan = useStableCallback(() => {
     session.setOptions({ permission: modeAfterPlan(threadOptions) });
     session.send(IMPLEMENT_PLAN_PROMPT);
-  };
+  });
   // The runner says the installed agent is older than the version LemonLime is tested with.
   const outdated = useMemo(() => {
     const e = [...session.events].reverse().find(x => x.type === "notice" && x.code === "agent_older_than_tested");
@@ -436,6 +467,7 @@ function ThreadSessionView({
   }, [onThisComputer, limitOpen]);
   const [others, setOthers] = useState<{ ids: string[]; accountId: string } | null>(null);
   const { limitAction } = session;
+  const localId = entry.mode === "local" ? entry.meta.id : null;
   const limitActions = useMemo<LimitActions | undefined>(() => {
     if (session.state !== "live") return undefined;
     return {
@@ -444,10 +476,10 @@ function ThreadSessionView({
       canSwitchAccount: onThisComputer,
       switchAccount: accountId => {
         limitAction({ action: "switch_account", accountId });
-        if (entry.mode !== "local" || lastLimit?.kind !== "limit") return;
+        if (!localId || lastLimit?.kind !== "limit") return;
         const hit = lastLimit.hit;
         void localRunnerStatuses().then(statuses => {
-          const ids = threadsOnSameLimit(statuses, entry.meta.id, hit.agent, hit.account?.id ?? DEFAULT_ACCOUNT_ID);
+          const ids = threadsOnSameLimit(statuses, localId, hit.agent, hit.account?.id ?? DEFAULT_ACCOUNT_ID);
           setOthers(ids.length ? { ids, accountId } : null);
         });
       },
@@ -464,7 +496,7 @@ function ThreadSessionView({
             }
           : null,
     };
-  }, [session.state, entry, onThisComputer, threadOptions.model, accountList, agents, limitAction, lastLimit, others, onSwitchOthers]);
+  }, [session.state, localId, onThisComputer, threadOptions.model, accountList, agents, limitAction, lastLimit, others, onSwitchOthers]);
   // A local thread that moved to another agent remembers it, for the sidebar and its next start.
   const lastSwitch = useMemo(() => session.events.findLast(e => e.type === "agent_switch"), [session.events]);
   useEffect(() => {
@@ -476,6 +508,9 @@ function ThreadSessionView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastSwitch?.seq]);
   const composerRef = useRef<ComposerHandle>(null);
+  const composerWrap = useRef<HTMLDivElement>(null);
+  /** The message box itself: the cards above it can hold a text field of their own (a queued message being edited). */
+  const messageBox = () => composerWrap.current?.querySelector<HTMLTextAreaElement>("textarea[data-message-box]") ?? null;
   const fileInput = useRef<HTMLInputElement>(null);
   const files = useAttachments(session.connection);
   const suggestions = useComposerSources(session.connection, summary.agent.kind);
@@ -493,6 +528,13 @@ function ThreadSessionView({
     if (better) onAutoTitle(better);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userTexts.length, summary.title]);
+  /** A message that was taken but couldn't be delivered goes back in the box, ahead of anything typed since. */
+  const giveBack = (text: string, err: unknown) => {
+    const typed = messageBox()?.value ?? "";
+    composerRef.current?.fill(typed.trim() ? `${text}\n\n${typed}` : text);
+    if (err instanceof CloudError && err.denial) setDenial(err.denial);
+    else setActionError(`Couldn't send your message, so it's back in the message box. ${err instanceof Error ? err.message : String(err)}`);
+  };
   /** Sends the message with its files; false (the text stays in the composer) when it can't go. */
   const sendWithFiles = (text: string): boolean => {
     const blocked = sendBlocker({ uploading: files.uploading });
@@ -500,12 +542,23 @@ function ThreadSessionView({
       setActionError(blocked);
       return false;
     }
+    // A paused thread takes the words only: say so rather than drop the files without a word.
+    if (pausedCloud && files.ready.length > 0) {
+      setActionError("This thread is paused, so the attached files can't go with your message. Resume it, then send.");
+      return false;
+    }
     const plan = editSendPlan(editing, session.state === "live");
     if ("rewindTo" in plan) {
       // Go back to the edited message first; the new text goes once the runner has.
       setAfterRewind({ seq: plan.rewindTo, since: session.events.at(-1)?.seq ?? 0, text, files: files.ready });
       session.rewind(plan.rewindTo, false);
-    } else if (!session.send(text, files.ready, { steer: followUp === "steer" && session.status === "running" })) {
+    } else if (
+      !session.send(text, files.ready, {
+        // A message written while the agent waits for permission is the answer: it goes now, and what was asked is turned down.
+        steer: (followUp === "steer" || stack.approvals.length > 0) && session.status === "running",
+        onFailed: err => giveBack(text, err),
+      })
+    ) {
       setActionError("Couldn't send that yet: the thread isn't connected. Your message is still in the box.");
       return false;
     }
@@ -519,13 +572,13 @@ function ThreadSessionView({
   const [editing, setEditing] = useState<EditDraft | null>(null);
   const beforeEdit = useRef("");
   const [afterRewind, setAfterRewind] = useState<{ seq: number; since: number; text: string; files: string[] } | null>(null);
-  const editMessage = (item: Extract<TimelineItem, { kind: "user" }>) => {
+  const editMessage = useStableCallback((item: Extract<TimelineItem, { kind: "user" }>) => {
     const draft = startEdit(item, session.state === "live");
     if (!draft) return;
-    if (!editing) beforeEdit.current = composerWrap.current?.querySelector("textarea")?.value ?? "";
+    if (!editing) beforeEdit.current = messageBox()?.value ?? "";
     setEditing(draft);
     composerRef.current?.fill(draft.text);
-  };
+  });
   const stopEditing = () => {
     setEditing(null);
     composerRef.current?.fill(beforeEdit.current);
@@ -550,11 +603,11 @@ function ThreadSessionView({
   const [forking, setForking] = useState(false);
   // Local threads ask whether the fork keeps this thread's code; cloud ones start from the base.
   const [forkAsk, setForkAsk] = useState<{ key: string; quote?: string | undefined } | null>(null);
-  const fork = (key: string, quote?: string) => {
+  const fork = useStableCallback((key: string, quote?: string) => {
     if (!onFork || forking) return;
     if (entry.mode === "local") return setForkAsk({ key, quote });
     runFork(key, quote, false);
-  };
+  });
   const forkSeq = (key: string) => {
     const it = items.find(i => i.key === key);
     return it && "seq" in it && typeof it.seq === "number" ? it.seq : null;
@@ -580,7 +633,7 @@ function ThreadSessionView({
       .catch(err => setActionError(err instanceof Error ? err.message : String(err)))
       .finally(() => setForking(false));
   };
-  const rewindTo = async (seq: number, text: string, restoreFiles: boolean) => {
+  const rewindTo = useStableCallback(async (seq: number, text: string, restoreFiles: boolean) => {
     const ok = await confirmAction(
       restoreFiles
         ? "Go back to this message and put the files back to how they were then? The agent stops, starts a fresh conversation with a recap, and later changes are set aside (git keeps them under refs/lemonlime/rewind)."
@@ -589,7 +642,7 @@ function ThreadSessionView({
     if (!ok) return;
     session.rewind(seq, restoreFiles);
     composerRef.current?.fill(text);
-  };
+  });
   // The side panel's tabs, kept per thread.
   const [panel, setPanelState] = useState<PanelState>(() => loadPanelState(summary.id));
   const setPanel = (update: (s: PanelState) => PanelState) => setPanelState(s => update(s));
@@ -628,7 +681,9 @@ function ThreadSessionView({
     onChildren?.(summary.id, work.children);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workKey]);
-  const [held, setHeld] = useState<HeldMessage[]>([]);
+  // Kept with the thread, so they are still here after looking at another thread or restarting the app.
+  const [held, setHeld] = useState<HeldMessage[]>(() => loadHeld(summary.id));
+  useEffect(() => saveHeld(summary.id, held), [summary.id, held]);
   const settled = childrenSettled(work.children);
   const hold = (text: string): boolean => {
     if (settled) return sendWithFiles(text);
@@ -639,20 +694,33 @@ function ThreadSessionView({
   const sendHeld = (id: string) => {
     const m = held.find(h => h.id === id);
     if (!m) return;
+    if (!session.send(m.text, [], { onFailed: err => giveBack(m.text, err) })) {
+      setActionError("Couldn't send that yet: the thread isn't connected. Your message is still held.");
+      return;
+    }
     setHeld(h => h.filter(x => x.id !== id));
-    session.send(m.text);
   };
   useEffect(() => {
     if (!settled || !held.length || session.state !== "live") return;
-    const all = held;
-    setHeld([]);
-    for (const m of all) session.send(m.text);
+    // Any that couldn't go stay held.
+    setHeld(held.filter(m => !session.send(m.text)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settled, held.length, session.state]);
 
+  // Page Up and Page Down in the message box move through the conversation (the box itself only scrolls once it's full).
+  const pageTimeline = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    if (e.key !== "PageUp" && e.key !== "PageDown") return;
+    const box = e.target;
+    if (!(box instanceof HTMLTextAreaElement) || box.scrollHeight > box.clientHeight + 1) return;
+    const log = timelineRef.current?.querySelector<HTMLElement>('[role="log"]');
+    if (!log) return;
+    e.preventDefault();
+    log.scrollBy({ top: (e.key === "PageUp" ? -1 : 1) * log.clientHeight * 0.85 });
+  };
+
   // Put text into the message being written (e.g. lines picked in a diff), after what's there.
   // Other parts of the app can do the same with a "lemonlime:composer-insert" event ({ text }).
-  const composerWrap = useRef<HTMLDivElement>(null);
   const insertIntoComposer = (text: string) => composerRef.current?.insert(text);
   // Unsent text stays with the thread: the composer keeps it (draftKey), and the sidebar marks it.
   const insertRef = useRef(insertIntoComposer);
@@ -671,7 +739,7 @@ function ThreadSessionView({
   addFilesRef.current = files.add;
   useEffect(() => {
     const box = () => {
-      const el = composerWrap.current?.querySelector("textarea");
+      const el = messageBox();
       return activeRef.current && el && !el.disabled && el.getClientRects().length > 0 ? el : null;
     };
     const onKey = (e: KeyboardEvent) => {
@@ -967,9 +1035,13 @@ function ThreadSessionView({
                   type="button"
                   onClick={() => {
                     if (!outdated.command) return;
-                    void navigator.clipboard?.writeText(outdated.command);
-                    setCopiedUpdate(true);
-                    setTimeout(() => setCopiedUpdate(false), 2000);
+                    void navigator.clipboard
+                      ?.writeText(outdated.command)
+                      .then(() => {
+                        setCopiedUpdate(true);
+                        setTimeout(() => setCopiedUpdate(false), 2000);
+                      })
+                      .catch(() => setActionError(`Couldn't copy the command. Run this to update: ${outdated.command}`));
                   }}
                   className="inline-flex h-7 items-center gap-1.5 rounded-full border border-lemon-line bg-lemon-soft px-2.5 text-[13px] font-medium text-ink hover:bg-lemon"
                 >
@@ -1011,6 +1083,12 @@ function ThreadSessionView({
                 <RotateCw aria-hidden="true" className="size-3.5" />
                 Try again
               </Button>
+            )}
+            {/* While the thread itself is down the message stays: it says why, next to the way out. */}
+            {(actionError !== null || session.state !== "error") && (
+              <IconButton label="Dismiss" onClick={() => (actionError !== null ? setActionError(null) : session.dismissError())}>
+                <X aria-hidden="true" />
+              </IconButton>
             )}
           </div>
         )}
@@ -1091,7 +1169,8 @@ function ThreadSessionView({
             }
           }}
         >
-          <div ref={composerWrap} className="mx-auto max-w-[760px]">
+          {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions -- only passes on a key the message box doesn't use */}
+          <div ref={composerWrap} onKeyDown={pageTimeline} className="mx-auto max-w-[760px]">
             {stack.approvals[0] && (
               <ApprovalCard
                 key={stack.approvals[0].requestId}
@@ -1108,7 +1187,15 @@ function ThreadSessionView({
               />
             )}
             {editing && <EditingCard draft={editing} onReplace={replace => setEditing(d => (d ? { ...d, replace } : d))} onCancel={stopEditing} />}
-            <QueuedCard queued={stack.queued} onEdit={session.editQueued} />
+            <QueuedCard
+              queued={stack.queued}
+              onEdit={session.editQueued}
+              onLostEdit={text => {
+                const typed = messageBox()?.value ?? "";
+                composerRef.current?.fill(typed.trim() ? `${text}\n\n${typed}` : text);
+                toast({ title: "That message had already gone", description: "What you were changing is in the message box.", key: `lost-edit:${summary.id}` });
+              }}
+            />
             {loop.todos && <TodoCard items={loop.todos} />}
             <BackgroundWorkCard
               work={work}
@@ -1161,6 +1248,25 @@ function ThreadSessionView({
                 e.target.value = "";
               }}
             />
+            {stopping === "slow" && working && (
+              <div
+                role="status"
+                className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-paper py-1.5 pr-1.5 pl-3 text-[14px] text-ink-soft"
+              >
+                <span className="min-w-0 flex-1">The agent is taking a while to stop.</span>
+                {entry.mode === "local" ? (
+                  <Button variant="secondary" size="sm" disabled={busy} onClick={stopLocal}>
+                    Force stop
+                  </Button>
+                ) : (
+                  cloudApi && (
+                    <Button variant="secondary" size="sm" disabled={busy} onClick={pauseCloud}>
+                      Pause the thread
+                    </Button>
+                  )
+                )}
+              </div>
+            )}
             <Composer
               ref={composerRef}
               onSend={sendWithFiles}
@@ -1179,11 +1285,12 @@ function ThreadSessionView({
               history={prompts}
               draftKey={summary.id}
               suggestion={suggestion}
-              onInterrupt={session.interrupt}
+              onInterrupt={interrupt}
               working={working}
+              stopping={stopping !== null}
               disabled={composerDisabled}
               variant="reply"
-              placeholder="Reply"
+              placeholder={stack.approvals.length > 0 ? "Tell the agent what to do instead" : "Reply"}
               {...(onMicDevice ? { micDeviceId, onMicDevice } : {})}
               leading={
                 <Tip label="Attach files (or drop or paste them)">
@@ -1249,31 +1356,33 @@ function ThreadSessionView({
       </section>
       {panelOpen && (
         // Kept mounted while hidden, so a terminal keeps its screen.
-        <ThreadPanel
-          hidden={!panelShown}
-          overlay={narrow}
-          state={panel}
-          onState={setPanel}
-          session={session}
-          // Previews from another machine come through a tunnel, like a cloud sandbox's.
-          mode={onThisComputer ? "local" : "cloud"}
-          runnerPath={runnerPath}
-          onClose={() => setPanelOpen(false)}
-          place={panelPlace}
-          onPlace={setPanelPlace}
-          refreshKey={gitRefresh}
-          onQuickOpen={() => setQuickOpen(true)}
-          shortcuts={{ quickOpen: keysFor("quick-open", shortcuts), reopen: keysFor("reopen-tab", shortcuts) }}
-          scripts={scripts?.list ?? []}
-          scriptsError={scripts?.error}
-          scriptKeys={(id: ScriptKeybinding) => keysFor(id, shortcuts)}
-          scriptRuns={scriptRuns}
-          onRunScript={runScript}
-          onAddToChat={text => {
-            insertIntoComposer(text);
-            composerRef.current?.focus();
-          }}
-        />
+        <ErrorBoundary fallback={(details, retry) => (panelShown ? <PartFailed what="The side panel" details={details} onRetry={retry} /> : null)}>
+          <ThreadPanel
+            hidden={!panelShown}
+            overlay={narrow}
+            state={panel}
+            onState={setPanel}
+            session={session}
+            // Previews from another machine come through a tunnel, like a cloud sandbox's.
+            mode={onThisComputer ? "local" : "cloud"}
+            runnerPath={runnerPath}
+            onClose={() => setPanelOpen(false)}
+            place={panelPlace}
+            onPlace={setPanelPlace}
+            refreshKey={gitRefresh}
+            onQuickOpen={() => setQuickOpen(true)}
+            shortcuts={{ quickOpen: keysFor("quick-open", shortcuts), reopen: keysFor("reopen-tab", shortcuts) }}
+            scripts={scripts?.list ?? []}
+            scriptsError={scripts?.error}
+            scriptKeys={(id: ScriptKeybinding) => keysFor(id, shortcuts)}
+            scriptRuns={scriptRuns}
+            onRunScript={runScript}
+            onAddToChat={text => {
+              insertIntoComposer(text);
+              composerRef.current?.focus();
+            }}
+          />
+        </ErrorBoundary>
       )}
       <QuickOpen
         open={quickOpen}

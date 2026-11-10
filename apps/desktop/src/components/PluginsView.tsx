@@ -26,6 +26,7 @@ import {
   filterPlugins,
   gitUrlProblem,
   installPluginFromFolder,
+  installNotice,
   installPluginFromGit,
   listPlugins,
   pickPluginFolder,
@@ -128,18 +129,14 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
 
   const afterInstall = async (result: PluginInstallResult, fromCatalog?: string) => {
     await reload();
-    const names = result.installed.map(p => p.name);
-    if (fromCatalog && names[0]) setAliases(rememberInstallAlias(fromCatalog, names[0]));
-    if (!fromCatalog) {
+    const first = result.installed[0]?.name;
+    if (fromCatalog && first) setAliases(rememberInstallAlias(fromCatalog, first));
+    // Open what arrived, so it can be looked over (and turned on, when it came turned off).
+    if (!fromCatalog && first) {
       setTab("installed");
-      setPane({ kind: "detail", name: names[0]! });
+      setPane({ kind: "detail", name: first });
     }
-    const skipped = result.skipped.length ? ` Not installed: ${result.skipped.join(" ")}` : "";
-    setNotice(
-      names.length === 1
-        ? `Installed ${names[0]}. New threads get it.${skipped}`
-        : `Installed ${names.length} plugins from this marketplace. They start turned off, so turn on the ones you want.${skipped}`,
-    );
+    setNotice(installNotice(result));
   };
 
   const installFolder = async () => {
@@ -231,7 +228,8 @@ export function PluginsView({ onPrompt }: PluginsViewProps = {}) {
           onInstall={async p => {
             setError(null);
             setNotice(null);
-            await afterInstall(await installPluginFromGit(OFFICIAL_MARKETPLACE.url, undefined, p.name), p.name);
+            // The person picked this very plugin to use, so it arrives turned on.
+            await afterInstall(await installPluginFromGit(OFFICIAL_MARKETPLACE.url, undefined, p.name, { turnOn: true }), p.name);
           }}
           onRemove={async (p, installedName) => {
             if (!(await confirmAction(`Remove ${installedName}? New threads won't get it, and running threads drop it when they restart.`))) return;
@@ -930,6 +928,8 @@ function PluginDetailPane({
   const c = p.contents;
 
   const update = async () => {
+    const from = p.sourceKind === "git" ? "repository" : "folder";
+    if (!(await confirmAction(`Update ${name}? The newest copy from its ${from} replaces this one${p.enabled ? ", and new threads get it" : ""}.`))) return;
     setBusy("update");
     try {
       const r = await updatePlugin(name);

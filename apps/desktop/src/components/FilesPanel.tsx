@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronRight, Ellipsis, File, FileCode2, FileImage, FileText, Folder, FoldVertical, ListTree, Search } from "lucide-react";
 import { FilesResponse, FolderResponse } from "@lemonlime/protocol";
 import { getJson } from "../lib/composerData.ts";
-import { fileKind, parentsOf, treeRows, type Listing } from "../lib/fileTree.ts";
+import { fileKind, parentsOf, treeKey, treeRows, type Listing } from "../lib/fileTree.ts";
 import { KEYS, LIST_COLUMN, useFolded, useSideWidth } from "../lib/sideWidth.ts";
 import type { Connection } from "../lib/useThreadSession.ts";
 import { FileView } from "./FileView.tsx";
@@ -114,6 +114,21 @@ export function FilesPanel({
   const rows = useMemo(() => treeRows(listings, open), [listings, open]);
   const top = listings.get("");
 
+  // Tab stops at one row of the tree; the arrow keys reach the rest and open and close folders.
+  const treeEl = useRef<HTMLUListElement>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const tabStop = [cursor, state.selected].find(p => p !== null && rows.some(r => r.path === p)) ?? rows[0]?.path ?? null;
+  const onTreeKey = (e: KeyboardEvent<HTMLUListElement>) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const at = Number((e.target as HTMLElement).closest<HTMLElement>("[data-row]")?.dataset.row ?? NaN);
+    const move = treeKey(rows, open, at, e.key);
+    if (!move) return;
+    e.preventDefault();
+    if ("toggle" in move) return toggle(move.toggle);
+    setCursor(rows[move.focus]!.path);
+    treeEl.current?.querySelector<HTMLElement>(`[data-row="${move.focus}"]`)?.focus();
+  };
+
   const tree = (
     <div
       className={cx("relative flex shrink-0 flex-col bg-cream", treeLeft ? "order-first border-r border-line" : "order-last border-l border-line")}
@@ -169,12 +184,15 @@ export function FilesPanel({
         ) : rows.length === 0 ? (
           <p className="px-2 py-2 text-[13px] text-ink-soft">This folder is empty.</p>
         ) : (
-          <ul role="tree" aria-label="Files" className="flex flex-col gap-px">
-            {rows.map(r => (
+          <ul ref={treeEl} role="tree" aria-label="Files" onKeyDown={onTreeKey} className="flex flex-col gap-px">
+            {rows.map((r, i) => (
               <li key={r.path} role="none">
                 <button
                   type="button"
                   role="treeitem"
+                  data-row={i}
+                  tabIndex={r.path === tabStop ? 0 : -1}
+                  onFocus={() => setCursor(r.path)}
                   aria-level={r.depth + 1}
                   aria-expanded={r.dir ? open.has(r.path) : undefined}
                   aria-selected={!r.dir && state.selected === r.path}

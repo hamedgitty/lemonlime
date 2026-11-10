@@ -88,6 +88,13 @@ describe("command palette, more to find", () => {
     expect(findInMessages(messages, "fix flaky").map(h => [h.id, h.detail])).toEqual([["message:a:1", "You, in Thread a"]]);
   });
 
+  it("gives the same answers however often the same messages are searched", () => {
+    const first = findInMessages(messages, "login");
+    expect(findInMessages(messages, "LOGIN redirect").map(h => h.id)).toEqual(["message:a:2"]);
+    expect(findInMessages(messages, "staging").map(h => h.id)).toEqual(["message:b:1"]);
+    expect(findInMessages(messages, "login")).toEqual(first);
+  });
+
   it("needs every word and more than one letter", () => {
     expect(findInMessages(messages, "login staging")).toEqual([]);
     expect(findInMessages(messages, "l")).toEqual([]);

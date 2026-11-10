@@ -184,12 +184,15 @@ function ExportTab({ ctx }: { ctx: SettingsCtx }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, markDone] = useSaved();
+  // Threads that went into the last file by title only, because their messages aren't kept on this computer right now.
+  const [bare, setBare] = useState(0);
   const since = period === "all" ? 0 : Date.now() - Number(period) * DAY;
   const picked = ctx.threads.filter(t => (where === "all" || t.mode === where) && Date.parse(t.updatedAt) >= since);
 
   const run = async () => {
     setBusy(true);
     setError(null);
+    setBare(0);
     try {
       const out: { thread: ThreadSummary; events: ThreadEvent[] }[] = [];
       for (const t of picked) {
@@ -204,8 +207,10 @@ function ExportTab({ ctx }: { ctx: SettingsCtx }) {
           content,
           format === "json" ? { name: "JSON", extensions: ["json"] } : { name: "Markdown", extensions: ["md"] },
         )
-      )
+      ) {
         markDone();
+        setBare(out.filter(o => o.thread.mode === "local" && o.events.length === 0).length);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -261,6 +266,13 @@ function ExportTab({ ctx }: { ctx: SettingsCtx }) {
         </Button>
         <SavedNote show={done} />
       </div>
+      {bare > 0 && (
+        <p role="status" className="text-[14px] text-pretty text-ink-soft">
+          {bare === 1
+            ? "1 thread had no messages saved on this computer, so only its title is in the file. Open it to load its messages, then export again."
+            : `${bare} threads had no messages saved on this computer, so only their titles are in the file. Open them to load their messages, then export again.`}
+        </p>
+      )}
       <ErrorText>{error}</ErrorText>
     </Section>
   );

@@ -214,7 +214,7 @@ export function Tip({ label, children, side = "top" }: { label: ReactNode; child
       <BaseTooltip.Trigger render={children} />
       <BaseTooltip.Portal>
         <BaseTooltip.Positioner side={side} sideOffset={8} className="z-50">
-          <BaseTooltip.Popup className="rounded-[7px] bg-lime px-2.5 py-1 text-[14px] font-medium text-on-citrus shadow-[0_4px_14px_rgb(23_32_14/0.14)] transition-opacity duration-100 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0">
+          <BaseTooltip.Popup className="rounded-[7px] bg-lime px-2.5 py-1 text-[14px] font-medium text-on-citrus shadow-panel transition-opacity duration-100 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0">
             {label}
           </BaseTooltip.Popup>
         </BaseTooltip.Positioner>

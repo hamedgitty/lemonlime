@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CloudApi, CloudError, parseThreadList } from "../src/lib/cloud.ts";
+import { CloudApi, CloudError, parseThreadList, planSkillSync, skillsUnsynced } from "../src/lib/cloud.ts";
 
 const thread = {
   id: "thread-0001",
@@ -83,5 +83,35 @@ describe("CloudApi", () => {
   it("reports other errors with the server message", async () => {
     const api = new CloudApi({ url: "http://cp.test", token: "t" }, respond(500, { message: "Database is down" }));
     await expect(api.getThread("thread-0001")).rejects.toThrow("Database is down");
+  });
+});
+
+describe("syncing skills to the cloud", () => {
+  it("sends this computer's picked skills and keeps the ones another computer added", () => {
+    expect(planSkillSync(["a", "c"], ["a", "b"], ["a", "c", "d"])).toEqual({ send: ["a"], keep: ["c"], drop: ["d"] });
+  });
+
+  it("drops a skill from another computer only when it is switched off", () => {
+    expect(planSkillSync(["a", "c", "d"], ["a"], ["c", "d"]).drop).toEqual([]);
+    expect(planSkillSync(["a"], ["a"], ["c", "d"])).toEqual({ send: ["a"], keep: [], drop: ["c", "d"] });
+  });
+
+  it("knows when the picked skills differ from the cloud's", () => {
+    expect(skillsUnsynced(["a", "c"], ["a", "b"], ["a", "c"])).toBe(false);
+    expect(skillsUnsynced(["a", "b", "c"], ["a", "b"], ["a", "c"])).toBe(true);
+    expect(skillsUnsynced(["a"], ["a", "b"], ["a", "c"])).toBe(true);
+    expect(skillsUnsynced([], [], [])).toBe(false);
+  });
+
+  it("reads the cloud's skills with their files", async () => {
+    let seen = "";
+    const skills = [{ name: "tidy", files: { "SKILL.md": "# Tidy" } }];
+    const api = new CloudApi({ url: "http://cp.test", token: "t" }, async (url, init) => {
+      seen = `${init?.method ?? "GET"} ${url}`;
+      return new Response(JSON.stringify({ skills }), { status: 200 });
+    });
+    expect(await api.workspaceSkills()).toEqual(skills);
+    expect(seen).toBe("GET http://cp.test/api/workspace/skills");
+    expect(await new CloudApi({ url: "http://cp.test", token: "t" }, respond(200, {})).workspaceSkills()).toEqual([]);
   });
 });

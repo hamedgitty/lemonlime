@@ -9,7 +9,8 @@ import { AgentConfig, ThreadEvent, ThreadId, ThreadStatus } from "@lemonlime/pro
 
 const KEY_SETTINGS = "lemonlime:settings";
 const KEY_LOCAL_THREADS = "lemonlime:local-threads";
-const eventsKey = (threadId: string) => `lemonlime:events:${threadId}`;
+const EVENTS_PREFIX = "lemonlime:events:";
+const eventsKey = (threadId: string) => EVENTS_PREFIX + threadId;
 
 export const Settings = z.object({
   /** Path to the lemonlime-runner binary. Empty means "look it up on PATH". */
@@ -86,14 +87,64 @@ function write(key: string, value: unknown): boolean {
   }
 }
 
+/** The cached timelines, biggest first. */
+function eventCaches(): string[] {
+  const sized: [string, number][] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k?.startsWith(EVENTS_PREFIX)) sized.push([k, localStorage.getItem(k)?.length ?? 0]);
+    }
+  } catch {
+    /* ignore */
+  }
+  return sized.sort((a, b) => b[1] - a[1]).map(([k]) => k);
+}
+
+/**
+ * A write that matters more than the cached timelines (settings, the thread list). When
+ * storage is full the biggest caches go, one at a time, until it fits: a thread's runner
+ * still has its history, and the next connection replays it.
+ */
+function writeKept(key: string, value: unknown): boolean {
+  if (write(key, value)) return true;
+  for (const cache of eventCaches()) {
+    try {
+      localStorage.removeItem(cache);
+    } catch {
+      return false;
+    }
+    if (write(key, value)) return true;
+  }
+  return false;
+}
+
+/**
+ * What was stored, read against `schema`. A field that no longer fits (an older version's
+ * value, a hand edit) falls back to its default by itself, rather than taking every other
+ * field down with it.
+ */
+export function parseStored<S extends z.ZodObject>(schema: S, stored: unknown): z.infer<S> {
+  const whole = schema.safeParse(stored ?? {});
+  if (whole.success) return whole.data;
+  const kept: Record<string, unknown> = {};
+  if (typeof stored === "object" && stored !== null && !Array.isArray(stored)) {
+    const from = stored as Record<string, unknown>;
+    for (const [key, field] of Object.entries(schema.shape)) {
+      if (key in from && (field as z.ZodType).safeParse(from[key]).success) kept[key] = from[key];
+    }
+  }
+  const rest = schema.safeParse(kept);
+  return rest.success ? rest.data : schema.parse({});
+}
+
 export function loadSettings(): Settings {
-  const r = Settings.safeParse(read(KEY_SETTINGS) ?? {});
-  return r.success ? r.data : Settings.parse({});
+  return parseStored(Settings, read(KEY_SETTINGS));
 }
 
 /** Settings go to local storage, except the access token, which is kept in the keychain. */
 export function saveSettings(s: Settings): void {
-  write(KEY_SETTINGS, { ...s, accessToken: "" });
+  writeKept(KEY_SETTINGS, { ...s, accessToken: "" });
 }
 
 export function loadLocalThreads(): LocalThreadMeta[] {
@@ -108,7 +159,7 @@ export function loadLocalThreads(): LocalThreadMeta[] {
 }
 
 export function saveLocalThreads(threads: readonly LocalThreadMeta[]): void {
-  write(KEY_LOCAL_THREADS, threads);
+  writeKept(KEY_LOCAL_THREADS, threads);
 }
 
 export function loadEvents(threadId: string): ThreadEvent[] {
@@ -158,6 +209,13 @@ export function forgetEvents(threadId: string): void {
   } catch {
     /* ignore */
   }
+}
+
+/** Everything kept for a thread that is gone for good: its cached timeline, its unsent draft and its held messages. */
+export function forgetThread(threadId: string): void {
+  forgetEvents(threadId);
+  saveDraft(threadId, "");
+  saveHeld(threadId, []);
 }
 
 // ── UI preferences (per computer) ─────────────────────────────
@@ -292,15 +350,14 @@ export const UiPrefs = z.object({
 export type UiPrefs = z.infer<typeof UiPrefs>;
 
 export function loadUiPrefs(): UiPrefs {
-  const r = UiPrefs.safeParse(read(KEY_UI) ?? {});
-  if (!r.success) return UiPrefs.parse({});
+  const prefs = parseStored(UiPrefs, read(KEY_UI));
   // Keep every nav item exactly once, even after an update adds new ones.
-  const order = [...new Set([...r.data.navOrder, ...NAV_ITEMS])].filter(i => (NAV_ITEMS as readonly string[]).includes(i));
-  return { ...r.data, navOrder: order as NavItem[] };
+  const order = [...new Set([...prefs.navOrder, ...NAV_ITEMS])].filter(i => (NAV_ITEMS as readonly string[]).includes(i));
+  return { ...prefs, navOrder: order as NavItem[] };
 }
 
 export function saveUiPrefs(p: UiPrefs): void {
-  write(KEY_UI, p);
+  writeKept(KEY_UI, p);
 }
 
 // ── Thread side panel width ──────────────────────────────────
@@ -362,6 +419,29 @@ export function saveDraft(threadId: string, text: string): void {
     }
   const has = Boolean(text.trim()) && text.length <= 100_000;
   if (had !== has && typeof window !== "undefined") window.dispatchEvent(new Event("lemonlime:drafts-changed"));
+}
+
+// ── Messages held until a thread's subagents finish ──────────
+
+const HELD_PREFIX = "lemonlime:held:";
+const HeldMessage = z.object({ id: z.string(), text: z.string() });
+export type HeldMessage = z.infer<typeof HeldMessage>;
+
+/** Messages written while subagents were working, waiting to go when they finish. */
+export function loadHeld(threadId: string): HeldMessage[] {
+  const r = z.array(HeldMessage).safeParse(read(HELD_PREFIX + threadId));
+  return r.success ? r.data : [];
+}
+
+/** Kept with the thread, so they are still there after looking at another thread or restarting the app. */
+export function saveHeld(threadId: string, held: readonly HeldMessage[]): void {
+  if (held.length) writeKept(HELD_PREFIX + threadId, held);
+  else
+    try {
+      localStorage.removeItem(HELD_PREFIX + threadId);
+    } catch {
+      /* ignore */
+    }
 }
 
 /** Threads with an unsent draft. */

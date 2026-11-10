@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { contentsSummary, filterPlugins, gitUrlProblem, pluginInitial, type PluginContents, type PluginSummary } from "../src/lib/plugins.ts";
+import {
+  contentsSummary,
+  filterPlugins,
+  gitInstallArgs,
+  gitUrlProblem,
+  installNotice,
+  pluginInitial,
+  type PluginContents,
+  type PluginSummary,
+} from "../src/lib/plugins.ts";
 
 const contents = (p: Partial<PluginContents> = {}): PluginContents => ({
   skills: [],
@@ -58,5 +67,30 @@ describe("plugin helpers", () => {
     expect(pluginInitial("review-kit")).toBe("R");
     expect(pluginInitial("_x")).toBe("X");
     expect(pluginInitial("--")).toBe("?");
+  });
+});
+
+describe("installing a plugin", () => {
+  it("asks for a fetched plugin to arrive turned off unless told otherwise", () => {
+    expect(gitInstallArgs(" https://example.com/kit.git ", " main ", "")).toEqual({
+      url: "https://example.com/kit.git",
+      gitRef: "main",
+      plugin: null,
+      turnOn: false,
+    });
+    expect(gitInstallArgs("https://example.com/market", undefined, "kit", { turnOn: true })).toMatchObject({ plugin: "kit", turnOn: true });
+  });
+
+  it("says whether the plugin is in use yet", () => {
+    expect(installNotice({ installed: [plugin("kit")], skipped: [] })).toBe("Installed kit. New threads get it.");
+    expect(installNotice({ installed: [plugin("kit", { enabled: false })], skipped: [] })).toBe(
+      "Installed kit. It's turned off: look over what it adds, then turn it on.",
+    );
+  });
+
+  it("says a marketplace's plugins start turned off, and what was left out", () => {
+    const several = installNotice({ installed: [plugin("a", { enabled: false }), plugin("b", { enabled: false })], skipped: ["c: no manifest."] });
+    expect(several).toBe("Installed 2 plugins from this marketplace. They start turned off, so turn on the ones you want. Not installed: c: no manifest.");
+    expect(installNotice({ installed: [], skipped: ["c: no manifest."] })).toBe("Nothing was installed. Not installed: c: no manifest.");
   });
 });

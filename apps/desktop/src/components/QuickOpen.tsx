@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 
 import { Dialog } from "@base-ui/react/dialog";
 import { FileText, Search } from "lucide-react";
 import { fuzzyMatch } from "@lemonlime/protocol";
+import { composing } from "../lib/ime.ts";
 import { Highlighted } from "./Highlighted.tsx";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
@@ -25,6 +26,8 @@ export function QuickOpen({
 }) {
   const [query, setQuery] = useState("");
   const [files, setFiles] = useState<string[]>([]);
+  // What was typed when the list on screen was found. Enter waits until it is what is typed now.
+  const [answers, setAnswers] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(0);
   const input = useRef<HTMLInputElement>(null);
@@ -37,6 +40,9 @@ export function QuickOpen({
     returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setQuery("");
     setActive(0);
+    // Last time's list isn't this time's answer.
+    setFiles([]);
+    setAnswers(null);
   }, [open]);
 
   useEffect(() => {
@@ -48,6 +54,7 @@ export function QuickOpen({
       searchFiles(query, ctl.signal)
         .then(list => {
           setFiles(list);
+          setAnswers(query);
           setActive(0);
         })
         .catch(() => undefined)
@@ -74,7 +81,7 @@ export function QuickOpen({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.nativeEvent.isComposing) return;
+    if (composing(e)) return;
     const move = (to: number) => {
       e.preventDefault();
       if (results.length) setActive((to + results.length) % results.length);
@@ -83,7 +90,8 @@ export function QuickOpen({
     else if (e.key === "ArrowUp") move(current - 1);
     else if (e.key === "Enter") {
       e.preventDefault();
-      pick(results[current]?.path);
+      // The list may still be the one for what was typed before: don't open a file from it.
+      if (answers === query) pick(results[current]?.path);
     }
   };
 

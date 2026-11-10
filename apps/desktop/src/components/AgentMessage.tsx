@@ -2,14 +2,15 @@ import type { ReactNode } from "react";
 import { GitFork } from "lucide-react";
 import { CopyButton, StreamingMarkdown } from "../lib/markdown.tsx";
 import { loadUiPrefs } from "../lib/storage.ts";
+import { panelAddress } from "../lib/browser.ts";
 import { LogoMark, cx, openExternal } from "./ui.tsx";
 
 /** Asks the app to show a link in the side panel's browser (`detail` is the URL). */
 export const OPEN_IN_PANEL_EVENT = "lemonlime:open-in-panel";
 
-/** Links open in the system browser, or in the side panel when Settings says so. */
+/** Links open in the system browser, or in the side panel when Settings says so and the panel can show the page. */
 const openLink = (url: string) => {
-  if (loadUiPrefs().openLinksInPanel) window.dispatchEvent(new CustomEvent<string>(OPEN_IN_PANEL_EVENT, { detail: url }));
+  if (loadUiPrefs().openLinksInPanel && panelAddress(url)) window.dispatchEvent(new CustomEvent<string>(OPEN_IN_PANEL_EVENT, { detail: url }));
   else void openExternal(url);
 };
 

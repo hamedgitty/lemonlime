@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSettingsTab } from "../../lib/settingsNav.ts";
 import { listSkills, type SkillInfo } from "../../lib/native.ts";
 import type { SettingsCtx } from "./context.ts";
+import { RetryCard } from "../ui.tsx";
 import { Pill, SavedNote, Section, Tabs, ToggleRow, useSaved } from "./parts.tsx";
 
 const MAX = 32_000;
@@ -30,6 +31,8 @@ function CustomTab({ ctx }: { ctx: SettingsCtx }) {
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const latest = useRef(settings);
   latest.current = settings;
+  const now = useRef({ text, onSave });
+  now.current = { text, onSave };
   // Saves a moment after you stop typing.
   useEffect(() => {
     if (text === latest.current.instructions) return;
@@ -41,6 +44,14 @@ function CustomTab({ ctx }: { ctx: SettingsCtx }) {
     return () => clearTimeout(timer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
+  // Leaving the page before that moment is up still saves what was typed.
+  useEffect(
+    () => () => {
+      const { text, onSave } = now.current;
+      if (text !== latest.current.instructions) onSave({ ...latest.current, instructions: text.slice(0, MAX) });
+    },
+    [],
+  );
   return (
     <Section
       title="Custom instructions"
@@ -68,9 +79,15 @@ function CustomTab({ ctx }: { ctx: SettingsCtx }) {
 function BuiltinTab({ ctx }: { ctx: SettingsCtx }) {
   const { settings, onSave } = ctx;
   const [skills, setSkills] = useState<SkillInfo[] | null>(null);
-  useEffect(() => {
-    void listSkills().then(list => setSkills(list.filter(s => s.source === "bundled")));
+  const [failed, setFailed] = useState<string | null>(null);
+  const load = useCallback(() => {
+    setFailed(null);
+    listSkills().then(
+      list => setSkills(list.filter(s => s.source === "bundled")),
+      e => setFailed(e instanceof Error ? e.message : String(e)),
+    );
   }, []);
+  useEffect(() => load(), [load]);
   const on = (name: string) => !settings.disabledSkills.includes(name);
   return (
     <Section
@@ -78,7 +95,8 @@ function BuiltinTab({ ctx }: { ctx: SettingsCtx }) {
       description="LemonLime's own skills teach agents how to use it: opening previews, starting helpers, keeping to the thread's branch. Turn off any you don't want copied into new threads."
       aside={skills ? <Pill>{skills.filter(s => on(s.name)).length} on</Pill> : undefined}
     >
-      {skills === null && <p className="text-[14px] text-ink-soft">Loading…</p>}
+      {skills === null && !failed && <p className="text-[14px] text-ink-soft">Loading…</p>}
+      {skills === null && failed && <RetryCard title="The built-in skills didn't load" detail={failed} onRetry={load} />}
       {skills?.length === 0 && <p className="text-[14px] text-ink-soft">Shown in the desktop app.</p>}
       {skills?.map(s => (
         <ToggleRow

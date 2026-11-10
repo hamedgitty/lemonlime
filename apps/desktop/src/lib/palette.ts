@@ -157,6 +157,10 @@ const SNIPPET = 90;
 /** Messages shown from any one thread, so one long thread doesn't fill the list. */
 const PER_THREAD = 2;
 
+const oneLine = (text: string) => text.replace(/\s+/g, " ").trim();
+/** Each message's text on one line in lower case, worked out once however many times it is searched. */
+const lowered = new WeakMap<MessageText, string>();
+
 /**
  * Messages containing every word of the query (any case), newest first, as palette rows:
  * a snippet around the first match with it marked, and the thread's title.
@@ -172,9 +176,10 @@ export function findInMessages(messages: readonly MessageText[], query: string, 
   for (let i = messages.length - 1; i >= 0 && out.length < limit; i--) {
     const m = messages[i]!;
     if ((perThread.get(m.threadId) ?? 0) >= PER_THREAD) continue;
-    const flat = m.text.replace(/\s+/g, " ").trim();
-    const lower = flat.toLowerCase();
+    const lower = lowered.get(m) ?? oneLine(m.text).toLowerCase();
+    lowered.set(m, lower);
     if (!words.every(w => lower.includes(w))) continue;
+    const flat = oneLine(m.text);
     const { text, positions } = snippet(flat, lower.indexOf(words[0]!), words[0]!.length);
     perThread.set(m.threadId, (perThread.get(m.threadId) ?? 0) + 1);
     out.push({

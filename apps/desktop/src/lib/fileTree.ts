@@ -35,6 +35,32 @@ export function treeRows(listings: ReadonlyMap<string, Listing>, open: ReadonlyS
   return rows;
 }
 
+/**
+ * What a key does in the tree from the row at `at`: move to another row, or open or close a
+ * folder. Null when the key does nothing there.
+ */
+export function treeKey(rows: readonly TreeRow[], open: ReadonlySet<string>, at: number, key: string): { focus: number } | { toggle: string } | null {
+  const row = rows[at];
+  if (!row) return null;
+  const to = (i: number) => (i >= 0 && i < rows.length && i !== at ? { focus: i } : null);
+  if (key === "ArrowDown") return to(at + 1);
+  if (key === "ArrowUp") return to(at - 1);
+  if (key === "Home") return to(0);
+  if (key === "End") return to(rows.length - 1);
+  if (key === "ArrowRight") {
+    if (!row.dir) return null;
+    if (!open.has(row.path)) return { toggle: row.path };
+    // Into an open folder: its first entry, once it has one.
+    return (rows[at + 1]?.depth ?? 0) > row.depth ? { focus: at + 1 } : null;
+  }
+  if (key === "ArrowLeft") {
+    if (row.dir && open.has(row.path)) return { toggle: row.path };
+    // Out to the folder this row is in.
+    for (let i = at - 1; i >= 0; i--) if (rows[i]!.depth < row.depth) return { focus: i };
+  }
+  return null;
+}
+
 /** Every folder above `path`, so it can be opened down to that file. */
 export function parentsOf(path: string): string[] {
   const parts = path.split("/").slice(0, -1);

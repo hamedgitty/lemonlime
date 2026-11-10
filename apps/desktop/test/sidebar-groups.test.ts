@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   GROUP_ROWS,
+  carryGroupKeys,
   groupThreads,
   isSnoozed,
   moveGroup,
@@ -33,10 +34,10 @@ describe("sidebar groups", () => {
       [thread("a", "/code/app"), thread("b", "https://github.com/me/app", { mode: "cloud" }), thread("c", "/code/site"), thread("d", "/code/site")],
       { organize: "project", pinned: ["d"] },
     );
-    expect(groups.map(g => [g.key, g.threads.map(t => t.id)])).toEqual([
-      ["pinned", ["d"]],
-      ["project:app", ["a", "b"]],
-      ["project:site", ["c"]],
+    expect(groups.map(g => [g.key, g.label, g.threads.map(t => t.id)])).toEqual([
+      ["pinned", "Pinned", ["d"]],
+      ["project:local:/code/app", "app", ["a", "b"]],
+      ["project:local:/code/site", "site", ["c"]],
     ]);
     expect(groups[1]!.project).toEqual({ mode: "local", path: "/code/app" });
   });
@@ -48,7 +49,61 @@ describe("sidebar groups", () => {
     );
     expect(g!.project).toEqual({ mode: "local", path: "/code/app" });
     const [cloudOnly] = groupThreads([thread("a", "https://github.com/me/app", { mode: "cloud" })], { organize: "project", pinned: [] });
+    expect(cloudOnly!.key).toBe("project:cloud:github.com/me/app");
     expect(cloudOnly!.project).toEqual({ mode: "cloud", url: "https://github.com/me/app" });
+  });
+
+  it("keeps two folders with the same name apart, and says which is which", () => {
+    const groups = groupThreads([thread("a", "/code/acme/app"), thread("b", "/work/other/app/"), thread("c", "/code/acme/app/")], {
+      organize: "project",
+      pinned: [],
+    });
+    expect(groups.map(g => [g.key, g.label, g.threads.map(t => t.id)])).toEqual([
+      ["project:local:/code/acme/app", "acme/app", ["a", "c"]],
+      ["project:local:/work/other/app", "other/app", ["b"]],
+    ]);
+    expect(groups.map(g => g.project)).toEqual([
+      { mode: "local", path: "/code/acme/app" },
+      { mode: "local", path: "/work/other/app/" },
+    ]);
+  });
+
+  it("keeps two repositories with the same name apart, however their address is written", () => {
+    const cloud = (id: string, repo: string) => thread(id, repo, { mode: "cloud" });
+    const groups = groupThreads(
+      [
+        cloud("a", "https://github.com/Me/App.git"),
+        cloud("b", "https://github.com/them/app"),
+        cloud("c", "git@github.com:me/app.git"),
+        thread("d", "/code/app"),
+      ],
+      { organize: "project", pinned: [] },
+    );
+    // With two repositories called app, neither is taken for the folder's cloud copy.
+    expect(groups.map(g => [g.key, g.label, g.threads.map(t => t.id)])).toEqual([
+      ["project:cloud:github.com/me/app", "Me/App", ["a", "c"]],
+      ["project:cloud:github.com/them/app", "them/app", ["b"]],
+      ["project:local:/code/app", "code/app", ["d"]],
+    ]);
+  });
+
+  it("tells projects apart the same way while only some threads show", () => {
+    const all = [thread("a", "/code/acme/app"), thread("b", "/work/other/app"), thread("c", "https://github.com/me/app", { mode: "cloud" })];
+    const groups = groupThreads([all[0]!, all[2]!], { organize: "project", pinned: [], all });
+    expect(groups.map(g => g.key)).toEqual(["project:local:/code/acme/app", "project:cloud:github.com/me/app"]);
+  });
+
+  it("moves saved order and folding from a project's short name to its key now", () => {
+    const groups = groupThreads([thread("a", "/code/app"), thread("b", "/code/acme/site"), thread("c", "/work/site")], { organize: "project", pinned: [] });
+    expect(carryGroupKeys(["project:site", "place:cloud", "project:app", "project:gone"], groups)).toEqual([
+      "project:local:/code/acme/site",
+      "project:local:/work/site",
+      "place:cloud",
+      "project:local:/code/app",
+      "project:gone",
+    ]);
+    expect(carryGroupKeys(["project:local:/code/app", "agent:codex"], groups)).toBeNull();
+    expect(carryGroupKeys(["project:app"], groupThreads([thread("a", "/code/app")], { organize: "agent", pinned: [] }))).toBeNull();
   });
 
   it("groups by place and by agent under keys of their own", () => {
@@ -64,7 +119,12 @@ describe("sidebar groups", () => {
 
   it("keeps the dragged order, with new groups after and pinned first", () => {
     const groups = groupThreads([thread("a", "/a"), thread("b", "/b"), thread("c", "/c"), thread("p", "/p")], { organize: "project", pinned: ["p"] });
-    expect(orderGroups(groups, ["project:c", "project:a"]).map(g => g.key)).toEqual(["pinned", "project:c", "project:a", "project:b"]);
+    expect(orderGroups(groups, ["project:local:/c", "project:local:/a"]).map(g => g.key)).toEqual([
+      "pinned",
+      "project:local:/c",
+      "project:local:/a",
+      "project:local:/b",
+    ]);
   });
 
   it("moves a group, keeping keys saved for groups not showing", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DiffHunk } from "@lemonlime/protocol";
-import { fetchGitDiff, hiddenBefore, numberHunk, quoteLines, ReviewUnavailable, splitPath, splitRows } from "../src/lib/review.ts";
+import { fetchGitDiff, hiddenBefore, numberHunk, quoteLines, ReviewUnavailable, sameLines, splitPath, splitRows } from "../src/lib/review.ts";
 
 const hunk: DiffHunk = {
   header: "@@ -10,5 +10,6 @@ function x() {",
@@ -25,6 +25,17 @@ describe("diff lines", () => {
       ["note", null, null],
     ]);
     expect(lines[1]!.text).toBe("old one");
+  });
+
+  it("knows the same lines after a reload, so picked lines can stay picked", () => {
+    const picked = numberHunk(hunk).slice(1, 4);
+    expect(sameLines(picked, numberHunk(hunk).slice(1, 4))).toBe(true);
+    // The same text further down the file is not the same lines.
+    expect(sameLines(picked, numberHunk({ ...hunk, oldStart: 11, newStart: 11 }).slice(1, 4))).toBe(false);
+    const edited = { ...hunk, lines: hunk.lines.map(l => (l === "-old two" ? "-old 2" : l)) };
+    expect(sameLines(picked, numberHunk(edited).slice(1, 4))).toBe(false);
+    expect(sameLines(picked, picked.slice(0, 2))).toBe(false);
+    expect(sameLines([], [])).toBe(true);
   });
 
   it("pairs removals with the additions after them side by side", () => {

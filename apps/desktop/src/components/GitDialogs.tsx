@@ -118,6 +118,7 @@ export function PullRequestDraftDialog({
   open,
   load,
   canDraft,
+  draftChosen = false,
   onClose,
   onOpen,
 }: {
@@ -125,6 +126,8 @@ export function PullRequestDraftDialog({
   load: () => Promise<PullRequestDraft>;
   /** gh can open drafts here. */
   canDraft: boolean;
+  /** A draft was asked for: Enter and the main button open it as a draft. */
+  draftChosen?: boolean;
   onClose: () => void;
   onOpen: (draft: PullRequestDraft, asDraft: boolean) => Promise<void>;
 }) {
@@ -162,13 +165,15 @@ export function PullRequestDraftDialog({
       setState("ready");
     }
   };
+  const draftFirst = draftChosen && canDraft;
+  const ready = Boolean(title.trim()) && state === "ready";
   return (
-    <DialogFrame open={open} onClose={onClose} title="Open a pull request" wide>
+    <DialogFrame open={open} onClose={onClose} title={draftFirst ? "Open a draft pull request" : "Open a pull request"} wide>
       <form
         className="flex min-h-0 flex-col gap-3 px-5 pt-1 pb-5"
         onSubmit={e => {
           e.preventDefault();
-          void submit(false);
+          void submit(draftFirst);
         }}
       >
         <p className="text-[14px] text-pretty text-ink-soft">
@@ -205,13 +210,13 @@ export function PullRequestDraftDialog({
             Cancel
           </Button>
           {canDraft && (
-            <Button size="sm" disabled={!title.trim() || state !== "ready"} onClick={() => void submit(true)}>
-              Open as draft
+            <Button size="sm" disabled={!ready} onClick={() => void submit(!draftFirst)}>
+              {draftFirst ? "Open as ready for review" : "Open as draft"}
             </Button>
           )}
-          <Button size="sm" variant="primary" type="submit" disabled={!title.trim() || state !== "ready"}>
+          <Button size="sm" variant="primary" type="submit" disabled={!ready}>
             {state === "opening" && <Spinner />}
-            Open pull request
+            {draftFirst ? "Open draft pull request" : "Open pull request"}
           </Button>
         </div>
       </form>

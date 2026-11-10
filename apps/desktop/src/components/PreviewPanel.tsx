@@ -45,7 +45,10 @@ export function PreviewPanel({
   findFileKeys,
   open,
   onOfferPort,
+  hidden = false,
 }: {
+  /** Kept mounted but out of sight, so the page keeps its place while another tab shows. */
+  hidden?: boolean;
   events: ThreadEvent[];
   mode: "local" | "cloud";
   connection: Connection | null;
@@ -100,7 +103,7 @@ export function PreviewPanel({
   };
 
   return (
-    <div role="tabpanel" aria-label="Browser" className="flex min-h-0 flex-1 flex-col">
+    <div role="tabpanel" aria-label="Browser" className={cx("min-h-0 flex-1 flex-col", hidden ? "hidden" : "flex")}>
       {(previews.length > 0 || page || found.length > 0) && (
         <div className="flex min-h-11 items-center gap-1 border-b border-line px-2 py-1.5">
           <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none]">
@@ -144,7 +147,7 @@ export function PreviewPanel({
                     setPage(null);
                     if (view.kind === "page") setChosen(null);
                   }}
-                  className="mr-0.5 inline-flex size-5 items-center justify-center rounded-md text-ink-faint hover:bg-cream-deep hover:text-ink"
+                  className="mr-0.5 inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-cream-deep hover:text-ink"
                 >
                   <X aria-hidden="true" className="size-3" />
                 </button>

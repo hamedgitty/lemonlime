@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { AlarmClock, Check, CheckCheck, CircleDashed, Pause, Pencil, Play, Plus, RotateCw, SkipForward, Trash2, Webhook, X } from "lucide-react";
-import { nextRun, parseSchedule, WEBHOOK_BODY_MAX_BYTES, type AgentKind } from "@lemonlime/protocol";
+import { nextRun, parseSchedule, WEBHOOK_BODY_MAX_BYTES } from "@lemonlime/protocol";
+import { automationBody, automationForm, localZone, newAutomationForm, type AutomationForm } from "../lib/automations.ts";
 import type { AutomationInfo, AutomationRun, CloudApi } from "../lib/cloud.ts";
 import { AGENT_LABELS, relativeTime, repoName } from "../lib/format.ts";
 import { CopyButton } from "../lib/markdown.tsx";
 import { confirmAction } from "../lib/native.ts";
 import { PageTabs } from "./primitives.tsx";
-import { Button, SegmentedControl, SkeletonRows, TextInput, cx } from "./ui.tsx";
+import { Button, RetryCard, SegmentedControl, SkeletonRows, TextInput, cx } from "./ui.tsx";
 import { PageTools } from "./PanelButtons.tsx";
 
 const PRESETS = [
@@ -122,17 +123,8 @@ const when = (iso: string | null, tz: string) =>
     : "Not scheduled";
 
 type Tab = "overview" | "review" | "templates" | "scans";
-type Form = {
-  name: string;
-  schedule: string;
-  agent: AgentKind;
-  repoUrl: string;
-  baseBranch: string;
-  prompt: string;
-  checkScript: string;
-  size: "small" | "large";
-};
-const EMPTY: Form = { name: "", schedule: PRESETS[0]!.cron, agent: "claude-code", repoUrl: "", baseBranch: "main", prompt: "", checkScript: "", size: "small" };
+type Form = AutomationForm;
+const emptyForm = (): Form => newAutomationForm(PRESETS[0]!.cron);
 
 /**
  * Automations: a prompt that starts a new cloud thread on a schedule or when its webhook
@@ -154,11 +146,22 @@ export function AutomationsView({
   const [tab, setTab] = useState<Tab>("overview");
   const [list, setList] = useState<AutomationInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ id: string | null; form: Form } | null>(null);
+  // The list couldn't be read at all: shown with a way to try again, not as endless loading.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // `turn` changes each time the form is opened afresh, so a template refills a form that's already open.
+  const [editing, setEditing] = useState<{ id: string | null; form: Form; turn: number } | null>(null);
+  const turns = useRef(0);
+  const openEditor = (id: string | null, form: Form) => setEditing({ id, form, turn: ++turns.current });
 
   const load = useCallback(() => {
     if (!cloudApi) return;
-    cloudApi.listAutomations().then(setList, e => setError(e instanceof Error ? e.message : String(e)));
+    setLoadError(null);
+    setLoading(true);
+    cloudApi
+      .listAutomations()
+      .then(setList, e => setLoadError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoading(false));
   }, [cloudApi]);
   useEffect(load, [load]);
 
@@ -195,7 +198,13 @@ export function AutomationsView({
 
   return (
     <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-      <Header tab={tab} onTab={setTab} toReview={toReview} hasScans={Boolean(scans)} onNew={cloudApi ? () => setEditing({ id: null, form: EMPTY }) : null} />
+      <Header
+        tab={tab}
+        onTab={setTab}
+        toReview={toReview}
+        hasScans={Boolean(scans)}
+        onNew={cloudApi ? () => (editing && !editing.id ? undefined : openEditor(null, emptyForm())) : null}
+      />
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[800px] px-6 pt-6 pb-16">
           {error && (
@@ -203,24 +212,19 @@ export function AutomationsView({
               {error}
             </p>
           )}
+          {loadError && list !== null && (
+            <p role="alert" className="mb-4 rounded-lg border border-danger/20 bg-danger-soft px-3 py-2 text-[14px]">
+              Couldn't refresh the list. {loadError}
+            </p>
+          )}
           {editing && cloudApi && (
             <Editor
-              key={editing.id ?? "new"}
+              key={`${editing.id ?? "new"}:${editing.turn}`}
               initial={editing.form}
               isNew={!editing.id}
               onCancel={() => setEditing(null)}
               onSave={async f => {
-                const zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-                const body = {
-                  name: f.name.trim(),
-                  schedule: f.schedule.trim(),
-                  timezone: zone,
-                  agent: { kind: f.agent },
-                  repo: { url: f.repoUrl.trim(), baseBranch: f.baseBranch.trim() || "main" },
-                  sandboxSize: f.size,
-                  prompt: f.prompt.trim(),
-                  checkScript: f.checkScript.trim(),
-                };
+                const body = automationBody(f);
                 if (editing.id) {
                   const u = await cloudApi.updateAutomation(editing.id, body);
                   setList(l => l?.map(x => (x.id === editing.id ? { ...x, ...u } : x)) ?? null);
@@ -233,24 +237,13 @@ export function AutomationsView({
               }}
             />
           )}
-          {tab === "overview" && cloudApi && (
+          {cloudApi && list === null && loadError && (tab === "overview" || tab === "review") && (
+            <RetryCard title="Couldn't load your automations" detail={loadError} onRetry={load} busy={loading} />
+          )}
+          {tab === "overview" && cloudApi && !(list === null && loadError) && (
             <Overview
               list={list}
-              onEdit={a =>
-                setEditing({
-                  id: a.id,
-                  form: {
-                    name: a.name,
-                    schedule: a.schedule,
-                    agent: a.agent.kind,
-                    repoUrl: a.repo.url,
-                    baseBranch: a.repo.baseBranch,
-                    prompt: a.prompt,
-                    checkScript: a.checkScript ?? "",
-                    size: a.sandboxSize ?? "small",
-                  },
-                })
-              }
+              onEdit={a => openEditor(a.id, automationForm(a))}
               onToggle={a =>
                 act(async () => {
                   const u = await cloudApi.updateAutomation(a.id, { enabled: !a.enabled });
@@ -270,7 +263,7 @@ export function AutomationsView({
               onChanged={(id, patch) => setList(l => l?.map(x => (x.id === id ? { ...x, ...patch } : x)) ?? null)}
             />
           )}
-          {tab === "review" && cloudApi && (
+          {tab === "review" && cloudApi && !(list === null && loadError) && (
             <Review
               list={list}
               onOpenThread={onOpenThread}
@@ -291,7 +284,7 @@ export function AutomationsView({
           {tab === "templates" && (
             <Templates
               onUse={t => {
-                setEditing({ id: null, form: { ...EMPTY, name: t.name, schedule: t.schedule, prompt: t.prompt } });
+                openEditor(null, { ...emptyForm(), name: t.name, schedule: t.schedule, prompt: t.prompt });
                 setTab("overview");
               }}
               disabled={!cloudApi}
@@ -435,6 +428,8 @@ function AutomationCard({
   const [hookOpen, setHookOpen] = useState(false);
   const [allRuns, setAllRuns] = useState<AutomationRun[] | "loading" | null>(null);
   const runs = Array.isArray(allRuns) ? allRuns : (a.recentRuns ?? []).slice(0, 5);
+  // Someone else's automation, seen by a member who isn't an owner: they can look, not change.
+  const canManage = a.canManage !== false;
   return (
     <li className={cx("rounded-xl border bg-paper p-4", a.enabled ? "border-line" : "border-line-strong")}>
       <div className="flex items-start gap-2">
@@ -448,31 +443,41 @@ function AutomationCard({
           {a.enabled ? (
             a.schedule && <p className="mt-1 text-[13px] text-ink">Next run {when(a.nextRunAt, a.timezone)}</p>
           ) : (
-            <p className="mt-1 text-[13px] text-ink">{a.pausedReason ? `Paused automatically. ${a.pausedReason}` : "Paused by you."}</p>
+            <p className="mt-1 text-[13px] text-ink">{a.pausedReason ? `Paused automatically. ${a.pausedReason}` : canManage ? "Paused by you." : "Paused."}</p>
           )}
+          {!canManage && <p className="mt-1 text-[13px] text-ink-soft">Only the person who set this up or a workspace owner can change it.</p>}
         </div>
-        <Button size="sm" variant="ghost" onClick={() => onEdit(a)} aria-label={`Edit ${a.name}`}>
-          <Pencil aria-hidden="true" className="size-3.5" />
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setHookOpen(o => !o)}
-          aria-expanded={hookOpen}
-          aria-label={`Webhook for ${a.name}`}
-          className={cx(a.hasWebhook && "text-leaf")}
-        >
-          <Webhook aria-hidden="true" className="size-3.5" />
-        </Button>
-        <Button size="sm" variant={a.enabled ? "ghost" : "primary"} onClick={() => onToggle(a)} aria-label={a.enabled ? `Pause ${a.name}` : `Resume ${a.name}`}>
-          {a.enabled ? <Pause aria-hidden="true" className="size-3.5" /> : <Play aria-hidden="true" className="size-3.5" />}
-          {a.enabled ? "Pause" : "Resume"}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => onRemove(a)} aria-label={`Delete ${a.name}`}>
-          <Trash2 aria-hidden="true" className="size-3.5" />
-        </Button>
+        {canManage && (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => onEdit(a)} aria-label={`Edit ${a.name}`}>
+              <Pencil aria-hidden="true" className="size-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setHookOpen(o => !o)}
+              aria-expanded={hookOpen}
+              aria-label={`Webhook for ${a.name}`}
+              className={cx(a.hasWebhook && "text-leaf")}
+            >
+              <Webhook aria-hidden="true" className="size-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant={a.enabled ? "ghost" : "primary"}
+              onClick={() => onToggle(a)}
+              aria-label={a.enabled ? `Pause ${a.name}` : `Resume ${a.name}`}
+            >
+              {a.enabled ? <Pause aria-hidden="true" className="size-3.5" /> : <Play aria-hidden="true" className="size-3.5" />}
+              {a.enabled ? "Pause" : "Resume"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onRemove(a)} aria-label={`Delete ${a.name}`}>
+              <Trash2 aria-hidden="true" className="size-3.5" />
+            </Button>
+          </>
+        )}
       </div>
-      {hookOpen && <WebhookPanel a={a} cloudApi={cloudApi} onChanged={onChanged} />}
+      {canManage && hookOpen && <WebhookPanel a={a} cloudApi={cloudApi} onChanged={onChanged} />}
       {runs.length > 0 && (
         <div className="mt-3 border-t border-line pt-2">
           <ul aria-label={`Runs of ${a.name}`} className="flex flex-col gap-1 text-[13px]">
@@ -561,11 +566,14 @@ function WebhookPanel({ a, cloudApi, onChanged }: { a: AutomationInfo; cloudApi:
               variant="ghost"
               disabled={busy}
               onClick={() =>
-                void run(async () => {
-                  await cloudApi.removeAutomationWebhook(a.id);
-                  setUrl(null);
-                  onChanged({ hasWebhook: false });
-                })
+                void (async () => {
+                  if (!(await confirmAction("Turn off the webhook? Its URL stops working straight away. Turning it on again makes a new one."))) return;
+                  await run(async () => {
+                    await cloudApi.removeAutomationWebhook(a.id);
+                    setUrl(null);
+                    onChanged({ hasWebhook: false });
+                  });
+                })()
               }
             >
               Turn off
@@ -735,8 +743,17 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
   const [form, setForm] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const zone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+  // An automation being changed keeps its own time zone; a new one gets this computer's.
+  const zone = form.timezone;
+  const here = useMemo(() => localZone(), []);
   const set = (p: Partial<Form>) => setForm(f => ({ ...f, ...p }));
+  // The form opens above the list: bring it into view and start in its first field.
+  const formEl = useRef<HTMLFormElement>(null);
+  const nameEl = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    formEl.current?.scrollIntoView({ block: "nearest" });
+    nameEl.current?.focus({ preventScroll: true });
+  }, []);
   const preview = useMemo(() => {
     if (!form.schedule.trim()) return { ok: true, text: "Runs only when its webhook is called. Make the webhook URL after saving." };
     try {
@@ -760,11 +777,22 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
     }
   };
   return (
-    <form onSubmit={e => void submit(e)} className="mb-8 flex flex-col gap-4 rounded-2xl border border-line-strong bg-paper p-5 shadow-panel">
+    <form
+      ref={formEl}
+      onSubmit={e => void submit(e)}
+      className="mb-8 flex scroll-mt-6 flex-col gap-4 rounded-2xl border border-line-strong bg-paper p-5 shadow-panel"
+    >
       <h2 className="font-sans text-[16px] font-semibold tracking-normal">{isNew ? "New automation" : `Edit ${initial.name}`}</h2>
       <label className="block">
         <span className="mb-1 block text-[14px] font-medium">Name</span>
-        <TextInput required maxLength={120} value={form.name} onChange={e => set({ name: e.target.value })} placeholder="Nightly dependency bump" />
+        <TextInput
+          ref={nameEl}
+          required
+          maxLength={120}
+          value={form.name}
+          onChange={e => set({ name: e.target.value })}
+          placeholder="Nightly dependency bump"
+        />
       </label>
       <div>
         <span className="mb-1 block text-[14px] font-medium">When</span>
@@ -790,6 +818,11 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
         <p className={cx("mt-1 text-[13px]", preview.ok ? "text-ink-faint" : "text-danger")}>
           {preview.text} {preview.ok && form.schedule.trim() && `(${zone})`}
         </p>
+        {form.schedule.trim() !== "" && zone !== here && (
+          <button type="button" className="mt-0.5 inline-flex h-6 items-center text-[13px] text-leaf hover:underline" onClick={() => set({ timezone: here })}>
+            Use this computer's time zone ({here})
+          </button>
+        )}
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <div>
@@ -797,7 +830,7 @@ function Editor({ initial, isNew, onCancel, onSave }: { initial: Form; isNew: bo
           <SegmentedControl
             label="Agent"
             value={form.agent}
-            onChange={v => set({ agent: v })}
+            onChange={v => (v === form.agent ? undefined : setForm(({ model: _m, reasoning: _r, ...f }) => ({ ...f, agent: v })))}
             options={(["claude-code", "codex", "opencode"] as const).map(k => ({ value: k, label: AGENT_LABELS[k] }))}
           />
         </div>

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, 
 import { Check, ChevronRight, Gauge, Plus, RefreshCw, Search, Zap } from "lucide-react";
 import { AGENT_CAPABILITIES, type AgentKind, type AgentModel, type ReasoningLevel } from "@lemonlime/protocol";
 import { AGENT_LABELS } from "../lib/format.ts";
+import { composing } from "../lib/ime.ts";
 import { cycleEffort, filterModels, modelLabel, parseOpencodeModels, splitModels } from "../lib/models.ts";
 import { openAgentsSettings } from "../lib/settingsNav.ts";
 import { keyCaps } from "../lib/shortcuts.ts";
@@ -278,7 +279,13 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
   const panelId = `${id}-panel`;
   const listId = `${id}-list`;
 
+  // Set by the arrow keys on the tabs, so focus stays on the tab the person just moved to.
+  const keepTabFocus = useRef(false);
   useEffect(() => {
+    if (keepTabFocus.current) {
+      keepTabFocus.current = false;
+      return;
+    }
     // Ready to type a search as soon as it opens.
     const t = setTimeout(() => search.current?.focus(), 0);
     return () => clearTimeout(t);
@@ -300,12 +307,16 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
     p.onClose();
   };
 
+  const optionId = (i: number) => `${listId}-${i}`;
+  const activeIndex = Math.min(active, Math.max(0, shown.length - 1));
+
   const onTabKey = (e: KeyboardEvent<HTMLButtonElement>, i: number) => {
     const n = p.tabs.length;
     const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
     if (to < 0) return;
     e.preventDefault();
     const kind = p.tabs[to]!;
+    keepTabFocus.current = kind !== viewing;
     setViewing(kind);
     setQuery("");
     setActive(0);
@@ -316,17 +327,18 @@ function Picker(p: ModelControlProps & { onClose: () => void }) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!shown.length) return;
-      setActive(a => (e.key === "ArrowDown" ? (a + 1) % shown.length : (a - 1 + shown.length) % shown.length));
-    } else if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+      const to = e.key === "ArrowDown" ? (activeIndex + 1) % shown.length : (activeIndex - 1 + shown.length) % shown.length;
+      setActive(to);
+      // Keep the highlighted model in view in a long list (the pointer moving over rows never scrolls it).
+      document.getElementById(optionId(to))?.scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && !composing(e)) {
       e.preventDefault();
-      const m = shown[active];
+      const m = shown[activeIndex];
       if (m) pick(m.id);
     }
   };
 
   const caps = AGENT_CAPABILITIES[viewing];
-  const optionId = (i: number) => `${listId}-${i}`;
-  const activeIndex = Math.min(active, Math.max(0, shown.length - 1));
 
   return (
     <div className="flex flex-col">

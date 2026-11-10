@@ -22,9 +22,17 @@ export const RESTART_WHILE_WORKING =
  * never a reason to show an error.
  */
 export async function checkForUpdate(): Promise<AvailableUpdate | null> {
+  return checkForUpdateNow().catch(() => null);
+}
+
+/**
+ * The same check for when a person asks for it: one that can't be made (offline) fails,
+ * so it isn't mistaken for being up to date.
+ */
+export async function checkForUpdateNow(): Promise<AvailableUpdate | null> {
   if (!isTauri()) return null;
   const { check } = await import("@tauri-apps/plugin-updater");
-  const update = await check().catch(() => null);
+  const update = await check();
   if (!update) return null;
   let installed = false;
   return {

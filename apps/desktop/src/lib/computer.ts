@@ -6,7 +6,7 @@ export type ComputerLevel = "off" | "read" | "ask" | "full";
 
 export const COMPUTER_LEVELS: { value: ComputerLevel; label: string; hint: string }[] = [
   { value: "off", label: "Off", hint: "The agent can't reach this computer" },
-  { value: "read", label: "Read-only", hint: "Read files and list folders" },
+  { value: "read", label: "Read-only", hint: "Reads files and lists folders; asks before files that usually hold keys or passwords" },
   { value: "ask", label: "Ask first", hint: "Asks you before each request" },
   { value: "full", label: "Full", hint: "Reads, lists and runs commands without asking" },
 ];

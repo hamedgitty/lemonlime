@@ -259,8 +259,14 @@ export function GitActionsButton({ git, mode }: { git: GitState; mode: "local" |
   const pr = git.pullRequest;
   const canPush = Boolean(s?.hasRemote);
   const [drafting, setDrafting] = useState(false);
+  // "Open draft pull request" was picked: the dialog's main button opens it as a draft.
+  const [draftChosen, setDraftChosen] = useState(false);
   // On this computer the title and description can be edited first; the cloud opens it straight away.
-  const open = (asDraft = false) => (mode === "local" ? setDrafting(true) : void git.openPullRequest(asDraft));
+  const open = (asDraft = false) => {
+    if (mode !== "local") return void git.openPullRequest(asDraft);
+    setDraftChosen(asDraft);
+    setDrafting(true);
+  };
   const main = pr
     ? { label: "View pull request", icon: <ExternalLink aria-hidden="true" className="size-3.5" />, run: () => void openExternal(pr.url) }
     : { label: "Open pull request", icon: <GitPullRequest aria-hidden="true" className="size-3.5" />, run: () => open() };
@@ -348,6 +354,7 @@ export function GitActionsButton({ git, mode }: { git: GitState; mode: "local" |
           open={drafting}
           load={git.loadDraft}
           canDraft={s?.gh === "ready"}
+          draftChosen={draftChosen}
           onClose={() => setDrafting(false)}
           onOpen={async (text, asDraft) => {
             if (await git.openPullRequest(asDraft, text)) setDrafting(false);

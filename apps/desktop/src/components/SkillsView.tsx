@@ -82,6 +82,8 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
   const [skills, setSkills] = useState<Item[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the list didn't load. With no list yet it shows with a way to try again; otherwise as a note above the old list.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [dir, setDir] = useState("");
   const shell = inDesktopShell();
@@ -89,10 +91,14 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
   const reload = useCallback(
     () =>
       listSkills()
-        .then(list => setSkills(list.map(s => ({ ...s, key: `${s.source}:${s.name}` }))))
-        .catch(e => setError(String(e))),
+        .then(list => {
+          setLoadError(null);
+          setSkills(list.map(s => ({ ...s, key: `${s.source}:${s.name}` })));
+        })
+        .catch(e => setLoadError(message(e))),
     [],
   );
+  const problem = error ?? (skills !== null ? loadError : null);
   useEffect(() => {
     void reload();
     void skillsFolder().then(setDir, () => undefined);
@@ -166,17 +172,17 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
         />
       </header>
 
-      {(error || notice) && (
+      {(problem || notice) && (
         <div className="px-6 pt-3">
           <p
-            role={error ? "alert" : "status"}
+            role={problem ? "alert" : "status"}
             className={cx(
               "flex items-start gap-2 rounded-lg border px-3 py-2 text-[14px] text-ink",
-              error ? "border-danger/20 bg-danger-soft" : "border-line bg-lime-soft",
+              problem ? "border-danger/20 bg-danger-soft" : "border-line bg-lime-soft",
             )}
           >
-            <span className="min-w-0 flex-1">{error ?? notice}</span>
-            <IconButton label="Dismiss" className="-my-1 -mr-1.5" onClick={() => (setError(null), setNotice(null))}>
+            <span className="min-w-0 flex-1">{problem ?? notice}</span>
+            <IconButton label="Dismiss" className="-my-1 -mr-1.5" onClick={() => (setError(null), setLoadError(null), setNotice(null))}>
               <X aria-hidden="true" />
             </IconButton>
           </p>
@@ -186,6 +192,8 @@ export function SkillsView({ onPrompt }: { onPrompt: (text: string) => void }) {
       {tab === "installed" ? (
         <Installed
           skills={skills}
+          loadError={loadError}
+          onRetry={() => void reload()}
           shell={shell}
           selected={selected}
           onSelect={setSelected}
@@ -239,6 +247,8 @@ function SearchBox({ value, onChange, label }: { value: string; onChange: (v: st
 
 function Installed({
   skills,
+  loadError,
+  onRetry,
   shell,
   selected,
   onSelect,
@@ -247,6 +257,8 @@ function Installed({
   onBrowse,
 }: {
   skills: Item[] | null;
+  loadError: string | null;
+  onRetry: () => void;
   shell: boolean;
   selected: string | null;
   onSelect: (key: string) => void;
@@ -304,7 +316,7 @@ function Installed({
         )}
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-2 pb-3">
           {skills === null ? (
-            shell ? (
+            loadError ? null : shell ? (
               <SkeletonRows rows={6} label="Loading skills" />
             ) : (
               <p className="px-2 py-2 text-[14px] text-ink-soft">Skills are shown in the desktop app.</p>
@@ -356,6 +368,10 @@ function Installed({
               A skill is a folder with a SKILL.md that tells agents how to do something your way. Pick one to read it.
             </p>
           </div>
+        ) : loadError ? (
+          <div className="flex h-full items-center justify-center p-8">
+            <RetryCard title="Your skills didn't load" detail={loadError} onRetry={onRetry} />
+          </div>
         ) : null}
       </section>
     </div>
@@ -379,7 +395,7 @@ function SkillPreview({ skill, onFork, onRemove }: { skill: Item; onFork: () => 
         </div>
         <div className="flex shrink-0 gap-2">
           {detail && (
-            <Button size="sm" variant="ghost" onClick={() => void revealItemInDir(detail.path)}>
+            <Button size="sm" variant="ghost" onClick={() => void revealItemInDir(detail.path).catch(e => setError(`Couldn't show the folder. ${message(e)}`))}>
               <FolderOpen aria-hidden="true" className="size-4" />
               Show in folder
             </Button>
@@ -398,7 +414,11 @@ function SkillPreview({ skill, onFork, onRemove }: { skill: Item; onFork: () => 
         </div>
       </div>
       {detail && <p className="mt-2 truncate font-mono text-[12px] text-ink-faint">{detail.path}</p>}
-      {error && <p className="mt-4 text-[14px] text-danger">{error}</p>}
+      {error && (
+        <p role="alert" className="mt-4 text-[14px] text-danger">
+          {error}
+        </p>
+      )}
       {!detail && !error && (
         <div className="mt-6">
           <SkeletonText label="Loading the skill" />

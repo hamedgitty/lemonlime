@@ -6,7 +6,7 @@ import { HarnessTab } from "./HarnessTab.tsx";
 import { Copy, Plus, Trash2 } from "lucide-react";
 import { AGENT_LABELS } from "../../lib/format.ts";
 import { effortLevels, needsUpdate } from "../../lib/models.ts";
-import { inDesktopShell } from "../../lib/native.ts";
+import { confirmAction, inDesktopShell } from "../../lib/native.ts";
 import { AGENTS_TAB_EVENT, takeAgentsTab, type AgentsTab, type AgentsTabRequest } from "../../lib/settingsNav.ts";
 import { TESTED_AGENTS } from "../../lib/system.ts";
 import type { Settings, UiPrefs } from "../../lib/storage.ts";
@@ -14,6 +14,7 @@ import { defaultModel, EFFORT_LABELS } from "../ModelControl.tsx";
 import { Button, IconButton, TextInput } from "../ui.tsx";
 import type { SettingsCtx } from "./context.ts";
 import { code, ErrorText, Row, Section, Select, Tabs, ToggleRow } from "./parts.tsx";
+import { composing } from "../../lib/ime.ts";
 
 const TABS: { id: AgentsTab; label: string }[] = [
   { id: "harness", label: "Harness" },
@@ -224,6 +225,10 @@ function AcpTab({ ctx }: { ctx: SettingsCtx }) {
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const remove = async (a: Settings["acpAgents"][number]) => {
+    if (!(await confirmAction(`Remove ${a.name}? It leaves the agent picker, and its command isn't kept.`))) return;
+    onSave({ ...settings, acpAgents: settings.acpAgents.filter(x => x.id !== a.id) });
+  };
   const add = () => {
     if (!name.trim() || !command.trim()) return setError("Give it a name and the command that starts it.");
     if (settings.acpAgents.some(a => a.name.toLowerCase() === name.trim().toLowerCase())) return setError("You already have an agent with that name.");
@@ -240,7 +245,7 @@ function AcpTab({ ctx }: { ctx: SettingsCtx }) {
       {settings.acpAgents.length === 0 && <p className="text-[14px] text-ink-soft">None saved yet.</p>}
       {settings.acpAgents.map(a => (
         <Row key={a.id} label={a.name} description={<code className={code}>{a.command}</code>}>
-          <IconButton label={`Remove ${a.name}`} onClick={() => onSave({ ...settings, acpAgents: settings.acpAgents.filter(x => x.id !== a.id) })}>
+          <IconButton label={`Remove ${a.name}`} onClick={() => void remove(a)}>
             <Trash2 aria-hidden="true" className="size-4" />
           </IconButton>
         </Row>
@@ -255,7 +260,7 @@ function AcpTab({ ctx }: { ctx: SettingsCtx }) {
           <TextInput
             value={command}
             onChange={e => setCommand(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && add()}
+            onKeyDown={e => e.key === "Enter" && !composing(e) && add()}
             placeholder="gemini --experimental-acp"
             className="font-mono text-[13px]"
             spellCheck={false}

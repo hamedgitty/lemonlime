@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { clearMatches, findRanges, flashItem, matchLabel, paintMatches, revealRange, stepMatch } from "../lib/findInThread.ts";
 import { IconButton } from "./ui.tsx";
+import { composing } from "../lib/ime.ts";
 
 /**
  * The ⌘F bar over a thread's timeline: matches are highlighted in place, Enter and
@@ -22,6 +23,8 @@ export function FindBar({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
+  // Two threads side by side each have a bar: the count needs an id of its own.
+  const countId = useId();
   const [current, setCurrent] = useState(-1);
   const [total, setTotal] = useState(0);
   const currentRef = useRef(current);
@@ -97,6 +100,7 @@ export function FindBar({
         value={query}
         onChange={e => setQuery(e.target.value)}
         onKeyDown={e => {
+          if (composing(e)) return;
           if (e.key === "Enter") {
             e.preventDefault();
             step(e.shiftKey ? -1 : 1);
@@ -108,10 +112,10 @@ export function FindBar({
         }}
         placeholder="Find in thread"
         aria-label="Find in thread"
-        aria-describedby="find-count"
+        aria-describedby={countId}
         className="h-8 w-[200px] min-w-0 bg-transparent px-1.5 text-[14px] text-ink outline-none placeholder:text-ink-faint"
       />
-      <span id="find-count" role="status" className="min-w-[72px] text-right text-[13px] text-ink-soft tabular-nums">
+      <span id={countId} role="status" className="min-w-[72px] text-right text-[13px] text-ink-soft tabular-nums">
         {label}
       </span>
       <IconButton label="Previous match (Shift Enter)" disabled={total === 0} onClick={() => step(-1)}>

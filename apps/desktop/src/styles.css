@@ -6,6 +6,8 @@
   --color-cream: #ffffff;
   --color-cream-deep: #f5f5f4;
   --color-cream-hover: #ebebe9;
+  /* The chosen option in a row of options: it stands out from the track it sits on. */
+  --color-knob: #ffffff;
   --color-ink: #17200e;
   --color-ink-soft: #4b5637;
   --color-ink-faint: #636d54;
@@ -25,6 +27,7 @@
   --color-lemon-press: #f5d400;
   --color-lemon-seam: #d8b900;
   --color-lime: #a3e635;
+  --color-lime-hover: #b2ec52;
   --color-lime-soft: #e7f8c6;
   --color-lime-line: #c9e89a;
   --color-lime-2: #7cc81e;
@@ -71,6 +74,8 @@
 
   --shadow-panel: 0 1px 2px rgb(23 32 14 / 0.04), 0 4px 16px rgb(23 32 14 / 0.05);
   --shadow-pop: 0 2px 6px rgb(23 32 14 / 0.06), 0 18px 48px rgb(23 32 14 / 0.16);
+  /* The message box while it has focus: a step up from a panel. */
+  --shadow-focus: 0 1px 2px rgb(23 32 14 / 0.04), 0 6px 20px rgb(23 32 14 / 0.07);
 
   --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
   --animate-rise: rise 200ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -107,6 +112,7 @@
   --color-cream: #000000;
   --color-cream-deep: #141414;
   --color-cream-hover: #1f1f1f;
+  --color-knob: #262626;
   --color-ink: #f4f4f1;
   --color-ink-soft: #c8cbc2;
   --color-ink-faint: #9da195;
@@ -139,6 +145,13 @@
   --color-code-function: #f4f4f1;
   --shadow-panel: 0 0 0 1px rgb(255 255 255 / 0.05), 0 4px 16px rgb(0 0 0 / 0.5);
   --shadow-pop: 0 0 0 1px rgb(255 255 255 / 0.08), 0 18px 48px rgb(0 0 0 / 0.7);
+  --shadow-focus: 0 0 0 1px rgb(255 255 255 / 0.1), 0 6px 20px rgb(0 0 0 / 0.6);
+}
+/* A raised surface is nearly the colour of the two fills, so on it they step up with it:
+   a highlighted menu row or a hovered button still shows. */
+:root[data-theme="dark"] .bg-paper {
+  --color-cream-deep: #1c1c1c;
+  --color-cream-hover: #262626;
 }
 :root:not([data-theme="dark"]) {
   color-scheme: light;
@@ -192,6 +205,12 @@ svg [fill="#FFFBEA" i] {
       animation-duration: 1ms !important;
       transition-duration: 1ms !important;
     }
+  }
+  /* Light to dark (or back) happens in one frame; see lib/theme.ts. */
+  :root[data-theme-switching] *,
+  :root[data-theme-switching] *::before,
+  :root[data-theme-switching] *::after {
+    transition: none !important;
   }
   /* Calm when idle: spinners, pulses and shimmer hold still while the window isn't in front. */
   :root[data-window-blurred] *,

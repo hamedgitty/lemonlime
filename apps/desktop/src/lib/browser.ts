@@ -91,3 +91,19 @@ export function normalizeUrl(input: string): string | null {
     return null;
   }
 }
+
+/**
+ * The address to show in a panel for `url`, or null when it can only open in the person's own
+ * browser. A panel shows pages served from this computer and nothing else.
+ */
+export function panelAddress(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:") return null;
+    // The same computer under another name: "localhost" reaches it too.
+    if (u.hostname === "[::1]") u.hostname = "localhost";
+    return u.hostname === "localhost" || u.hostname === "127.0.0.1" ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}

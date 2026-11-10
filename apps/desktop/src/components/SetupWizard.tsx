@@ -3,7 +3,7 @@ import { AgentIcon } from "./AgentIcon.tsx";
 import { Check, Cloud, Copy, RefreshCw, X } from "lucide-react";
 import { GithubMark } from "./icons.tsx";
 import type { CloudApi } from "../lib/cloud.ts";
-import { startBrowserSignIn } from "../lib/desktopAuth.ts";
+import { onSignInRefused, startBrowserSignIn } from "../lib/desktopAuth.ts";
 import { AGENT_LABELS } from "../lib/format.ts";
 import { inDesktopShell } from "../lib/native.ts";
 import type { UiPrefs } from "../lib/storage.ts";
@@ -121,9 +121,19 @@ function Heading({ title, body }: { title: string; body: ReactNode }) {
 
 function SignInStep({ connected, dashboardUrl, onNext }: SetupWizardProps & { onNext: () => void }) {
   const [waiting, setWaiting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (connected) setWaiting(false);
   }, [connected]);
+  // The browser never opened, or what it sent back wasn't accepted: stop waiting and say so.
+  const failed = (why: string) => {
+    setWaiting(false);
+    setError(why);
+  };
+  useEffect(() => {
+    if (!waiting) return;
+    return onSignInRefused(() => failed("The sign-in from your browser wasn't accepted. Try again."));
+  }, [waiting]);
   return (
     <>
       <Heading
@@ -153,12 +163,18 @@ function SignInStep({ connected, dashboardUrl, onNext }: SetupWizardProps & { on
               variant="primary"
               disabled={!inDesktopShell()}
               onClick={() => {
+                setError(null);
                 setWaiting(true);
-                void startBrowserSignIn(dashboardUrl || "https://app.lemonlime.dev");
+                startBrowserSignIn(dashboardUrl || "https://app.lemonlime.dev").catch(err => failed(err instanceof Error ? err.message : String(err)));
               }}
             >
               Sign in with your browser
             </Button>
+            {error && (
+              <p role="alert" className="text-[14px] text-danger">
+                {error}
+              </p>
+            )}
             <Button variant="ghost" onClick={onNext}>
               Not now, just this computer
             </Button>

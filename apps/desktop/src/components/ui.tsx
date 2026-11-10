@@ -227,7 +227,7 @@ export function SegmentedControl<T extends string>({
             title={o.hint}
             className={cx(
               "relative flex items-center justify-center gap-2 rounded-[9px] px-3 py-1.5 text-[13px] font-medium transition-colors",
-              active ? "bg-paper text-ink shadow-[0_1px_2px_rgb(23_32_14/0.08)]" : "text-ink-soft hover:text-ink",
+              active ? "bg-knob text-ink shadow-panel" : "text-ink-soft hover:text-ink",
               o.disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer",
               "has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-leaf",
             )}

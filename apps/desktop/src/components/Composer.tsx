@@ -11,9 +11,10 @@ import { continueList, endList, indentLines, wrapSelection, type TextChange } fr
 import { enterAction, sendKeyLabel, type SendKey } from "../lib/composerSend.ts";
 import { pasteBecomesFile } from "../lib/pastedText.ts";
 import { IS_MAC } from "../lib/shortcuts.ts";
+import { composing } from "../lib/ime.ts";
 import { Highlighted } from "./Highlighted.tsx";
 import { Kbd, Menu, MenuChoice, MenuItem, MenuLabel, MenuSeparator, Tip } from "./primitives.tsx";
-import { cx } from "./ui.tsx";
+import { Spinner, cx } from "./ui.tsx";
 
 export interface ComposerHandle {
   /** Put text in the box (e.g. a one-click prompt) and focus it. */
@@ -60,6 +61,8 @@ export const Composer = forwardRef<
     onInterrupt?: () => void;
     /** The agent is in the middle of a turn: show the stop button. */
     working?: boolean;
+    /** Stop was pressed and the agent hasn't stopped yet: the stop button shows it's on its way. */
+    stopping?: boolean;
     disabled?: boolean;
     disabledReason?: string | undefined;
     placeholder?: string;
@@ -96,6 +99,7 @@ export const Composer = forwardRef<
     onSend,
     onInterrupt,
     working = false,
+    stopping = false,
     disabled = false,
     disabledReason,
     placeholder,
@@ -316,11 +320,14 @@ export const Composer = forwardRef<
 
   const offered = !disabled && !working && text === "" && suggestion ? suggestion : null;
   const hintId = useId();
+  // Its own id, so two message boxes side by side (split view) each keep their label.
+  const fieldId = useId();
   // Read again whenever the box gets focus, so a change in Settings applies straight away.
   const [sendKey, setSendKey] = useState<SendKey>(() => loadUiPrefs().sendKey);
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.nativeEvent.isComposing) return;
+    // Enter that picks a word from an input method must not send.
+    if (composing(e)) return;
     const plainKeys = !e.altKey && !e.metaKey && !e.ctrlKey;
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "v") {
       // Where ⌘⇧V brings no paste of its own, read the clipboard instead.
@@ -405,21 +412,25 @@ export const Composer = forwardRef<
   const stopButton = working && onInterrupt && (
     <Tip
       label={
-        <>
-          Stop the agent <span className="font-normal opacity-75">Esc</span>
-        </>
+        stopping ? (
+          "Stopping the agent"
+        ) : (
+          <>
+            Stop the agent <span className="font-normal opacity-75">Esc</span>
+          </>
+        )
       }
     >
       <button
         type="button"
         onClick={onInterrupt}
-        aria-label="Stop the agent"
+        aria-label={stopping ? "Stopping the agent" : "Stop the agent"}
         className={cx(
           "inline-flex shrink-0 items-center justify-center rounded-full border border-line-strong bg-paper text-ink hover:bg-cream",
           reply ? "size-8" : "size-9",
         )}
       >
-        <Square aria-hidden="true" className="size-3 fill-current" />
+        {stopping ? <Spinner /> : <Square aria-hidden="true" className="size-3 fill-current" />}
       </button>
     </Tip>
   );
@@ -434,7 +445,7 @@ export const Composer = forwardRef<
       className={cx(
         "inline-flex shrink-0 items-center justify-center rounded-full transition-colors duration-150",
         reply ? "size-8" : "size-9",
-        canSend ? "bg-lime text-on-citrus hover:bg-[#b2ec52]" : "bg-cream-deep text-ink-faint",
+        canSend ? "bg-lime text-on-citrus hover:bg-lime-hover" : "bg-cream-deep text-ink-faint",
       )}
     >
       <ArrowUp aria-hidden="true" className="size-4" strokeWidth={2.4} />
@@ -465,17 +476,18 @@ export const Composer = forwardRef<
       <div
         className={cx(
           "border border-line bg-paper shadow-panel transition-[border-color,box-shadow] duration-150",
-          "focus-within:border-line-strong focus-within:shadow-[0_1px_2px_rgb(23_32_14/0.04),0_6px_20px_rgb(23_32_14/0.07)]",
+          "focus-within:border-line-strong focus-within:shadow-focus",
           reply ? "rounded-2xl" : "rounded-[20px]",
         )}
       >
-        <label htmlFor="composer" className="sr-only">
+        <label htmlFor={fieldId} className="sr-only">
           Message the agent
         </label>
         <div className={cx("relative", reply && "flex items-end gap-1.5 py-1.5 pr-1.5 pl-3.5")}>
           <textarea
-            id="composer"
+            id={fieldId}
             ref={ref}
+            data-message-box=""
             rows={reply ? 1 : 2}
             value={text}
             autoFocus={autoFocus}
@@ -619,7 +631,7 @@ function MicControl({
           className={cx(
             "inline-flex size-8 shrink-0 items-center justify-center text-ink-soft hover:bg-cream-deep hover:text-ink",
             onDevice ? "rounded-l-full rounded-r-md" : "rounded-full",
-            listening && "bg-lime text-ink hover:bg-lime",
+            listening && "bg-lime text-on-citrus hover:bg-lime hover:text-on-citrus",
           )}
         >
           <Mic aria-hidden="true" className="size-4" />

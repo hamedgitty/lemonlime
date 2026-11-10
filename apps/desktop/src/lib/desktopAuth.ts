@@ -20,9 +20,33 @@ function randomState(): string {
     .replace(/=+$/, "");
 }
 
-/** Open the dashboard's "connect the desktop app" page in the browser. */
+/** Whether an address is a full web address a browser can open. */
+export function isWebAddress(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url.trim());
+    return (protocol === "https:" || protocol === "http:") && hostname !== "";
+  } catch {
+    return false;
+  }
+}
+
+const REFUSED = "lemonlime:sign-in-refused";
+
+/** Runs when the browser answers a sign-in that is under way with a link that isn't accepted. Returns a way to stop listening. */
+export function onSignInRefused(handle: () => void): () => void {
+  window.addEventListener(REFUSED, handle);
+  return () => window.removeEventListener(REFUSED, handle);
+}
+
+function refused(): null {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(REFUSED));
+  return null;
+}
+
+/** Open the dashboard's "connect the desktop app" page in the browser. Fails, with a reason to show, if the address can't be opened. */
 export async function startBrowserSignIn(dashboardUrl: string): Promise<void> {
   const url = normalizeBaseUrl(dashboardUrl);
+  if (!isWebAddress(url)) throw new Error("The dashboard address needs to be a full URL starting with http:// or https://");
   const pending: Pending = { state: randomState(), url, at: Date.now() };
   try {
     sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
@@ -54,14 +78,16 @@ export function acceptSignInLink(link: string, now = Date.now()): { token: strin
   const token = parsed.searchParams.get("token") ?? "";
   const state = parsed.searchParams.get("state") ?? "";
   const url = parsed.searchParams.get("url") ?? "";
-  if (!pending || !token || state !== pending.state || now - pending.at > MAX_AGE_MS) return null;
+  // With no sign-in under way there is nobody to tell.
+  if (!pending) return null;
+  if (!token || state !== pending.state || now - pending.at > MAX_AGE_MS) return refused();
   let sameDashboard = false;
   try {
     sameDashboard = new URL(url).origin === new URL(pending.url).origin;
   } catch {
     sameDashboard = false;
   }
-  if (!sameDashboard) return null;
+  if (!sameDashboard) return refused();
   try {
     sessionStorage.removeItem(PENDING_KEY);
   } catch {

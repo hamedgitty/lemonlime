@@ -13,6 +13,8 @@ export interface FirstMessage {
   text?: string;
   /** Being handed over now, so a reconnect doesn't send it twice. */
   delivering?: boolean;
+  /** Ends when that hand-over has gone through or been given up. */
+  settled?: Promise<void>;
 }
 
 const queued = new Map<string, FirstMessage>();

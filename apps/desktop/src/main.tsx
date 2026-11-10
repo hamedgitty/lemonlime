@@ -4,12 +4,15 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/bricolage-grotesque";
 import "./styles.css";
 import { App } from "./App.tsx";
+import { ErrorBoundary, WindowFailed } from "./components/ErrorBoundary.tsx";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing #root element");
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary fallback={details => <WindowFailed details={details} />}>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

@@ -208,10 +208,14 @@ export class PhoneLink {
     const ping = setInterval(() => this.ws?.readyState === 1 && this.ws.send(LINK_PING), LINK_PING_MS);
     const checkIn = setInterval(() => void this.checkIn().catch(() => undefined), CHECK_IN_MS);
     const renewIn = Math.max(5_000, Date.parse(expiresAt) - (this.opts.now ?? Date.now)() - 2 * 60_000);
+    const link = this.ws;
     const renew = setTimeout(() => {
       void this.opts.api
         .phoneLink(this.opts.computer.id)
         .then(next => {
+          // Phone access was turned off, or the link dropped, while the new ticket was on its
+          // way: nothing is started again for a link that is gone.
+          if (this.stopped || this.ws !== link) return;
           this.send({ type: "renew", ticket: next.ticket });
           this.keepAlive(next.expiresAt);
         })

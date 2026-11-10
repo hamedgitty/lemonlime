@@ -4,6 +4,7 @@ import type { BranchInfo } from "@lemonlime/protocol";
 import { existingBranchProblem, filterBranches } from "../lib/branches.ts";
 import { inDesktopShell, listBranches } from "../lib/native.ts";
 import { SegmentedControl, TextInput, cx } from "./ui.tsx";
+import { composing } from "../lib/ime.ts";
 
 export type StartMode = "new" | "existing";
 
@@ -67,7 +68,7 @@ export function StartBranch({
     setTyping(false);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (!shown.length) return;
+    if (!shown.length || composing(e)) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       setActive(i => (i + (e.key === "ArrowDown" ? 1 : shown.length - 1)) % shown.length);

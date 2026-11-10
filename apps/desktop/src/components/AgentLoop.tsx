@@ -26,6 +26,7 @@ import {
   type TodoItem,
 } from "@lemonlime/protocol";
 import { Markdown } from "../lib/markdown.tsx";
+import { composing } from "../lib/ime.ts";
 import { effortLevels } from "../lib/models.ts";
 import { keysFor } from "../lib/shortcuts.ts";
 import { loadUiPrefs } from "../lib/storage.ts";
@@ -313,6 +314,12 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
   const [other, setOther] = useState<string[]>(() => questions.map(() => ""));
   const [otherOn, setOtherOn] = useState<boolean[]>(() => questions.map(() => false));
   const [sent, setSent] = useState(false);
+  // If the answer never arrived (the connection dropped as it left), the buttons come back.
+  useEffect(() => {
+    if (!sent) return;
+    const t = setTimeout(() => setSent(false), 10_000);
+    return () => clearTimeout(t);
+  }, [sent]);
   const formRef = useRef<HTMLFormElement>(null);
   const otherRef = useRef<HTMLInputElement>(null);
   const name = useId();
@@ -361,7 +368,7 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
   };
   const onKeyDown = (e: KeyboardEvent<HTMLFormElement>) => {
     // Enter goes on from an option or the typed answer (not every webview submits a form from a radio button).
-    if (e.key === "Enter" && e.target instanceof HTMLInputElement && !e.nativeEvent.isComposing) {
+    if (e.key === "Enter" && e.target instanceof HTMLInputElement && !composing(e)) {
       e.preventDefault();
       next();
       return;
@@ -467,6 +474,12 @@ export function QuestionCard({ request, onAnswer }: { request: EventOf<"question
 /** A plan from plan mode, with the button that approves it. */
 export function PlanCard({ plan, open, onImplement }: { plan: string; open: boolean; onImplement: (() => void) | undefined }) {
   const [sent, setSent] = useState(false);
+  // If nothing came of it, the button comes back.
+  useEffect(() => {
+    if (!sent) return;
+    const t = setTimeout(() => setSent(false), 10_000);
+    return () => clearTimeout(t);
+  }, [sent]);
   return (
     <div className="rounded-2xl border border-line bg-paper" role="group" aria-label="The agent's plan">
       <div className="flex items-center gap-2 border-b border-line px-4 py-2.5 text-[14px]">

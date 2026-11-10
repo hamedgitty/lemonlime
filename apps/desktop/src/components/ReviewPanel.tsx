@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -23,6 +23,7 @@ import {
   numberHunk,
   quoteLines,
   ReviewUnavailable,
+  sameLines,
   splitPath,
   splitRows,
   type DiffRequest,
@@ -148,6 +149,35 @@ export function ReviewPanel({
   const scopeKey = scope.scope === "commit" ? `commit:${scope.commit}` : scope.scope;
   const seq = useRef(0);
   const shownKey = useRef("");
+  /** What is being looked at, so an answer for something else can be dropped. */
+  const viewKey = `${scopeKey}:${view.ignoreWhitespace}`;
+  const viewKeyNow = useRef(viewKey);
+  viewKeyNow.current = viewKey;
+  const widerNow = useRef(wider);
+  widerNow.current = wider;
+
+  const widen = useCallback(
+    async (f: ReviewFile, context: number) => {
+      if (!connection) return;
+      const asked = viewKeyNow.current;
+      try {
+        const req: DiffRequest = {
+          ...(scope.scope === "commit" ? { scope: "commit" as const, commit: scope.commit } : { scope: scope.scope }),
+          path: f.path,
+          ...(f.oldPath ? { oldPath: f.oldPath } : {}),
+          context,
+          ...(view.ignoreWhitespace ? { ignoreWhitespace: true } : {}),
+        };
+        const r = await fetchGitDiff(connection, req);
+        if (asked !== viewKeyNow.current) return;
+        const file = r.files.find(x => x.path === f.path);
+        if (file) setWider(w => ({ ...w, [f.path]: { context, file } }));
+      } catch (err) {
+        if (asked === viewKeyNow.current) setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [connection, scope, view.ignoreWhitespace],
+  );
 
   const load = useCallback(async () => {
     if (!connection) return;
@@ -160,16 +190,25 @@ export function ReviewPanel({
       };
       const next = await fetchGitDiff(connection, req);
       if (mine !== seq.current) return;
-      // First answer for this scope: open everything if the change is small.
       const key = `${next.scope}:${next.commit ?? ""}`;
       if (shownKey.current !== key) {
+        // First answer for this scope: open everything if the change is small.
         shownKey.current = key;
         setOpen(
           next.files.length <= AUTO_OPEN_FILES ? new Set(next.files.filter(f => f.additions + f.deletions <= AUTO_OPEN_LINES).map(f => f.path)) : new Set(),
         );
+        setWider({});
+      } else {
+        // The same changes again: files shown whole stay whole, and are fetched again.
+        const kept = widerNow.current;
+        const paths = new Set(next.files.map(f => f.path));
+        if (Object.keys(kept).some(path => !paths.has(path))) setWider(w => Object.fromEntries(Object.entries(w).filter(([path]) => paths.has(path))));
+        for (const f of next.files) {
+          const context = kept[f.path]?.context;
+          if (context) void widen(f, context);
+        }
       }
       setData(next);
-      setWider({});
       setError(null);
       setUnavailable(false);
     } catch (err) {
@@ -179,32 +218,21 @@ export function ReviewPanel({
     } finally {
       if (mine === seq.current) setLoading(false);
     }
-  }, [connection, scope, view.ignoreWhitespace]);
+  }, [connection, scope, view.ignoreWhitespace, widen]);
 
-  // Load on open, when the scope changes, and (debounced) when the files may have changed.
+  // Load on open and at once when the scope changes; wait a moment when only the files may have changed.
+  const loadedKey = useRef("");
   useEffect(() => {
-    const t = setTimeout(() => void load(), data ? 600 : 0);
+    const t = setTimeout(
+      () => {
+        loadedKey.current = viewKey;
+        void load();
+      },
+      loadedKey.current === viewKey ? 600 : 0,
+    );
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load, refreshKey, scopeKey, view.ignoreWhitespace]);
-
-  const widen = async (f: ReviewFile, context: number) => {
-    if (!connection) return;
-    try {
-      const req: DiffRequest = {
-        ...(scope.scope === "commit" ? { scope: "commit" as const, commit: scope.commit } : { scope: scope.scope }),
-        path: f.path,
-        ...(f.oldPath ? { oldPath: f.oldPath } : {}),
-        context,
-        ...(view.ignoreWhitespace ? { ignoreWhitespace: true } : {}),
-      };
-      const r = await fetchGitDiff(connection, req);
-      const file = r.files.find(x => x.path === f.path);
-      if (file) setWider(w => ({ ...w, [f.path]: { context, file } }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
 
   const allFiles = useMemo(() => data?.files ?? [], [data]);
   const testCount = useMemo(() => allFiles.filter(f => isTestFile(f.path)).length, [allFiles]);
@@ -332,7 +360,7 @@ export function ReviewPanel({
                 onClick={() => setLayout(value)}
                 className={cx(
                   "inline-flex size-7 items-center justify-center rounded-md",
-                  layout === value ? "bg-paper text-ink shadow-[0_1px_2px_rgb(23_32_14/0.08)]" : "text-ink-soft hover:text-ink",
+                  layout === value ? "bg-knob text-ink shadow-panel" : "text-ink-soft hover:text-ink",
                 )}
               >
                 <Icon aria-hidden="true" className="size-3.5" />
@@ -628,7 +656,6 @@ function FileDiffCard({
   const hl = useDiffHighlight(file.path, flat, drawn && !file.binary);
   const indexOf = useMemo(() => new Map(flat.map((l, i) => [l, i])), [flat]);
   const [picked, setPicked] = useState<Picked | null>(null);
-  useEffect(() => setPicked(null), [file]);
   const range = picked ? [Math.min(picked.anchor, picked.focus), Math.max(picked.anchor, picked.focus)] : null;
   const isPicked = (l: ReviewLine | null) => {
     if (!l || !range) return false;
@@ -641,6 +668,31 @@ function FileDiffCard({
     setPicked(p => (extend && p ? { anchor: p.anchor, focus: i } : p && p.anchor === i && p.focus === i ? null : { anchor: i, focus: i }));
   };
   const pickedLines = range ? flat.slice(range[0]!, range[1]! + 1) : [];
+  // The diff is fetched again while the agent works. The pick stays while the same lines are under it.
+  const last = useRef({ file, lines: pickedLines });
+  useEffect(() => {
+    if (last.current.file !== file && !sameLines(last.current.lines, pickedLines)) setPicked(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file]);
+  useEffect(() => {
+    last.current = { file, lines: pickedLines };
+  });
+  // Tab stops at one line number; the arrow keys move between the rest, and Shift with an arrow picks more.
+  const [tabAt, setTabAt] = useState(0);
+  const tabStop = flat[tabAt] && flat[tabAt].kind !== "note" ? tabAt : flat.findIndex(l => l.kind !== "note");
+  const lineAt = (el: EventTarget) => Number((el as HTMLElement).closest<HTMLElement>("[data-line]")?.dataset.line ?? NaN);
+  const onLineKey = (e: KeyboardEvent<HTMLTableElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    const from = lineAt(e.target);
+    if (Number.isNaN(from)) return;
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    let to = from + step;
+    while (flat[to]?.kind === "note") to += step;
+    if (!flat[to]) return;
+    e.preventDefault();
+    if (e.shiftKey) setPicked(p => ({ anchor: p ? p.anchor : from, focus: to }));
+    e.currentTarget.querySelector<HTMLElement>(`[data-line="${to}"]`)?.focus();
+  };
   const pickedLabel = (() => {
     const nums = pickedLines.map(l => l.newNo ?? l.oldNo).filter((n): n is number => n !== null);
     if (!nums.length) return "";
@@ -728,7 +780,14 @@ function FileDiffCard({
               {file.truncated ? "This file's diff is too large to show here." : file.status === "renamed" ? "Renamed without changes." : "No line changes."}
             </p>
           ) : (
-            <table className={cx("w-full border-collapse font-mono text-[12px] leading-[1.6]", (layout === "split" || wrap) && "table-fixed", hl && "md-code")}>
+            <table
+              onKeyDown={onLineKey}
+              onFocus={e => {
+                const at = lineAt(e.target);
+                if (!Number.isNaN(at)) setTabAt(at);
+              }}
+              className={cx("w-full border-collapse font-mono text-[12px] leading-[1.6]", (layout === "split" || wrap) && "table-fixed", hl && "md-code")}
+            >
               {layout === "split" && (
                 // Side by side: two equal halves; long lines wrap rather than push the other side away.
                 <colgroup>
@@ -753,8 +812,21 @@ function FileDiffCard({
                   <Fragment key={`${hi}:${h.header}`}>
                     <GapRow hunks={file.hunks} index={hi} layout={layout} onMore={() => onWiden(context + MORE_CONTEXT)} hunk={h} />
                     {layout === "unified"
-                      ? numbered[hi]!.map((l, li) => <UnifiedRow key={li} line={l} picked={isPicked(l)} onPick={pick} wrap={wrap} code={hl?.get(l)} />)
-                      : splitRows(numbered[hi]!).map((r, ri) => <SplitRowView key={ri} row={r} isPicked={isPicked} onPick={pick} hl={hl} />)}
+                      ? numbered[hi]!.map((l, li) => (
+                          <UnifiedRow
+                            key={li}
+                            line={l}
+                            index={indexOf.get(l) ?? -1}
+                            tabStop={tabStop}
+                            picked={isPicked(l)}
+                            onPick={pick}
+                            wrap={wrap}
+                            code={hl?.get(l)}
+                          />
+                        ))
+                      : splitRows(numbered[hi]!).map((r, ri) => (
+                          <SplitRowView key={ri} row={r} indexOf={indexOf} tabStop={tabStop} isPicked={isPicked} onPick={pick} hl={hl} />
+                        ))}
                   </Fragment>
                 ))}
               </tbody>
@@ -803,13 +875,29 @@ const LINE_BG = { add: "bg-diff-add", del: "bg-diff-del", context: "", note: "" 
 const LINE_FG = { add: "text-diff-add-strong", del: "text-diff-del-strong", context: "text-ink", note: "text-ink-faint italic" } as const;
 const SIGN = { add: "+", del: "−", context: " ", note: " " } as const;
 
-function LineNo({ n, line, picked, onPick }: { n: number | null; line: ReviewLine; picked: boolean; onPick: (l: ReviewLine, extend: boolean) => void }) {
+function LineNo({
+  n,
+  line,
+  index,
+  tabStop,
+  picked,
+  onPick,
+}: {
+  n: number | null;
+  line: ReviewLine;
+  /** Where the line is in the file's diff, for the one number on its row the keyboard reaches. */
+  index?: number | undefined;
+  tabStop?: number | undefined;
+  picked: boolean;
+  onPick: (l: ReviewLine, extend: boolean) => void;
+}) {
   if (line.kind === "note") return <td className="w-10 border-r border-line/70" />;
   return (
     <td className={cx("w-10 border-r border-line/70 p-0 align-top", picked && "bg-lemon")}>
       <button
         type="button"
-        tabIndex={-1}
+        tabIndex={index !== undefined && index === tabStop ? 0 : -1}
+        data-line={index}
         aria-label={`Pick line ${n ?? ""}`}
         aria-pressed={picked}
         onClick={e => onPick(line, e.shiftKey)}
@@ -823,12 +911,16 @@ function LineNo({ n, line, picked, onPick }: { n: number | null; line: ReviewLin
 
 function UnifiedRow({
   line,
+  index,
+  tabStop,
   picked,
   onPick,
   wrap,
   code,
 }: {
   line: ReviewLine;
+  index: number;
+  tabStop: number;
   picked: boolean;
   onPick: (l: ReviewLine, extend: boolean) => void;
   wrap: boolean;
@@ -837,8 +929,8 @@ function UnifiedRow({
 }) {
   return (
     <tr className={cx(LINE_BG[line.kind], picked && "outline-2 -outline-offset-2 outline-lemon-edge")}>
-      <LineNo n={line.oldNo} line={line} picked={picked} onPick={onPick} />
-      <LineNo n={line.newNo} line={line} picked={picked} onPick={onPick} />
+      <LineNo n={line.oldNo} line={line} index={line.newNo === null ? index : undefined} tabStop={tabStop} picked={picked} onPick={onPick} />
+      <LineNo n={line.newNo} line={line} index={line.newNo === null ? undefined : index} tabStop={tabStop} picked={picked} onPick={onPick} />
       <td aria-hidden="true" className={cx("w-4 pl-1.5 align-top select-none", LINE_FG[line.kind])}>
         {SIGN[line.kind]}
       </td>
@@ -852,11 +944,15 @@ function UnifiedRow({
 
 function SplitRowView({
   row,
+  indexOf,
+  tabStop,
   isPicked,
   onPick,
   hl,
 }: {
   row: ReturnType<typeof splitRows>[number];
+  indexOf: Map<ReviewLine, number>;
+  tabStop: number;
   isPicked: (l: ReviewLine | null) => boolean;
   onPick: (l: ReviewLine, extend: boolean) => void;
   hl: Map<ReviewLine, ReactNode> | null;
@@ -867,7 +963,7 @@ function SplitRowView({
     const n = which === "left" ? l.oldNo : l.newNo;
     return (
       <>
-        <LineNo n={n} line={l} picked={picked} onPick={onPick} />
+        <LineNo n={n} line={l} index={which === "right" && row.left === l ? undefined : indexOf.get(l)} tabStop={tabStop} picked={picked} onPick={onPick} />
         <td aria-hidden="true" className={cx("w-4 pl-1.5 align-top select-none", LINE_BG[l.kind], LINE_FG[l.kind])}>
           {SIGN[l.kind]}
         </td>

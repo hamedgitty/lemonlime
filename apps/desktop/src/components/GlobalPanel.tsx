@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Globe, Plus, SquareTerminal, X } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -73,6 +73,18 @@ export function GlobalPanel({
     if (!rest.length) onClose();
   };
   const current = tabs.find(t => t.id === active) ?? tabs[0];
+  // Arrow keys move between tabs (and show them), as tabs do everywhere.
+  const tablist = useRef<HTMLDivElement>(null);
+  const onTabKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (!(e.target as HTMLElement).closest('[role="tab"]')) return;
+    const i = tabs.findIndex(t => t.id === current?.id);
+    const n = tabs.length;
+    const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+    if (to < 0 || !tabs[to]) return;
+    e.preventDefault();
+    onActive(tabs[to].id);
+    tablist.current?.querySelectorAll<HTMLElement>('[role="tab"]')[to]?.focus();
+  };
 
   return (
     <aside
@@ -102,7 +114,8 @@ export function GlobalPanel({
         />
       )}
       <div data-tauri-drag-region className="flex h-[52px] shrink-0 items-center gap-1 border-b border-line px-2">
-        <div role="tablist" aria-label="Panel tabs" className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
+        {/* oxlint-disable-next-line jsx-a11y/interactive-supports-focus -- the tabs inside take the focus */}
+        <div ref={tablist} role="tablist" aria-label="Panel tabs" onKeyDown={onTabKey} className="flex min-w-0 flex-1 gap-1 overflow-x-auto">
           {tabs.map(t => (
             <div
               key={t.id}
@@ -111,7 +124,14 @@ export function GlobalPanel({
                 t.id === current?.id ? "bg-cream-hover text-ink" : "text-ink-soft hover:bg-cream-deep",
               )}
             >
-              <button type="button" role="tab" aria-selected={t.id === current?.id} onClick={() => onActive(t.id)} className="inline-flex items-center gap-1.5">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={t.id === current?.id}
+                tabIndex={t.id === current?.id ? 0 : -1}
+                onClick={() => onActive(t.id)}
+                className="inline-flex h-8 items-center gap-1.5"
+              >
                 {t.kind === "terminal" ? (
                   <SquareTerminal aria-hidden="true" className="size-3.5" />
                 ) : t.kind === "browser" ? (
@@ -125,7 +145,7 @@ export function GlobalPanel({
                 type="button"
                 aria-label={`Close ${t.title}`}
                 onClick={() => close(t.id)}
-                className="inline-flex size-5 items-center justify-center rounded-md text-ink-faint opacity-0 group-hover/tab:opacity-100 hover:bg-cream-hover hover:text-ink focus-visible:opacity-100"
+                className="inline-flex size-6 items-center justify-center rounded-md text-ink-faint opacity-0 group-hover/tab:opacity-100 hover:bg-cream-hover hover:text-ink focus-visible:opacity-100"
               >
                 <X aria-hidden="true" className="size-3" />
               </button>
@@ -211,6 +231,8 @@ function HostTerminal({ onTitle, visible }: { onTitle: (t: string) => void; visi
         if (e.payload.data) term.write(e.payload.data);
         if (e.payload.exited) setExited(true);
       });
+      // The tab was closed while this was being set up: stop listening straight away.
+      if (disposed) return off();
       cleanups.push(off);
       try {
         const opened = await invoke<{ id: number; shell: string }>("host_terminal_open", { cols: term.cols, rows: term.rows, cwd: null });

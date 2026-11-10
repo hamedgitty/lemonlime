@@ -60,7 +60,7 @@ export function NotificationCenter({
           type="button"
           disabled={!unread}
           onClick={onMarkAllRead}
-          className="text-[13px] font-medium text-leaf hover:text-leaf-deep disabled:cursor-default disabled:text-ink-faint"
+          className="inline-flex h-6 items-center rounded-md text-[13px] font-medium text-leaf hover:text-leaf-deep disabled:cursor-default disabled:text-ink-faint"
         >
           Mark all read
         </button>

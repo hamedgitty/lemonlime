@@ -29,6 +29,7 @@ import { IS_MAC, keyCaps, type ShortcutId } from "../lib/shortcuts.ts";
 import { Highlighted } from "./Highlighted.tsx";
 import { Kbd } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
+import { composing } from "../lib/ime.ts";
 
 const SECTION_LABEL: Record<PaletteSection, string> = {
   recent: "Recent",
@@ -132,7 +133,7 @@ export function CommandPalette({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.nativeEvent.isComposing) return;
+    if (composing(e)) return;
     const move = (to: number) => {
       e.preventDefault();
       if (flat.length) setActive((to + flat.length) % flat.length);

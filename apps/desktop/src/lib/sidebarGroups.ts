@@ -31,13 +31,20 @@ export const GROUP_ROWS = 5;
 
 export function groupThreads(
   threads: readonly ThreadSummary[],
-  o: { organize: Organize; pinned: readonly string[]; machineName?: (id: string) => string | undefined },
+  o: {
+    organize: Organize;
+    pinned: readonly string[];
+    machineName?: (id: string) => string | undefined;
+    /** Every thread, when `threads` is only some of them (a search, say), so projects are told apart the same way. */
+    all?: readonly ThreadSummary[];
+  },
 ): ThreadGroup[] {
   const pinned = threads.filter(t => o.pinned.includes(t.id));
+  const homes = o.organize === "project" ? projectHomes(o.all ?? threads) : new Map<string, string>();
   const groups = new Map<string, ThreadGroup>();
   for (const t of threads) {
     if (o.pinned.includes(t.id)) continue;
-    const g = describe(t, o);
+    const g = describe(t, o, homes);
     const known = groups.get(g.key);
     if (known) known.threads.push(t);
     else groups.set(g.key, { ...g, threads: [t] });
@@ -47,19 +54,97 @@ export function groupThreads(
     else if (o.organize === "project" && !group.project && t.mode === "cloud") group.project = { mode: "cloud", url: t.repo };
   }
   const out = [...groups.values()];
+  // Projects that only share a name show the folder (or owner) above it too.
+  const named = new Map<string, number>();
+  const name = (g: ThreadGroup) => g.label.toLowerCase();
+  for (const g of out) if (g.kind === "project") named.set(name(g), (named.get(name(g)) ?? 0) + 1);
+  for (const g of out) if (g.kind === "project" && named.get(name(g))! > 1) g.label = longName(g.threads[0]!.repo);
   if (pinned.length) out.unshift({ key: "pinned", kind: "pinned", label: "Pinned", threads: pinned });
   return out;
 }
 
-function describe(t: ThreadSummary, o: { organize: Organize; machineName?: (id: string) => string | undefined }): Omit<ThreadGroup, "threads"> {
+function describe(
+  t: ThreadSummary,
+  o: { organize: Organize; machineName?: (id: string) => string | undefined },
+  homes: ReadonlyMap<string, string>,
+): Omit<ThreadGroup, "threads"> {
   if (o.organize === "agent") return { key: `agent:${t.agent.kind}`, kind: "agent", label: AGENT_LABELS[t.agent.kind], agent: t.agent.kind };
   if (o.organize === "place") {
     if (t.mode === "cloud") return { key: "place:cloud", kind: "cloud", label: "Cloud" };
     if (t.machine) return { key: `place:machine:${t.machine}`, kind: "machine", label: `On ${o.machineName?.(t.machine) ?? "a removed machine"}` };
     return { key: "place:local", kind: "computer", label: "On this computer" };
   }
-  const name = repoName(t.repo);
-  return { key: `project:${name}`, kind: "project", label: name };
+  const place = projectPlace(t);
+  return { key: `project:${homes.get(place) ?? place}`, kind: "project", label: repoName(t.repo) };
+}
+
+/**
+ * Where a thread's code is, written one way: the folder on this computer, the folder on
+ * another machine, or the repository. Two projects are the same only if this is.
+ */
+export function projectPlace(t: Pick<ThreadSummary, "mode" | "repo" | "machine">): string {
+  if (t.mode === "cloud") {
+    const url = t.repo
+      .trim()
+      .toLowerCase()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
+      .replace(/^[^@/]*@/, "")
+      .replace(/\/+$/, "")
+      .replace(/\.git$/, "")
+      .replace(":", "/");
+    return `cloud:${url}`;
+  }
+  const path = t.repo.trim().replace(/[\\/]+$/, "");
+  return t.machine ? `machine:${t.machine}:${path}` : `local:${path}`;
+}
+
+/**
+ * A cloud copy of a project, or another machine's, sits with its folder on this computer
+ * when the name leaves no doubt: one folder here, one repository, one folder elsewhere.
+ * Same-named projects in two folders (or two repositories) each keep a group of their own.
+ * Maps a place to the place whose group it joins.
+ */
+function projectHomes(threads: readonly ThreadSummary[]): Map<string, string> {
+  const byName = new Map<string, Set<string>>();
+  for (const t of threads) {
+    const name = repoName(t.repo).toLowerCase();
+    byName.set(name, (byName.get(name) ?? new Set()).add(projectPlace(t)));
+  }
+  const homes = new Map<string, string>();
+  for (const places of byName.values()) {
+    const of = (kind: string) => [...places].filter(p => p.startsWith(`${kind}:`));
+    const [here, cloud, machine] = [of("local"), of("cloud"), of("machine")];
+    if (here.length > 1 || cloud.length > 1 || machine.length > 1) continue;
+    const home = here[0] ?? cloud[0] ?? machine[0]!;
+    for (const p of places) homes.set(p, home);
+  }
+  return homes;
+}
+
+/** A project's name with the folder (or owner) above it. */
+function longName(pathOrUrl: string): string {
+  const parts = pathOrUrl
+    .trim()
+    .replace(/[\\/]+$/, "")
+    .replace(/\.git$/, "")
+    .split(/[\\/:]/)
+    .filter(Boolean);
+  return parts.slice(-2).join("/") || pathOrUrl;
+}
+
+/**
+ * Saved group keys from when a project went by its short name alone, moved over to the keys
+ * its groups have now. Null when there is nothing to move.
+ */
+export function carryGroupKeys(saved: readonly string[], groups: readonly ThreadGroup[]): string[] | null {
+  const now = new Map<string, string[]>();
+  for (const g of groups) {
+    if (g.kind !== "project" || !g.threads[0]) continue;
+    const old = `project:${repoName(g.threads[0].repo)}`;
+    now.set(old, [...(now.get(old) ?? []), g.key]);
+  }
+  if (!saved.some(k => now.has(k))) return null;
+  return [...new Set(saved.flatMap(k => now.get(k) ?? [k]))];
 }
 
 /**

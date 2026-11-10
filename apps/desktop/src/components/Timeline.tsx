@@ -60,6 +60,8 @@ import {
 import { parseUnifiedDiff } from "../lib/diff.ts";
 import { flashItem } from "../lib/findInThread.ts";
 import { StreamingMarkdown } from "../lib/markdown.tsx";
+import { readableError } from "../lib/errorText.ts";
+import { useStableRows } from "../lib/stable.ts";
 import { attachmentLabel } from "../lib/pastedText.ts";
 import { loadScrollPlace, saveScrollPlace, type ScrollPlace } from "../lib/scrollMemory.ts";
 import { Menu, MenuItem } from "./primitives.tsx";
@@ -68,7 +70,8 @@ import { DiffBody } from "./DiffView.tsx";
 import { ActionButton, AgentMessage, MessageActions } from "./AgentMessage.tsx";
 import { OptionsRow, PlanCard, QuestionRecord } from "./AgentLoop.tsx";
 import { LimitRow, SwitchRow, type LimitActions } from "./LimitRow.tsx";
-import { Button, Spinner, cx } from "./ui.tsx";
+import { Button, IconButton, Spinner, cx } from "./ui.tsx";
+import { ErrorBoundary, RowFailed } from "./ErrorBoundary.tsx";
 import { ImageLoaderContext, SentImages, useImageLoader, type LoadImage } from "./SentImages.tsx";
 import { MessageRail } from "./MessageRail.tsx";
 
@@ -142,7 +145,8 @@ export function Timeline({
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
-  const shown = useMemo<ShownRow[]>(() => bundleSteps(foldFinished ? foldFinishedTurns(items) : items), [items, foldFinished]);
+  // Rows that say what they said before stay the same objects, so only the changed ones draw again.
+  const shown = useStableRows(useMemo<ShownRow[]>(() => bundleSteps(foldFinished ? foldFinishedTurns(items) : items), [items, foldFinished]));
   const divider = useMemo(() => unreadIndex(shown, unreadAfterSeq), [shown, unreadAfterSeq]);
   const toc = useMemo(() => tocEntries(items), [items]);
   const turnStart = working ? liveTurnStart(items) : null;
@@ -189,11 +193,16 @@ export function Timeline({
     ownTop.current = el.scrollTop;
   };
   const lastTop = useRef(0);
+  /** What the end of the thread looked like when the reader left it (null while they're at it). */
+  const leftAt = useRef<string | null>(null);
+  const tail = tailMark(items);
   const onScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const top = el.scrollTop;
     const atBottom = el.scrollHeight - top - el.clientHeight < 80;
+    if (atBottom) leftAt.current = null;
+    else leftAt.current ??= tail;
     const own = ownTop.current !== null && Math.abs(top - ownTop.current) < 2;
     if (gliding.current && atBottom) gliding.current = false;
     if (!own && !gliding.current) {
@@ -368,12 +377,19 @@ export function Timeline({
             className="absolute bottom-4 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-line-strong bg-paper px-3 py-1.5 text-[13px] font-medium text-ink shadow-pop hover:bg-cream"
           >
             <ArrowDown aria-hidden="true" className="size-3.5" />
-            Latest
+            {leftAt.current !== null && leftAt.current !== tail ? "New below" : "Latest"}
           </button>
         )}
       </div>
     </ImageLoaderContext.Provider>
   );
+}
+
+/** Changes whenever the thread gains output: another row, or more of the last one. */
+function tailMark(items: readonly TimelineItem[]): string {
+  const last = items[items.length - 1];
+  if (!last) return "";
+  return `${items.length}:${last.key}:${"text" in last && typeof last.text === "string" ? last.text.length : 0}`;
 }
 
 /** The row at the top of the view and how far below the top its edge sits. */
@@ -388,6 +404,8 @@ function topRow(el: HTMLElement): ScrollPlace | null {
 
 /** Rows that are one line high, so lazily drawn ones reserve that much room. */
 const ONE_LINE = new Set(["tool", "bundle", "diff", "reasoning", "approval", "options", "fold", "status"]);
+
+const rowFailed = (details: string) => <RowFailed details={details} />;
 
 /** A list of rows with the timeline's rhythm: steps close together, messages with room around them. */
 function Rows({ rows, actions, divider = -1, lazy = false }: { rows: readonly ShownRow[]; actions: RowActions; divider?: number; lazy?: boolean }) {
@@ -409,7 +427,10 @@ function Rows({ rows, actions, divider = -1, lazy = false }: { rows: readonly Sh
                   : "[contain-intrinsic-size:auto_96px] [content-visibility:auto]"),
             )}
           >
-            <Row row={row} actions={actions} />
+            {/* A row that fails to draw leaves a line in its place, not a blank thread. */}
+            <ErrorBoundary resetKey={row} fallback={rowFailed}>
+              <Row row={row} actions={actions} />
+            </ErrorBoundary>
           </div>
         </Fragment>
       ))}
@@ -935,7 +956,7 @@ function ApprovalRecord({ item }: { item: Extract<TimelineItem, { kind: "approva
 
 function NoticeRow({ message }: { message: string }) {
   return (
-    <div className="flex gap-2.5 rounded-xl border border-line bg-cream-deep/60 px-4 py-2.5 text-[14px] text-ink-soft" role="status">
+    <div className="flex gap-2.5 rounded-xl border border-line bg-cream-deep/60 px-4 py-2.5 text-[14px] text-ink-soft">
       <Info aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-ink-faint" />
       <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
     </div>
@@ -988,7 +1009,12 @@ function UserMessage({
               <ActionButton
                 label={copied ? "Copied" : "Copy message"}
                 icon={copied ? <Check aria-hidden="true" className="size-3.5 text-leaf" /> : <Copy aria-hidden="true" className="size-3.5" />}
-                onClick={() => void navigator.clipboard?.writeText(text).then(() => setCopied(true))}
+                onClick={() =>
+                  void navigator.clipboard
+                    ?.writeText(text)
+                    .then(() => setCopied(true))
+                    .catch(() => {})
+                }
               >
                 {copied ? "Copied" : "Copy"}
               </ActionButton>
@@ -1200,12 +1226,50 @@ function ErrorRow({
   onContinue?: (() => void) | undefined;
 }) {
   const [sent, setSent] = useState(false);
+  // If nothing came of it, Continue can be pressed again.
+  useEffect(() => {
+    if (!sent) return;
+    const t = setTimeout(() => setSent(false), 10_000);
+    return () => clearTimeout(t);
+  }, [sent]);
+  const { text, details } = useMemo(() => readableError(message), [message]);
+  const [open, setOpen] = useState(false);
+  const detailsId = useId();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  // No role of its own: the log around it already reads new rows out, and an alert here
+  // would read every old error again each time the thread opens.
   return (
-    <div className="flex gap-3 rounded-xl border border-danger/25 bg-danger-soft px-4 py-3 text-ink" role="alert">
+    <div className="flex gap-3 rounded-xl border border-danger/25 bg-danger-soft py-3 pr-2.5 pl-4 text-ink">
       <AlertTriangle aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-danger" />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="font-medium text-danger">{fatal ? "The thread stopped because of an error" : "Something went wrong"}</p>
-        <p className="mt-0.5 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere]">{message}</p>
+        <p className="mt-0.5 text-[14px] whitespace-pre-wrap [overflow-wrap:anywhere]">{text}</p>
+        {details && (
+          <>
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={detailsId}
+              onClick={() => setOpen(o => !o)}
+              className="mt-1 rounded text-[13px] font-medium text-ink-soft underline-offset-2 hover:text-ink hover:underline"
+            >
+              {open ? "Hide details" : "Show details"}
+            </button>
+            {open && (
+              <pre
+                id={detailsId}
+                className="scroll-thin mt-1.5 max-h-48 overflow-auto rounded-lg bg-paper/70 px-3 py-2 font-mono text-[12px] leading-relaxed whitespace-pre-wrap text-ink-soft [overflow-wrap:anywhere]"
+              >
+                {details}
+              </pre>
+            )}
+          </>
+        )}
         {code && <p className="mt-1 font-mono text-xs text-ink-soft">{code}</p>}
         {onContinue && (
           <div className="mt-2.5 flex flex-wrap items-center gap-3">
@@ -1225,6 +1289,18 @@ function ErrorRow({
           </div>
         )}
       </div>
+      <IconButton
+        label={copied ? "Copied" : "Copy error"}
+        className="-mt-1 shrink-0"
+        onClick={() =>
+          void navigator.clipboard
+            ?.writeText(code ? `${message}\n${code}` : message)
+            .then(() => setCopied(true))
+            .catch(() => {})
+        }
+      >
+        {copied ? <Check aria-hidden="true" className="text-leaf" /> : <Copy aria-hidden="true" />}
+      </IconButton>
     </div>
   );
 }

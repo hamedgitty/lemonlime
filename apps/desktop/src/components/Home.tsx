@@ -159,6 +159,26 @@ export function Home({
   const [repoPath, setRepoPath] = useState(prefs.recentProjects[0] ?? "");
   const [repoUrl, setRepoUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("main");
+  // The project already chosen when this opens: start from the branch it is really on.
+  const repoPathNow = useRef(repoPath);
+  repoPathNow.current = repoPath;
+  useEffect(() => {
+    const path = repoPath;
+    if (!shell || !path) return;
+    let cancelled = false;
+    inspectRepo(path).then(
+      info => {
+        // Leave it alone if another project was picked or a branch was typed meanwhile.
+        if (!cancelled && info.branch && repoPathNow.current === path) setBaseBranch(b => (b === "main" ? info.branch! : b));
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+    // Once, for the project chosen before this opened. Picking another reads its branch then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Make a new branch from baseBranch, or work on baseBranch itself.
   const [startMode, setStartMode] = useState<StartMode>("new");
   // A fork from the thread menu starts with the earlier thread's code.

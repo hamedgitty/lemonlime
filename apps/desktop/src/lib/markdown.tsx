@@ -1,4 +1,4 @@
-import { createContext, Fragment, memo, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useEffect, useRef, useState, type MouseEvent, type ReactElement, type ReactNode } from "react";
 import { Check, Copy, WrapText } from "lucide-react";
 import { useHighlighted } from "./markdownHighlight.tsx";
 import { splitMarkdownBlocks } from "./markdownStreamBlocks.ts";
@@ -207,26 +207,97 @@ export interface FileLinks {
 }
 export const FileLinksContext = createContext<FileLinks | null>(null);
 
-/** Inline: `code`, **bold**, *italic*, ~~struck~~, [text](https://…), and hard line breaks. Links open outside through onLink. */
+/**
+ * Lets the place a reply is shown give its web links a right-click menu: it is handed the
+ * address and the link's button, and returns the button wrapped in whatever opens the menu.
+ */
+export const LinkMenuContext = createContext<((url: string, link: ReactElement) => ReactNode) | null>(null);
+
+/** `decodeURI`, except text that isn't valid (a lone "%") comes back as it was instead of throwing. */
+const decoded = (url: string) => {
+  try {
+    return decodeURI(url);
+  } catch {
+    return url;
+  }
+};
+
+const count = (text: string, ch: string) => text.split(ch).length - 1;
+
+/**
+ * A web address written out in a sentence, without the punctuation that belongs to the
+ * sentence: "see https://example.com/a." links "https://example.com/a". A closing bracket
+ * stays only when the address opened one, so "https://example.com/a_(b)" keeps its pair.
+ */
+export function trimBareUrl(raw: string): string {
+  let url = raw;
+  for (;;) {
+    const end = url.at(-1);
+    if (end && ".,;:!?'\"*".includes(end)) url = url.slice(0, -1);
+    else if (end === ")" && count(url, ")") > count(url, "(")) url = url.slice(0, -1);
+    else if (end === "]" && count(url, "]") > count(url, "[")) url = url.slice(0, -1);
+    else return url;
+  }
+}
+
+/** Endings common enough that text like "github.com" is read as a site, not a file name. */
+const SITE_ENDINGS = new Set(["com", "org", "net", "io", "dev", "app", "ai", "co", "gov", "edu"]);
+
+/**
+ * The site a link really opens, when its text names a different one. "[github.com](https://example.net)"
+ * reads as one site and opens another, so the real one is shown beside it. Null when the text
+ * isn't an address or names the same site.
+ */
+export function mismatchedHost(label: string, url: string): string | null {
+  let target: string;
+  try {
+    target = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const m = /^\s*(https?:\/\/)?((?:[a-z0-9-]+\.)+([a-z]{2,}))(?::\d+)?(?:[/?#]\S*)?\s*$/i.exec(label);
+  if (!m) return null;
+  const shown = m[2]!.toLowerCase();
+  if (!m[1] && !shown.startsWith("www.") && !SITE_ENDINGS.has(m[3]!.toLowerCase())) return null;
+  const bare = (host: string) => host.replace(/^www\./, "");
+  return bare(shown) === bare(target) ? null : target;
+}
+
+/**
+ * Inline: `code`, **bold**, *italic*, ~~struck~~, [text](https://…), a web address written
+ * out as it is, and hard line breaks. Links open outside through onLink.
+ */
 export function inline(text: string, onLink?: (url: string) => void): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*\s][^*]*\*)|(\[[^\]]+\]\([^)\s]+\))|(\n)/g;
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(~~[^~]+~~)|(\*[^*\s][^*]*\*)|(\[[^\]]+\]\([^)\s]+\))|(\n)|(<https?:\/\/[^\s<>]+>|https?:\/\/[^\s<>`]+)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let k = 0;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const t = m[0];
+    let used = t.length;
     if (m[1]) out.push(<InlineCode key={k++} code={t.slice(1, -1)} />);
     else if (m[2]) out.push(<strong key={k++}>{t.slice(2, -2)}</strong>);
     else if (m[3]) out.push(<del key={k++}>{t.slice(2, -2)}</del>);
     else if (m[4]) out.push(<em key={k++}>{t.slice(1, -1)}</em>);
     else if (m[6]) out.push(<br key={k++} />);
-    else {
+    else if (m[7]) {
+      // "<https://…>" is the whole address; a bare one stops before the sentence's punctuation,
+      // which is read again as text.
+      const angled = t.startsWith("<");
+      const url = angled ? t.slice(1, -1) : trimBareUrl(t);
+      if (!angled) {
+        used = url.length;
+        re.lastIndex = m.index + used;
+      }
+      if (onLink && !/^https?:\/\/$/.test(url)) out.push(<Link key={k++} label={url} url={url} onLink={onLink} />);
+      else out.push(t.slice(0, used));
+    } else {
       const lm = /^\[([^\]]+)\]\(([^)\s]+)\)$/.exec(t)!;
       out.push(<Link key={k++} label={lm[1]!} url={lm[2]!} onLink={onLink} />);
     }
-    last = m.index + t.length;
+    last = m.index + used;
   }
   if (last < text.length) out.push(text.slice(last));
   return out;
@@ -236,19 +307,29 @@ const LINK = "font-medium text-leaf underline underline-offset-2";
 
 function Link({ label, url, onLink }: { label: string; url: string; onLink?: ((url: string) => void) | undefined }) {
   const files = useContext(FileLinksContext);
-  const ref = !/^[a-z][\w+.-]*:/i.test(url) && files ? fileRef(decodeURI(url), files.root) : null;
+  const menu = useContext(LinkMenuContext);
+  const ref = !/^[a-z][\w+.-]*:/i.test(url) && files ? fileRef(decoded(url), files.root) : null;
   if (ref && files)
     return (
       <button type="button" onClick={() => files.open(ref)} onContextMenu={copyPathMenu(ref)} title={`Open ${ref.path}`} className={LINK}>
         {label}
       </button>
     );
-  if (/^https?:\/\//i.test(url) && onLink)
-    return (
-      <button type="button" onClick={() => onLink(url)} className={LINK}>
+  if (/^https?:\/\//i.test(url) && onLink) {
+    // The whole address shows on hover, and the real site sits beside text that names another.
+    const link = (
+      <button type="button" onClick={() => onLink(url)} title={url} className={LINK}>
         {label}
       </button>
     );
+    const host = mismatchedHost(label, url);
+    return (
+      <>
+        {menu ? menu(url, link) : link}
+        {host && <span className="text-ink-faint"> ({host})</span>}
+      </>
+    );
+  }
   return <span className="underline underline-offset-2">{label}</span>;
 }
 
@@ -489,11 +570,15 @@ export function CopyButton({
       aria-label={copied ? "Copied" : label}
       title={label}
       onClick={() => {
-        void navigator.clipboard?.writeText(text).then(() => {
-          setCopied(true);
-          if (timer.current) clearTimeout(timer.current);
-          timer.current = setTimeout(() => setCopied(false), 1500);
-        });
+        // "Copied" only once it really was; a refused write leaves the button as it is.
+        void navigator.clipboard
+          ?.writeText(text)
+          .then(() => {
+            setCopied(true);
+            if (timer.current) clearTimeout(timer.current);
+            timer.current = setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => {});
       }}
       className={`inline-flex h-7 items-center gap-1 rounded-md border border-line bg-paper px-1.5 text-[13px] text-ink-soft hover:text-ink ${className ?? ""}`}
     >

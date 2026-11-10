@@ -46,6 +46,7 @@ import {
   type PanelTab,
 } from "../lib/panel.ts";
 import { loadPanelWidth, savePanelWidth } from "../lib/storage.ts";
+import { confirmAction } from "../lib/native.ts";
 import { keyCaps } from "../lib/shortcuts.ts";
 import { DiffView } from "./DiffView.tsx";
 import { FileView } from "./FileView.tsx";
@@ -196,7 +197,18 @@ export function ThreadPanel({
     });
     onState(s => closeTab(s, tab.id));
   };
+  // A key is easy to press by mistake, and what a closed terminal was running is gone for good.
+  const closeByKey = async (tab: PanelTab) => {
+    const label = tab.kind === "terminal" ? terminalLabel(tab, termInfo[tab.id]?.name, termInfo[tab.id]?.title) : "";
+    if (tab.kind === "terminal" && !(await confirmAction(`Close ${label}? Anything still running in it stops.`))) return;
+    close(tab);
+  };
   const addTerminal = () => onState(s => newTerminal(s) ?? s);
+  // The browser stays mounted once opened, so its page is still there after a look at another tab.
+  const [browserOpened, setBrowserOpened] = useState(active === "browser");
+  useEffect(() => {
+    if (active === "browser") setBrowserOpened(true);
+  }, [active]);
   // An address to open in the browser tab (from a terminal link, a script's preview); `n` makes each one count.
   const [browse, setBrowse] = useState<{ url: string; n: number } | null>(null);
   const openInBrowser = (url: string) => {
@@ -265,7 +277,7 @@ export function ThreadPanel({
     else if (e.key === "End") to = allIds.length - 1;
     else if ((e.key === "Delete" || e.key === "Backspace") && !isBuiltIn(active)) {
       const tab = state.tabs.find(t => t.id === active);
-      if (tab) close(tab);
+      if (tab) void closeByKey(tab);
       e.preventDefault();
       return;
     } else return;
@@ -407,14 +419,14 @@ export function ThreadPanel({
                 title={tab.kind === "file" ? tab.path : label}
                 className="group/tab relative flex shrink-0 items-center"
               >
-                {tabButton(tab.id, label, <Icon aria-hidden="true" className="size-3.5 shrink-0" />, <span aria-hidden="true" className="w-4 shrink-0" />)}
+                {tabButton(tab.id, label, <Icon aria-hidden="true" className="size-3.5 shrink-0" />, <span aria-hidden="true" className="w-5 shrink-0" />)}
                 <button
                   type="button"
                   aria-label={`Close ${label}`}
-                  tabIndex={-1}
+                  tabIndex={active === tab.id ? 0 : -1}
                   onClick={() => close(tab)}
                   className={cx(
-                    "absolute right-1.5 inline-flex size-5 items-center justify-center rounded-md text-ink-faint hover:bg-cream-hover hover:text-ink",
+                    "absolute right-1 inline-flex size-6 items-center justify-center rounded-md text-ink-faint hover:bg-cream-hover hover:text-ink",
                     active === tab.id ? "opacity-100" : "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100",
                   )}
                 >
@@ -512,8 +524,9 @@ export function ThreadPanel({
         />
       )}
       {active === "side" && <SideChatPanel side={session.side} connected={session.state === "live"} />}
-      {active === "browser" && (
+      {(browserOpened || active === "browser") && (
         <PreviewPanel
+          hidden={active !== "browser"}
           events={session.events}
           mode={mode}
           connection={session.connection}

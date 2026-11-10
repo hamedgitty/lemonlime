@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, Pin, PinOff, Plus, Trash2 } from "lucide-react";
 import type { ThreadSession } from "../lib/useThreadSession.ts";
 import { buildTimeline } from "../lib/timeline.ts";
 import { Timeline } from "./Timeline.tsx";
 import { Tip } from "./primitives.tsx";
 import { cx } from "./ui.tsx";
+import { composing } from "../lib/ime.ts";
 
 const NONE: never[] = [];
 
@@ -21,10 +22,19 @@ export function SideChatPanel({ side, connected }: { side: ThreadSession["side"]
   const events = current ? side.events[current] : undefined;
   const items = useMemo(() => buildTimeline(events ?? NONE), [events]);
 
-  // A pinned chat opened from the list: fetch its messages.
+  // A pinned chat opened from the list: fetch its messages. Asked once per opening, and again after a reconnect.
+  const asked = useRef<string | null>(null);
+  const loaded = events !== undefined;
+  const { open } = side;
   useEffect(() => {
-    if (current && !side.events[current]) side.open(current);
-  }, [current, side]);
+    if (!current || !connected) {
+      asked.current = null;
+      return;
+    }
+    if (loaded || asked.current === current) return;
+    asked.current = current;
+    open(current);
+  }, [current, connected, loaded, open]);
   // The chat was closed elsewhere.
   useEffect(() => {
     if (current && !side.chats.some(c => c.id === current)) setCurrent(null);
@@ -47,7 +57,7 @@ export function SideChatPanel({ side, connected }: { side: ThreadSession["side"]
     }
   };
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !composing(e)) {
       e.preventDefault();
       void ask();
     }

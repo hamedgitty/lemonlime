@@ -8,6 +8,7 @@ import {
   goBack,
   goForward,
   normalizeUrl,
+  panelAddress,
   shortAddress,
   startHistory,
   visit,
@@ -66,6 +67,18 @@ describe("recent addresses", () => {
     expect(normalizeUrl("[::1]:8080")).toBe("http://[::1]:8080/");
     expect(normalizeUrl("docs.example.com")).toBe("https://docs.example.com/");
     expect(normalizeUrl("  ")).toBeNull();
+  });
+
+  it("shows only pages served from this computer in a panel", () => {
+    expect(panelAddress("http://localhost:3000/app?tab=1")).toBe("http://localhost:3000/app?tab=1");
+    expect(panelAddress("http://127.0.0.1:5173/")).toBe("http://127.0.0.1:5173/");
+    // The same computer under a name the panel can't show.
+    expect(panelAddress("http://[::1]:8080/docs")).toBe("http://localhost:8080/docs");
+    expect(panelAddress("https://example.com/")).toBeNull();
+    expect(panelAddress("http://example.com/")).toBeNull();
+    expect(panelAddress("https://localhost:3000/")).toBeNull();
+    expect(panelAddress("http://localhost.example.com/")).toBeNull();
+    expect(panelAddress("not a url")).toBeNull();
   });
 });
 

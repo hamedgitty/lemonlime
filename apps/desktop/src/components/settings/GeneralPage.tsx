@@ -11,6 +11,7 @@ import { normalizeBaseUrl } from "../../lib/cloud.ts";
 import { computerPlatform, defaultComputerName, type PhoneLinkState } from "../../lib/phoneBridge.ts";
 import { QrCode } from "../QrCode.tsx";
 import { IS_MAC } from "../../lib/shortcuts.ts";
+import { composing } from "../../lib/ime.ts";
 
 const MOD = IS_MAC ? "⌘" : "Ctrl+";
 
@@ -99,7 +100,7 @@ function GeneralTab({ ctx }: { ctx: SettingsCtx }) {
         />
         <ToggleRow
           label="Open links in the side panel"
-          description="Links in the agent's replies open in the side panel's browser instead of your usual browser. Some websites refuse to be shown inside another app; open those from the panel's address bar."
+          description="Links in the agent's replies to local pages, like localhost:3000, open in the side panel's browser. Other links still open in your usual browser."
           checked={prefs.openLinksInPanel}
           onChange={openLinksInPanel => onPrefs({ openLinksInPanel })}
         />
@@ -286,7 +287,7 @@ function PhoneTab({ ctx }: { ctx: SettingsCtx }) {
             maxLength={100}
             onChange={e => setName(e.target.value)}
             onBlur={saveName}
-            onKeyDown={e => e.key === "Enter" && saveName()}
+            onKeyDown={e => e.key === "Enter" && !composing(e) && saveName()}
             placeholder={defaultComputerName(platform)}
             className="w-[240px]"
             autoComplete="off"

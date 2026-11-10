@@ -51,6 +51,7 @@ import { CHILD_STATE_LABEL, childrenSummary, gridCells } from "../lib/children.t
 import { ContextMenu, Kbd, Menu, MenuChoice, MenuItem, MenuSeparator, SubMenu, Tip, Toggle } from "./primitives.tsx";
 import {
   GROUP_ROWS,
+  carryGroupKeys,
   groupThreads,
   moveGroup,
   orderGroups,
@@ -158,7 +159,7 @@ const ROW = "flex h-[30px] w-full items-center gap-2.5 rounded-lg px-2 text-left
 export function AppSidebar(p: AppSidebarProps) {
   const [customizing, setCustomizing] = useState(false);
   const [query, setQuery] = useState("");
-  const [threadsOpen, setThreadsOpen] = useState(true);
+  const [threadsOpenSaved, setThreadsOpen] = useState(true);
   // Items added since the order was saved go at the end.
   const order = [...p.prefs.navOrder, ...NAV_ITEMS.filter(i => !p.prefs.navOrder.includes(i))];
   const visibleNav = order.filter(i => !p.prefs.hiddenNav.includes(i));
@@ -168,6 +169,14 @@ export function AppSidebar(p: AppSidebarProps) {
     const list = q ? p.threads.filter(t => `${t.title} ${repoName(t.repo)} ${t.branch} ${AGENT_LABELS[t.agent.kind]}`.toLowerCase().includes(q)) : p.threads;
     return p.prefs.sort === "name" ? [...list].sort((a, b) => a.title.localeCompare(b.title)) : list;
   }, [p.threads, query, p.prefs.sort]);
+
+  // While something is typed in the search box, every match shows: folded groups open and nothing waits behind "Show more".
+  const filtering = query.trim() !== "";
+  const threadsOpen = threadsOpenSaved || filtering;
+  // However the search box closes, its filter goes with it.
+  useEffect(() => {
+    if (!p.searchOpen) setQuery("");
+  }, [p.searchOpen]);
 
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [snoozedOpen, setSnoozedOpen] = useState(false);
@@ -186,13 +195,21 @@ export function AppSidebar(p: AppSidebarProps) {
   const groups = useMemo(
     () =>
       orderGroups(
-        groupThreads(awake, { organize: p.prefs.organize, pinned: p.prefs.pinned, machineName: id => machines.find(m => m.id === id)?.name }),
+        groupThreads(awake, { organize: p.prefs.organize, pinned: p.prefs.pinned, machineName: id => machines.find(m => m.id === id)?.name, all: p.threads }),
         p.prefs.groupOrder,
       ),
-    [awake, p.prefs.organize, p.prefs.pinned, p.prefs.groupOrder, machines],
+    [awake, p.threads, p.prefs.organize, p.prefs.pinned, p.prefs.groupOrder, machines],
   );
+  // A project's order and folding, saved under its short name before, move to the key it has now.
+  useEffect(() => {
+    const groupOrder = carryGroupKeys(p.prefs.groupOrder, groups);
+    const collapsedGroups = carryGroupKeys(p.prefs.collapsedGroups, groups);
+    if (groupOrder || collapsedGroups) p.onPrefs({ ...(groupOrder ? { groupOrder } : {}), ...(collapsedGroups ? { collapsedGroups } : {}) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups, p.prefs.groupOrder, p.prefs.collapsedGroups]);
   // The open thread is never out of sight: its snoozed list opens with it.
-  const showSnoozed = snoozedOpen || snoozed.some(t => t.id === p.selectedId);
+  const showSnoozed = snoozedOpen || filtering || snoozed.some(t => t.id === p.selectedId);
+  const showArchived = archivedOpen || filtering;
   const pin = (t: ThreadSummary, on: boolean) =>
     p.onPin ? p.onPin(t, on) : p.onPrefs({ pinned: on ? [t.id, ...p.prefs.pinned] : p.prefs.pinned.filter(id => id !== t.id) });
   // One group of anything but a project needs no heading.
@@ -202,20 +219,17 @@ export function AppSidebar(p: AppSidebarProps) {
   const [dragGroup, setDragGroup] = useState<string | null>(null);
   const missing = useMissingFolders(groups.flatMap(g => (g.project?.mode === "local" ? [g.project.path] : [])));
   const pullRequests = useSyncExternalStore(subscribePullRequests, knownPullRequests);
-  const toggleGroup = (key: string) => p.onPrefs({ collapsedGroups: toggleKey(p.prefs.collapsedGroups, key) });
+  const isCollapsed = (key: string) => showHeaders && !filtering && p.prefs.collapsedGroups.includes(key);
+  const rowsOf = (g: ThreadGroup) => groupRows(g.threads, { expanded: filtering || expanded.has(g.key), selectedId: p.selectedId });
+  // Folding waits while a search shows every match, so nothing is folded out of sight unseen.
+  const toggleGroup = (key: string) => (filtering ? undefined : p.onPrefs({ collapsedGroups: toggleKey(p.prefs.collapsedGroups, key) }));
   const moveTo = (key: string, to: number) => p.onPrefs({ groupOrder: moveGroup(p.prefs.groupOrder, movable, key, to) });
   const headed = showHeaders ? groups : [];
   // The rows as listed, top to bottom: folded groups and rows behind "Show more" aren't there.
   const rowOrder = useMemo(
-    () =>
-      threadsOpen
-        ? groups.flatMap(g =>
-            showHeaders && p.prefs.collapsedGroups.includes(g.key)
-              ? []
-              : groupRows(g.threads, { expanded: expanded.has(g.key), selectedId: p.selectedId }).shown.map(t => t.id),
-          )
-        : [],
-    [threadsOpen, groups, showHeaders, p.prefs.collapsedGroups, expanded, p.selectedId],
+    () => (threadsOpen ? groups.flatMap(g => (isCollapsed(g.key) ? [] : rowsOf(g).shown.map(t => t.id))) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [threadsOpen, groups, showHeaders, filtering, p.prefs.collapsedGroups, expanded, p.selectedId],
   );
   const rowKey = rowOrder.join(" ");
   const { onRowOrder } = p;
@@ -391,7 +405,12 @@ export function AppSidebar(p: AppSidebarProps) {
               aria-label="Search threads"
               className="min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-ink-faint"
             />
-            <button type="button" aria-label="Close search" onClick={() => (setQuery(""), p.onSearchOpen(false))} className="text-ink-faint hover:text-ink">
+            <button
+              type="button"
+              aria-label="Close search"
+              onClick={() => (setQuery(""), p.onSearchOpen(false))}
+              className="-mr-1.5 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-ink-faint hover:bg-cream-hover hover:text-ink"
+            >
               <X aria-hidden="true" className="size-3.5" />
             </button>
           </label>
@@ -450,9 +469,9 @@ export function AppSidebar(p: AppSidebarProps) {
             </p>
           ) : (
             groups.map(g => {
-              const collapsed = showHeaders && p.prefs.collapsedGroups.includes(g.key);
-              const { shown, hidden } = groupRows(g.threads, { expanded: expanded.has(g.key), selectedId: p.selectedId });
-              const canMore = g.threads.length > GROUP_ROWS + 1;
+              const collapsed = isCollapsed(g.key);
+              const { shown, hidden } = rowsOf(g);
+              const canMore = !filtering && g.threads.length > GROUP_ROWS + 1;
               return (
                 <section key={g.key} aria-label={g.label} className="mb-2">
                   {showHeaders && (
@@ -554,7 +573,7 @@ export function AppSidebar(p: AppSidebarProps) {
           <section aria-label="Archived" className="mb-2">
             <button
               type="button"
-              aria-expanded={archivedOpen}
+              aria-expanded={showArchived}
               onClick={() => setArchivedOpen(o => !o)}
               className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] font-medium text-ink-faint hover:text-ink"
             >
@@ -562,7 +581,7 @@ export function AppSidebar(p: AppSidebarProps) {
               <span className="flex-1">Archived</span>
               <span className="tabular-nums">{archived.length}</span>
             </button>
-            {archivedOpen && (
+            {showArchived && (
               <ul className="flex flex-col gap-px">
                 {archived.map(t => (
                   <ThreadRow

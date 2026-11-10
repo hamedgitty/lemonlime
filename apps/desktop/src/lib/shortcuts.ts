@@ -76,7 +76,11 @@ export function keysFor(id: ShortcutId, overrides: Record<string, string>): stri
 }
 
 /** A keydown as a combo string, or null for a bare modifier press. */
-export function comboOf(e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"> & { code?: string }): string | null {
+export function comboOf(
+  e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"> & { code?: string; getModifierState?: (key: string) => boolean },
+): string | null {
+  // AltGr types a character on many keyboards (@ is AltGr Q on a German one) and reports itself as Ctrl and Alt together.
+  if (e.getModifierState?.("AltGraph")) return null;
   // Alt (⌥) changes the character on macOS (⌥T types "†", ⌥1 "¡"), so letters and digits come from the key's place.
   const key =
     e.altKey && e.code && /^Key[A-Z]$/.test(e.code)

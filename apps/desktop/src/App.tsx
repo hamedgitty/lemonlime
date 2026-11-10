@@ -29,6 +29,7 @@ import { SETTINGS_PAGES, SettingsSidebar, SettingsView, type SettingsCtx, type S
 import { CommandPalette } from "./components/CommandPalette.tsx";
 import { NotificationCenter } from "./components/NotificationCenter.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
+import { BackgroundStart } from "./components/BackgroundStart.tsx";
 import { PaneHeader, SplitView, type PaneInfo } from "./components/SplitView.tsx";
 import { SideResizer } from "./components/SideResizer.tsx";
 import { PageTools, PageToolsProvider, PanelButtons } from "./components/PanelButtons.tsx";
@@ -69,7 +70,7 @@ import {
   setRunnerDefaults,
   stopLocalRunner,
 } from "./lib/native.ts";
-import { resolveConnection, type Connection } from "./lib/useThreadSession.ts";
+import { resolveConnection, type Connection, type SessionTarget } from "./lib/useThreadSession.ts";
 import { setAccountsRunnerPath, switchThreadsAccount } from "./lib/accounts.ts";
 import { teleportThread } from "@lemonlime/client";
 import { acceptSignInLink, onSignInLink } from "./lib/desktopAuth.ts";
@@ -79,7 +80,7 @@ import { isTextField, isTypingKey, isUndoKey, liveUndo, popUndo, pushUndo, takeU
 import { queueFirstMessage } from "./lib/firstMessage.ts";
 import {
   draftThreadIds,
-  forgetEvents,
+  forgetThread,
   loadEvents,
   loadLocalThreads,
   loadMessageTexts,
@@ -818,7 +819,7 @@ export function App() {
       // Removes the thread's worktree and history; its branch stays in the repository.
       const stop = meta ? removeThreadRunner(meta, settings.runnerPath) : stopLocalRunner(id);
       void stop.catch(err => console.warn("Could not clean up the thread", err)).finally(refreshRunners);
-      forgetEvents(id);
+      forgetThread(id);
       setLocalThreads(list => list.filter(m => m.id !== id));
       // In a split, its pane closes and the others stay.
       if (!layoutRef.current && !o.stay) go({ view: "home" });
@@ -827,15 +828,25 @@ export function App() {
   );
 
   const onArchive = useCallback(
-    async (t: ThreadSummary, archive: boolean) => {
-      const archived = { ...prefs.archived };
-      const wasPinned = prefs.pinned.includes(t.id);
+    async (t: ThreadSummary, archive: boolean, opts: { stopped?: boolean } = {}) => {
+      // Archiving stops a thread's agent on this computer, and Undo can't bring its turn back.
+      if (
+        archive &&
+        !opts.stopped &&
+        t.mode === "local" &&
+        t.status === "running" &&
+        !(await confirmAction(`“${t.title}” is still working. Archiving it stops its agent now. Archive it?`))
+      )
+        return;
+      const before = prefsRef.current;
+      const archived = { ...before.archived };
+      const wasPinned = before.pinned.includes(t.id);
       if (archive) {
         archived[t.id] = new Date().toISOString();
         // Free what it was using: nothing runs for an archived thread.
         if (t.mode === "local") void stopLocalRunner(t.id).finally(refreshRunners);
         // The first time, say what archiving does; Undo (or ⌘Z) puts it back either way.
-        const explain = t.mode === "local" && !prefs.archivedHint;
+        const explain = t.mode === "local" && !before.archivedHint;
         remember(
           `Archived “${t.title}”`,
           () => {
@@ -848,9 +859,9 @@ export function App() {
         );
         if (explain) onPrefs({ archivedHint: true });
       } else delete archived[t.id];
-      onPrefs({ archived, pinned: prefs.pinned.filter(id => id !== t.id) });
+      onPrefs({ archived, pinned: before.pinned.filter(id => id !== t.id) });
     },
-    [prefs.archived, prefs.archivedHint, prefs.pinned, onPrefs, refreshRunners, remember],
+    [onPrefs, refreshRunners, remember],
   );
 
   // Archived threads on this computer are removed after 21 days (worktree and history; the branch stays).
@@ -862,7 +873,7 @@ export function App() {
     const old = localThreads.filter(m => prefs.archived[m.id] && Date.parse(prefs.archived[m.id]!) < cutoff);
     for (const m of old) void removeThreadRunner(m, settings.runnerPath).catch(err => console.warn("Could not clean up an archived thread", err));
     if (old.length) {
-      for (const m of old) forgetEvents(m.id);
+      for (const m of old) forgetThread(m.id);
       setLocalThreads(list => list.filter(m => !old.some(o => o.id === m.id)));
       const archived = { ...prefs.archived };
       for (const m of old) delete archived[m.id];
@@ -871,6 +882,21 @@ export function App() {
   }, [localThreads, prefs.archived, settings.runnerPath, onPrefs]);
 
   // ── Creating threads ─────────────────────────────────────
+  // Threads made without being opened ("Open new threads right away" is off) whose first
+  // message this app still has to hand over. Each is started out of sight until it has it.
+  const [starting, setStarting] = useState<Selection[]>([]);
+  const onBackgroundStart = useCallback((id: string, problem?: string) => {
+    setStarting(list => list.filter(s => s.id !== id));
+    if (problem)
+      toast({
+        title: "A new thread hasn't started",
+        description: `${problem} Its first message goes when you open it.`,
+        tone: "error",
+        key: `start:${id}`,
+        threadId: id,
+      });
+  }, []);
+
   const createThread = async (input: NewThreadInput, navigate = prefs.navigateOnCreate): Promise<Selection | undefined> => {
     const agent = {
       kind: input.agent,
@@ -905,6 +931,7 @@ export function App() {
       queueFirstMessage(id, { files: input.attachments ?? [], ...(input.permission ? { permission: input.permission } : {}) });
       setLocalThreads(list => [meta, ...list]);
       if (navigate) go({ view: "thread", selection: { mode: "local", id } });
+      else if (input.prompt) setStarting(list => [...list, { mode: "local", id }]);
       return { mode: "local", id };
     }
 
@@ -929,6 +956,7 @@ export function App() {
         });
       setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
       if (navigate) go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
+      else if (holdPrompt) setStarting(list => [...list, { mode: "cloud", id: created.thread.id }]);
       return { mode: "cloud", id: created.thread.id };
     } catch (err) {
       if (err instanceof CloudError && err.denial) throw new DeniedError(err.denial);
@@ -992,15 +1020,24 @@ export function App() {
         sandboxSize: "small",
       });
       setCloudThreads(list => [created.thread, ...list.filter(t => t.id !== created.thread.id)]);
-      const to = await retry(async () => {
-        const c = await resolveConnection({ mode: "cloud", thread: created.thread, api: cloudApi });
-        if (!c) throw new Error("not up yet");
-        return c;
-      }, "Waiting for the cloud sandbox");
-      onStep("Moving the conversation and commits…");
-      await retry(() => teleportThread({ from, to, fromLabel: "computer" }), "Waiting for the cloud sandbox");
+      try {
+        const to = await retry(async () => {
+          const c = await resolveConnection({ mode: "cloud", thread: created.thread, api: cloudApi });
+          if (!c) throw new Error("not up yet");
+          return c;
+        }, "Waiting for the cloud sandbox");
+        onStep("Moving the conversation and commits…");
+        await retry(() => teleportThread({ from, to, fromLabel: "computer" }), "Waiting for the cloud sandbox");
+      } catch (err) {
+        // The move didn't happen: take the half-made cloud thread away, so no sandbox is left running for it.
+        await cloudApi.deleteThreadForever(created.thread.id).catch(() => undefined);
+        setCloudThreads(list => list.filter(t => t.id !== created.thread.id));
+        void refreshCloud();
+        throw err;
+      }
       await stopLocalRunner(meta.id).catch(() => undefined);
-      onPrefs({ archived: { ...prefs.archived, [meta.id]: new Date().toISOString() } });
+      // The move can take minutes: archive against the settings as they are now.
+      onPrefs({ archived: { ...prefsRef.current.archived, [meta.id]: new Date().toISOString() } });
       void refreshRunners();
       go({ view: "thread", selection: { mode: "cloud", id: created.thread.id } });
       return;
@@ -1024,12 +1061,19 @@ export function App() {
       updatedAt: now,
     };
     onStep("Starting it on this computer…");
-    const to = await resolveConnection({ mode: "local", meta, runnerPath: settings.runnerPath });
-    if (!to) throw new Error("Couldn't start the runner on this computer.");
-    onStep("Moving the conversation and commits…");
-    await teleportThread({ from, to, fromLabel: "cloud" });
+    try {
+      const to = await resolveConnection({ mode: "local", meta, runnerPath: settings.runnerPath });
+      if (!to) throw new Error("Couldn't start the runner on this computer.");
+      onStep("Moving the conversation and commits…");
+      await teleportThread({ from, to, fromLabel: "cloud" });
+    } catch (err) {
+      // The move didn't happen: stop the runner started for it and take its working copy away.
+      await removeThreadRunner(meta, settings.runnerPath).catch(() => undefined);
+      void refreshRunners();
+      throw err;
+    }
     setLocalThreads(list => [meta, ...list]);
-    onPrefs({ archived: { ...prefs.archived, [thread.id]: now } });
+    onPrefs({ archived: { ...prefsRef.current.archived, [thread.id]: new Date().toISOString() } });
     await cloudApi?.pauseThread(thread.id).catch(() => undefined);
     void refreshRunners();
     go({ view: "thread", selection: { mode: "local", id } });
@@ -1506,7 +1550,7 @@ export function App() {
     (t: ThreadSummary) => {
       void threadFolder(t.repo, t.id)
         .then(dir => openFolder(dir, prefs.editor))
-        .catch(err => console.warn("Couldn't open the thread's folder", err));
+        .catch(folderFailed);
     },
     [prefs.editor],
   );
@@ -1523,6 +1567,7 @@ export function App() {
           toast({ title: "The thread wasn't deleted", description: err instanceof Error ? err.message : String(err), tone: "error" });
           return;
         }
+        forgetThread(t.id);
         if (open) go({ view: "home" });
         void refreshCloud();
         return;
@@ -1609,7 +1654,7 @@ export function App() {
       onPrefs({ recentProjects: [folder, ...prefs.recentProjects.filter(p => p !== folder)] });
       go({ view: "home" });
     } catch (err) {
-      console.warn("Not a repository", err);
+      toast({ title: "That folder wasn't added", description: errorMessage(err), tone: "error", key: "add-project" });
     }
   };
 
@@ -1883,7 +1928,7 @@ export function App() {
                 const m = entry.meta;
                 void threadFolder(m.repoPath, m.id)
                   .then(dir => openFolder(dir, prefs.editor))
-                  .catch(err => console.warn("Couldn't open the thread's folder", err));
+                  .catch(folderFailed);
               },
             }
           : {})}
@@ -1930,7 +1975,7 @@ export function App() {
                   void refreshRunners();
                   return;
                 }
-                await onArchive(summary, true);
+                await onArchive(summary, true, { stopped: true });
               },
             }
           : {})}
@@ -2081,7 +2126,7 @@ export function App() {
         {...(inDesktopShell()
           ? {
               onOpenFolder: openThreadFolder,
-              onOpenProjectFolder: (path: string) => void openFolder(path, prefs.editor).catch(err => console.warn("Couldn't open the folder", err)),
+              onOpenProjectFolder: (path: string) => void openFolder(path, prefs.editor).catch(folderFailed),
             }
           : {})}
         usageCard={
@@ -2111,6 +2156,27 @@ export function App() {
       <LiveAnnouncer />
       <Toaster>
         {palette}
+        {starting.flatMap(sel => {
+          // While its own view is open, that view starts it.
+          const entry = visibleIds.has(sel.id) ? null : entryFor(sel);
+          if (!entry || (entry.mode === "cloud" && !cloudApi)) return [];
+          const target: SessionTarget =
+            entry.mode === "local"
+              ? { mode: "local", meta: entry.meta, runnerPath: settings.runnerPath }
+              : { mode: "cloud", thread: entry.thread, api: cloudApi! };
+          return [
+            <BackgroundStart
+              key={`${sel.mode}:${sel.id}`}
+              target={target}
+              onLocalProgress={onLocalProgress}
+              onLocalStatus={onLocalStatus}
+              onLocalPromptSent={onLocalPromptSent}
+              onCloudRefresh={refreshCloud}
+              onRunnersChanged={refreshRunners}
+              onDone={onBackgroundStart}
+            />,
+          ];
+        })}
         <SnoozeDialog title={snoozeAsk?.title ?? null} onClose={() => setSnoozeAsk(null)} onSnooze={until => snoozeAsk && onSnooze(snoozeAsk, until)} />
         <div className="flex h-full overflow-hidden">
           {sidebar && (
@@ -2264,6 +2330,13 @@ export function App() {
       </Toaster>
     </TipProvider>
   );
+}
+
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Says so when a folder didn't open: the editor is missing, or the folder has gone. */
+function folderFailed(err: unknown): void {
+  toast({ title: "Couldn't open the folder", description: errorMessage(err), tone: "error", key: "open-folder" });
 }
 
 function sameSet(a: Set<string>, b: string[]): boolean {

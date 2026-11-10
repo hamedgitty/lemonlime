@@ -29,3 +29,9 @@ minimumReleaseAgeExclude:
   - "@oxlint/binding-win32-ia32-msvc@1.92.0"
   - "@oxlint/binding-win32-x64-msvc@1.92.0"
   - oxlint@1.92.0
+
+# Newer copies of build-time tools that the packages above ask for in older, flagged versions.
+overrides:
+  "@opennextjs/cloudflare>glob": "^14.0.2"
+  "@node-minify/core>glob": "^14.0.2"
+  "@esbuild-kit/core-utils>esbuild": "^0.25.0"

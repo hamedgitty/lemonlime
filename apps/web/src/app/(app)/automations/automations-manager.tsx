@@ -12,6 +12,7 @@ import {
   type ReasoningLevel,
 } from "@lemonlime/protocol";
 import { apiFetch } from "@/lib/api-client.ts";
+import { dateLocale, useHydrated } from "@/lib/hydrated.ts";
 import { timeAgo } from "@/components/status-pill.tsx";
 
 interface Run {
@@ -60,9 +61,9 @@ const PRESETS = [
   { label: "Every hour", cron: "0 * * * *" },
 ];
 
-const when = (iso: string | null, tz: string) =>
+const when = (iso: string | null, tz: string, locale: string | undefined) =>
   iso
-    ? new Date(iso).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: tz })
+    ? new Date(iso).toLocaleString(locale, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: tz })
     : "Not scheduled";
 
 const RUN_LABEL: Record<NonNullable<Run["outcome"]>, string> = { started: "Started", finished: "Finished", skipped: "Skipped", failed: "Failed" };
@@ -84,7 +85,10 @@ const secretsLine = (names: string[] | null | undefined) =>
 export function AutomationsManager({ initial, secretNames = [] }: { initial: AutomationInfo[]; secretNames?: string[] }) {
   const [list, setList] = useState(initial);
   const [error, setError] = useState<string | null>(null);
-  const zone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+  const hydrated = useHydrated();
+  const locale = dateLocale(hydrated);
+  /** The reader's time zone, which only their browser knows. New schedules are made in it. */
+  const zone = useMemo(() => (hydrated ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" : "UTC"), [hydrated]);
   const [form, setForm] = useState({
     name: "",
     schedule: PRESETS[0]!.cron,
@@ -109,12 +113,14 @@ export function AutomationsManager({ initial, secretNames = [] }: { initial: Aut
       if (shortestGapMinutes(schedule) < SHORTEST_SCHEDULE_GAP_MINUTES) {
         return { ok: false as const, text: `A schedule can run at most once every ${SHORTEST_SCHEDULE_GAP_MINUTES} minutes.` };
       }
+      // When it next runs depends on the reader's time zone and clock, so the line stays empty until their browser is here.
+      if (!hydrated) return { ok: true as const, text: "\u00a0" };
       const next = nextRun(schedule, new Date(), zone);
-      return { ok: true as const, text: next ? `Next: ${when(next.toISOString(), zone)} (${zone})` : "That schedule never comes round." };
+      return { ok: true as const, text: next ? `Next: ${when(next.toISOString(), zone, locale)} (${zone})` : "That schedule never comes round." };
     } catch (e) {
       return { ok: false as const, text: e instanceof Error ? e.message : String(e) };
     }
-  }, [form.schedule, zone]);
+  }, [form.schedule, zone, hydrated, locale]);
 
   const set = (patch: Partial<typeof form>) => setForm(f => ({ ...f, ...patch }));
 
@@ -204,7 +210,7 @@ export function AutomationsManager({ initial, secretNames = [] }: { initial: Aut
                   <p className="mt-1 text-sm">
                     {a.enabled
                       ? a.schedule
-                        ? `Next run ${when(a.nextRunAt, a.timezone)}`
+                        ? `Next run ${when(a.nextRunAt, a.timezone, locale)}`
                         : "Runs when its webhook is called"
                       : a.pausedReason
                         ? `Paused automatically. ${a.pausedReason}`
@@ -249,7 +255,8 @@ export function AutomationsManager({ initial, secretNames = [] }: { initial: Aut
                   {a.recentRuns.map(r => (
                     <li key={r.id} className="flex items-center gap-3 px-3 py-2">
                       <span className={RUN_TONE[r.outcome ?? r.status]}>{RUN_LABEL[r.outcome ?? r.status]}</span>
-                      <span className="text-muted">
+                      {/* The server's clock and the browser's are a moment apart, which can tip "4 min ago" into "5". */}
+                      <span className="text-muted" suppressHydrationWarning>
                         {timeAgo(r.ranAt, now)}
                         {r.trigger === "webhook" ? ", webhook" : ""}
                       </span>

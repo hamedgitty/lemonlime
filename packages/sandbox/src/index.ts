@@ -37,7 +37,8 @@ export function createSandboxProvider(env: Record<string, string | undefined>): 
         bindHost: env.LEMONLIME_DOCKER_BIND_HOST || undefined,
         network: env.LEMONLIME_DOCKER_NETWORK || undefined,
         publicUrl: env.LEMONLIME_DOCKER_PUBLIC_URL || undefined,
-        agentUser: env.LEMONLIME_DOCKER_AGENT_USER || undefined,
+        // Unset: the image's `agent` user when the image can run it. "none": off.
+        agentUser: env.LEMONLIME_DOCKER_AGENT_USER?.trim().toLowerCase() === "none" ? false : env.LEMONLIME_DOCKER_AGENT_USER?.trim() || undefined,
       });
     case "daytona":
       return new DaytonaProvider({

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -95,8 +95,8 @@ Usage: lemonlime-runner --thread <id> --agent <kind> [options]
                            branch (from a fork too), so the agent can push to it
   --port <n>               Port to listen on (default: 7420)
   --host <addr>            Interface to bind (default: 127.0.0.1)
-  --data-dir <path>        Where history is stored (default: <workdir>/.lemonlime, or
-                           ~/.lemonlime/threads/<thread> with --source-repo)
+  --data-dir <path>        Where history is stored (default: ~/.lemonlime/threads/<thread>,
+                           outside the folder the agent works in)
   --control-plane <url>    Send heartbeats to this control plane
   --relay                  The sandbox can't reach the control plane: keep its calls for
                            the control plane to collect (it fetches them every minute)
@@ -153,6 +153,8 @@ Environment:
                            gzip-compressed JSON [{"name","files":{path: content}}] in
                            base64, split over numbered variables (cloud sandboxes)
   LEMONLIME_SETUP_LOG      Output of the sandbox's setup script, shown in the thread once
+  LEMONLIME_TRUST_REPO_GIT_CONFIG=1    Let programs named in the repository's own git config
+                           run when the runner calls git (off unless set)
 `;
 
 /** Most bytes of instructions an agent gets. */
@@ -255,6 +257,83 @@ export function lemonlimeHome(): string {
   return resolve(process.env.LEMONLIME_HOME || join(homedir(), ".lemonlime"));
 }
 
+/**
+ * Where a thread's history and state are kept when nobody says: a folder of its own under
+ * the runner's home, outside the folder the agent edits, so the agent changing files there
+ * can't change what the runner remembers.
+ *
+ * A thread whose history already sits in `<workdir>/.lemonlime` (older runners keep it
+ * there) carries on there, so its history is never left behind. That folder only counts
+ * when its history names this thread and the thread has no folder of its own yet: a
+ * `.lemonlime` folder that came with a repository, or that the agent made later, is never
+ * picked up.
+ */
+export function dataDirFor(home: string, workdir: string, threadId: string): string {
+  const own = join(home, "threads", threadId);
+  if (existsSync(own)) return own;
+  const inWorkdir = join(workdir, ".lemonlime");
+  return historyNames(join(inWorkdir, "events.jsonl"), threadId) ? inWorkdir : own;
+}
+
+/** Whether a history file's first event belongs to this thread. */
+function historyNames(file: string, threadId: string): boolean {
+  let fd: number;
+  try {
+    fd = openSync(file, "r");
+  } catch {
+    return false;
+  }
+  try {
+    // Every event starts with its thread's id, so the start of the file is enough.
+    const start = Buffer.alloc(256);
+    const read = readSync(fd, start, 0, start.length, 0);
+    return /^\s*\{\s*"threadId"\s*:\s*"([^"\\]*)"/.exec(start.toString("utf8", 0, read))?.[1] === threadId;
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Why a control plane address can't be used, or null when it can. The runner sends that
+ * address the thread's history and asks it for git credentials, so it has to be https.
+ * Plain http is taken only where the traffic stays on one machine or on a network of the
+ * operator's own: this computer itself, a container reached by its name on the same Docker
+ * network (a name with no dots, which is how a compose file's services reach each other),
+ * the name Docker gives the host, and addresses and names that only exist on a private
+ * network.
+ */
+export function controlPlaneProblem(address: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return `--control-plane ${address} isn't a web address. It should look like https://lemonlime.example.com`;
+  }
+  if (url.protocol === "https:") return null;
+  if (url.protocol !== "http:") return `--control-plane ${address} must start with https://`;
+  const host = url.hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "")
+    .replace(/\.$/, "");
+  const thisComputer = host === "localhost" || host.endsWith(".localhost") || /^127(\.\d{1,3}){3}$/.test(host) || host === "::1";
+  const containerName = /^[a-z0-9_-]+$/.test(host);
+  // Addresses kept for private networks, and the endings kept for names on them.
+  const privateNetwork =
+    /^10(\.\d{1,3}){3}$/.test(host) ||
+    /^192\.168(\.\d{1,3}){2}$/.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}$/.test(host) ||
+    /^f[cd][0-9a-f]{2}:/.test(host) ||
+    /\.(internal|local|home\.arpa)$/.test(host);
+  if (thisComputer || containerName || privateNetwork) return null;
+  return (
+    `--control-plane ${address} is plain http, which anyone between here and there can read. Use an https:// address. ` +
+    "Plain http is accepted only for this computer (localhost or 127.0.0.1), for a container's name on the same Docker network " +
+    "(like http://web:3000), and for an address on a private network (like http://192.168.1.20:3000 or a name ending in .internal or .local)."
+  );
+}
+
 /** A stable, readable folder per repository, so two repos with the same name never collide. */
 export function worktreePathFor(home: string, sourceRepo: string, threadId: string): string {
   const name = basename(sourceRepo).replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
@@ -352,6 +431,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stderr.write(`lemonlime-runner: ${msg}\n\n${HELP}`);
     process.exit(2);
   };
+  const unsafeControlPlane = values["control-plane"] ? controlPlaneProblem(values["control-plane"]) : null;
+  if (unsafeControlPlane) fail(unsafeControlPlane);
 
   const threadId = ThreadId.safeParse(values.thread);
   if (!threadId.success) fail("--thread is required and must be a valid thread id");
@@ -360,6 +441,8 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   // The secret comes in the environment, or stays with a keeper (keeper.ts) this runner asks.
   // With --secret-stdin it is the first line on stdin, so it never shows on a command line.
   const keeperSocket = values["secret-stdin"] ? undefined : process.env.LEMONLIME_KEEPER;
+  // Nothing this runner starts (the agent, its tools, a terminal) is told where the keeper is.
+  delete process.env.LEMONLIME_KEEPER;
   let secret = process.env.LEMONLIME_THREAD_SECRET ?? "";
   if (values["secret-stdin"]) {
     try {
@@ -396,7 +479,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   if (sourceRepo && values["no-git"]) fail("--source-repo needs git; drop --no-git");
   const home = lemonlimeHome();
   const workdir = resolve(values.workdir ?? (sourceRepo ? worktreePathFor(home, sourceRepo, threadId.data!) : "./workspace"));
-  const dataDir = resolve(values["data-dir"] ?? (sourceRepo ? join(home, "threads", threadId.data!) : `${workdir}/.lemonlime`));
+  const dataDir = resolve(values["data-dir"] ?? (sourceRepo ? join(home, "threads", threadId.data!) : dataDirFor(home, workdir, threadId.data!)));
   const command = values["agent-command"] ? splitCommand(values["agent-command"]) : undefined;
   const now = new Date().toISOString();
   const id = threadId.data!;
@@ -458,6 +541,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     status: "provisioning",
     sandboxSize: "small",
     latestSeq: 0,
+    // Who may take part is the control plane's to say; the runner serves whoever holds a token.
+    mine: true,
+    shared: false,
     createdAt: now,
     updatedAt: now,
   };

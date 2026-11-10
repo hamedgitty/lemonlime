@@ -259,7 +259,12 @@ interface SavedState {
   restartContinues?: number[];
   /** The project's setup scripts still have to run in this new worktree. */
   setupPending?: boolean;
+  /** Queued messages that nobody typed, by `clientMsgId` (see ThreadRunner.sendOwn). */
+  queueFrom?: Record<string, MessageOrigin>;
 }
+
+/** Who wrote a message that no person typed: a subagent handing back its report, or the runner itself. */
+type MessageOrigin = "subagent" | "runner";
 
 const isText = (v: unknown): v is string => typeof v === "string";
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -281,6 +286,10 @@ export function readSavedState(raw: unknown): SavedState | null {
   if (isText(raw.recap)) state.recap = raw.recap;
   if (isText(raw.account)) state.account = raw.account;
   if (raw.setupPending === true) state.setupPending = true;
+  if (isObject(raw.queueFrom)) {
+    state.queueFrom = {};
+    for (const [id, from] of Object.entries(raw.queueFrom)) if (from === "subagent" || from === "runner") state.queueFrom[id] = from;
+  }
 
   const o = raw.options;
   const permission = isObject(o) ? PermissionMode.safeParse(o.permission).data : undefined;
@@ -399,6 +408,8 @@ export class ThreadRunner {
   }
   /** Every clientMsgId this thread has accepted, so a resend never runs twice. */
   private readonly seen = new Set<string>();
+  /** Messages the runner sent itself that haven't started yet. Anything not in here, a person wrote. */
+  private readonly origins = new Map<string, MessageOrigin>();
 
   /** What every agent session in this thread starts with (the main one, subagents, side chats); plugins add MCP servers in init(). */
   private readonly sessionOpts: Omit<SessionOptions, "cwd" | "saved">;
@@ -443,7 +454,7 @@ export class ThreadRunner {
       requestApproval: (req, signal) => this.askUser(req, signal),
       askQuestions: (questions, signal) => this.askQuestions(questions, signal),
       toMain: (text, id) => {
-        if (!this.closing) this.sendMessage(text, `subagent-${id}`);
+        if (!this.closing) this.sendOwn("subagent", text, `subagent-${id}`);
       },
       notice: (code, message) => this.store.append({ type: "notice", code, message }),
       changed: subagents => {
@@ -535,7 +546,7 @@ export class ThreadRunner {
         snapshot: () => review.watchSnapshot(),
         baseBranch: this.opts.thread.repo.baseBranch,
         wake: (text, id) => {
-          if (!this.closing && this.initialised) this.sendMessage(text, id);
+          if (!this.closing && this.initialised) this.sendOwn("runner", text, id);
         },
         notice: message => this.store.append({ type: "notice", code: "pr_watch", message }),
       });
@@ -617,6 +628,9 @@ export class ThreadRunner {
       }
       this.headCommit = await this.git.head();
       await this.git.excludePath(`${ATTACHMENTS_DIR}/`);
+    } else {
+      // Without git nothing else makes the folder the agent is started in.
+      mkdirSync(this.opts.workdir, { recursive: true });
     }
     let skills: string[] = [];
     try {
@@ -660,7 +674,11 @@ export class ThreadRunner {
     for (const requestId of open) this.store.append({ type: "approval_result", requestId, decision: "deny", by: "expired" });
     for (const requestId of asked) this.store.append({ type: "question_result", requestId, answers: null, by: "expired" });
     this.queue = (saved?.queue ?? []).filter(q => !this.seen.has(q.clientMsgId));
-    for (const q of this.queue) this.seen.add(q.clientMsgId);
+    for (const q of this.queue) {
+      this.seen.add(q.clientMsgId);
+      const from = saved?.queueFrom?.[q.clientMsgId];
+      if (from) this.origins.set(q.clientMsgId, from);
+    }
     this.autoContinues = saved?.autoContinues ?? [];
     this.restartContinues = (saved?.restartContinues ?? []).filter(t => typeof t === "number");
     if (saved?.setupPending && this.opts.sourceRepo) this.setupPending = true;
@@ -908,6 +926,19 @@ export class ThreadRunner {
    * A message whose `clientMsgId` the thread already has is ignored, so retries are safe.
    */
   sendMessage(text: string, clientMsgId: string = randomUUID(), attachments: string[] = []): SendResult {
+    return this.accept(text, clientMsgId, attachments);
+  }
+
+  /**
+   * Send a message nobody typed: a subagent's report, or the runner carrying the thread on.
+   * Its event says who it is from, so apps can tell it from what people wrote. Only the
+   * runner's own code gets here; nothing that arrives from outside can ask for it.
+   */
+  private sendOwn(from: MessageOrigin, text: string, clientMsgId: string = randomUUID()): SendResult {
+    return this.accept(text, clientMsgId, [], from);
+  }
+
+  private accept(text: string, clientMsgId: string, attachments: string[], from?: MessageOrigin): SendResult {
     if (!this.initialised) throw new Error("runner not initialised");
     if (this.seen.has(clientMsgId)) return { clientMsgId, result: "duplicate" };
     if (attachments.length) {
@@ -915,6 +946,7 @@ export class ThreadRunner {
       if ("missing" in r) throw new Error(`Some attached files haven't finished uploading (${r.missing.length}). Try sending again.`);
     }
     this.seen.add(clientMsgId);
+    if (from) this.origins.set(clientMsgId, from);
     // The user carried on themselves: no automatic continue on top.
     if (!clientMsgId.startsWith("auto-continue-")) {
       this.clearUsageLimit();
@@ -1144,7 +1176,7 @@ export class ThreadRunner {
     const now = new Date().toISOString();
     this.autoContinues.push(now);
     this.saveState();
-    this.sendMessage(CONTINUE_AFTER_LIMIT, `auto-continue-${Date.now()}`);
+    this.sendOwn("runner", CONTINUE_AFTER_LIMIT, `auto-continue-${Date.now()}`);
   }
 
   private clearUsageLimit(): void {
@@ -1560,8 +1592,11 @@ export class ThreadRunner {
     switch (change.action) {
       case "update":
         this.queue.splice(i, 0, { ...item!, text: change.text });
+        // With its words changed by a person, it is theirs.
+        this.origins.delete(clientMsgId);
         break;
       case "remove":
+        this.origins.delete(clientMsgId);
         break;
       case "move":
         this.queue.splice(Math.min(change.toIndex, this.queue.length), 0, item!);
@@ -1632,10 +1667,13 @@ export class ThreadRunner {
   private startTurn(text: string, clientMsgId: string, attachmentIds: string[] = []): void {
     const resolved = attachmentIds.length ? this.attachments.resolve(attachmentIds) : { ok: [] as Upload[] };
     const files = "ok" in resolved ? resolved.ok : [];
+    const from = this.origins.get(clientMsgId);
+    this.origins.delete(clientMsgId);
     this.store.append({
       type: "user_message",
       text,
       clientMsgId,
+      ...(from ? { from } : {}),
       ...(this.headCommit ? { commit: this.headCommit } : {}),
       ...(files.length ? { attachments: files.map(f => ({ id: f.id, name: f.name, size: f.size, path: f.path! })) } : {}),
     });
@@ -1941,6 +1979,7 @@ export class ThreadRunner {
     this.rewinding = true;
     try {
       this.queue = [];
+      this.origins.clear();
       this.publishQueue();
       this.clearUsageLimit();
       this.interrupt();
@@ -2051,13 +2090,13 @@ export class ThreadRunner {
     }
     this.restartContinues.push(now);
     this.saveState();
-    const sent = this.sendMessage(CONTINUE_AFTER_RESTART, clientMsgId);
+    const sent = this.sendOwn("runner", CONTINUE_AFTER_RESTART, clientMsgId);
     return { ok: true, result: sent.result };
   }
 
   compact(): boolean {
     if (this.adapter.kind !== "claude-code") return false;
-    this.sendMessage("/compact");
+    this.sendOwn("runner", "/compact");
     return true;
   }
 
@@ -2099,6 +2138,7 @@ export class ThreadRunner {
       ...(this.autoContinues.length ? { autoContinues: this.autoContinues } : {}),
       ...(this.restartContinues.length ? { restartContinues: this.restartContinues } : {}),
       ...(this.setupPending ? { setupPending: true } : {}),
+      ...(this.origins.size ? { queueFrom: Object.fromEntries(this.origins) } : {}),
       ...(this.recap ? { recap: this.recap } : {}),
       ...(this.retry ? { retry: this.retry } : {}),
       options: this.options,

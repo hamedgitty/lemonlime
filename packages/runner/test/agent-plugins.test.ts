@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
   adapterFor,
   checkPluginTree,
   codexMcpFlags,
+  installPluginsIntoThread,
   isSafeRelativePath,
   loadEnabledPlugins,
   marketplacePlugins,
@@ -57,6 +58,8 @@ function thread(id: string, kind: AgentKind): Thread {
     status: "provisioning",
     sandboxSize: "small",
     latestSeq: 0,
+    mine: true,
+    shared: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -398,5 +401,58 @@ describe("agent command lines", () => {
     await session.runTurn({ prompt: "hi", signal: new AbortController().signal, emit: () => {} });
     const got = JSON.parse(readFileSync(out, "utf8")) as { args: string[] };
     expect(got.args).toContain('mcp_servers.notes.command="/p/bin/notes"');
+  });
+});
+
+describe.skipIf(process.platform === "win32")("links in a thread's folder, when plugins are put into it", () => {
+  it("writes nothing through a link that leads out of the folder, and says what was left out", async () => {
+    const plugin = readPlugin(makePlugin(temp()));
+    const workdir = temp();
+    const elsewhere = temp();
+    write(join(elsewhere, "review-kit", "keep.txt"), "keep me\n");
+    mkdirSync(join(workdir, ".claude"));
+    symlinkSync(elsewhere, join(workdir, ".claude", "commands"));
+    symlinkSync(elsewhere, join(workdir, ".claude", "agents"));
+
+    const result = await installPluginsIntoThread({ workdir, kind: "claude-code", git: null, plugins: [plugin] });
+    expect(result.skills).toEqual(["review-kit:careful-review"]);
+    expect(existsSync(join(workdir, ".claude", "skills", "careful-review", "SKILL.md"))).toBe(true);
+    expect(result.commands).toEqual([]);
+    expect(result.agents).toEqual([]);
+    expect(result.paths).toEqual([".claude/skills/careful-review"]);
+    expect(result.warnings.filter(w => w.includes("leads outside the thread's folder"))).toHaveLength(2);
+    // Nothing was written or removed where the links lead.
+    expect(readdirSync(elsewhere)).toEqual(["review-kit"]);
+    expect(readFileSync(join(elsewhere, "review-kit", "keep.txt"), "utf8")).toBe("keep me\n");
+  });
+
+  it("replaces a link left where a skill or a file goes", async () => {
+    const plugin = readPlugin(makePlugin(temp()));
+    const workdir = temp();
+    const elsewhere = temp();
+    write(join(elsewhere, "keep.txt"), "keep me\n");
+    mkdirSync(join(workdir, ".claude", "skills"), { recursive: true });
+    mkdirSync(join(workdir, ".claude", "agents"));
+    symlinkSync(elsewhere, join(workdir, ".claude", "skills", "careful-review"));
+    symlinkSync(join(elsewhere, "keep.txt"), join(workdir, ".claude", "agents", "review-kit-reviewer.md"));
+
+    const result = await installPluginsIntoThread({ workdir, kind: "claude-code", git: null, plugins: [plugin] });
+    expect(result.skills).toEqual(["review-kit:careful-review"]);
+    expect(result.agents).toEqual(["review-kit:reviewer"]);
+    expect(lstatSync(join(workdir, ".claude", "skills", "careful-review")).isSymbolicLink()).toBe(false);
+    expect(lstatSync(join(workdir, ".claude", "agents", "review-kit-reviewer.md")).isSymbolicLink()).toBe(false);
+    expect(readdirSync(elsewhere)).toEqual(["keep.txt"]);
+    expect(readFileSync(join(elsewhere, "keep.txt"), "utf8")).toBe("keep me\n");
+  });
+
+  it("doesn't clear away an earlier plugin through a link that leads out of the folder", async () => {
+    const workdir = temp();
+    const elsewhere = temp();
+    write(join(elsewhere, "old-skill", "keep.txt"), "keep me\n");
+    mkdirSync(join(workdir, ".claude"));
+    symlinkSync(elsewhere, join(workdir, ".claude", "skills"));
+
+    await installPluginsIntoThread({ workdir, kind: "claude-code", git: null, plugins: [], previous: [".claude/skills/old-skill"] });
+    expect(readFileSync(join(elsewhere, "old-skill", "keep.txt"), "utf8")).toBe("keep me\n");
   });
 });

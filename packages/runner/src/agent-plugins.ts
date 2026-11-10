@@ -1,7 +1,8 @@
-import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import type { AgentKind } from "@lemonlime/protocol";
+import { copyFolderInside, placeInside } from "./copy-inside.ts";
 import type { GitWorkspace } from "./git.ts";
 import { skillsDirFor } from "./skills.ts";
 
@@ -457,10 +458,25 @@ export function pluginSupport(kind: AgentKind): { skills: boolean; commands: boo
   };
 }
 
-/** Copy a Markdown file, pointing `${CLAUDE_PLUGIN_ROOT}` at the plugin's folder. */
-function copyMarkdown(from: string, to: string, root: string): void {
-  mkdirSync(dirname(to), { recursive: true });
+/**
+ * Copy a Markdown file to `rel` in the working directory, pointing `${CLAUDE_PLUGIN_ROOT}`
+ * at the plugin's folder. Returns false, writing nothing, when `rel` leads outside the
+ * working directory.
+ */
+function copyMarkdown(from: string, workdir: string, rel: string, root: string): boolean {
+  const to = placeInside(workdir, rel);
+  if (!to) return false;
+  // A link left where the file goes is removed, never written through.
+  rmSync(to, { recursive: true, force: true });
   writeFileSync(to, readFileSync(from, "utf8").replace(PLUGIN_ROOT_VAR, root));
+  return true;
+}
+
+/** Remove `rel` from the working directory, unless getting there leads outside it. */
+function removeInside(workdir: string, rel: string): boolean {
+  const at = placeInside(workdir, rel, false);
+  if (at) rmSync(at, { recursive: true, force: true });
+  return at !== null;
 }
 
 export interface PluginInstallResult {
@@ -504,6 +520,7 @@ export async function installPluginsIntoThread(opts: {
 
   for (const plugin of opts.plugins) {
     const name = plugin.manifest.name;
+    const outside = (what: string, rel: string) => `${name}: ${what} was left out because ${rel} leads outside the thread's folder.`;
     for (const skill of plugin.skills) {
       if (taken.has(skill.name)) {
         result.warnings.push(`${name}: the skill ${skill.name} was left out because the thread already has one with that name.`);
@@ -511,22 +528,29 @@ export async function installPluginsIntoThread(opts: {
       }
       taken.add(skill.name);
       const rel = `${skillsDir}/${skill.name}`;
-      rmSync(join(opts.workdir, rel), { recursive: true, force: true });
-      cpSync(skill.path, join(opts.workdir, rel), { recursive: true, force: true });
+      removeInside(opts.workdir, rel);
+      if (!copyFolderInside(skill.path, opts.workdir, rel)) {
+        result.warnings.push(outside(`the skill ${skill.name}`, rel));
+        continue;
+      }
       await place(rel, `${rel}/`);
       result.skills.push(`${name}:${skill.name}`);
     }
     if (support.commands && plugin.commands.length) {
       const dir = `.claude/commands/${name}`;
-      rmSync(join(opts.workdir, dir), { recursive: true, force: true });
-      for (const c of plugin.commands) copyMarkdown(c.path, join(opts.workdir, dir, `${c.name}.md`), plugin.root);
-      await place(dir, `${dir}/`);
-      result.commands.push(...plugin.commands.map(c => `${name}:${c.name}`));
+      removeInside(opts.workdir, dir);
+      const copied = plugin.commands.filter(c => copyMarkdown(c.path, opts.workdir, `${dir}/${c.name}.md`, plugin.root));
+      if (copied.length < plugin.commands.length) result.warnings.push(outside("some of its commands", dir));
+      if (copied.length) await place(dir, `${dir}/`);
+      result.commands.push(...copied.map(c => `${name}:${c.name}`));
     }
     if (support.agents) {
       for (const a of plugin.agents) {
         const rel = `.claude/agents/${name}-${a.name.replace(/\//g, "-")}.md`;
-        copyMarkdown(a.path, join(opts.workdir, rel), plugin.root);
+        if (!copyMarkdown(a.path, opts.workdir, rel, plugin.root)) {
+          result.warnings.push(outside(`the agent ${a.name}`, rel));
+          continue;
+        }
         await place(rel, rel);
         result.agents.push(`${name}:${a.name}`);
       }
@@ -540,7 +564,7 @@ export async function installPluginsIntoThread(opts: {
 
   const now = new Set(result.paths);
   for (const old of opts.previous ?? []) {
-    if (!now.has(old) && ownedPath(old)) rmSync(join(opts.workdir, old), { recursive: true, force: true });
+    if (!now.has(old) && ownedPath(old)) removeInside(opts.workdir, old);
   }
   return result;
 }

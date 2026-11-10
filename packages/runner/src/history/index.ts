@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -14,6 +13,7 @@ import {
   type ImportedThreadMeta,
 } from "@lemonlime/protocol";
 import { EventStore } from "../event-store.ts";
+import { runGit } from "../git.ts";
 import { recapBefore } from "../thread-runner.ts";
 import { listClaudeSessions, readClaudeSession } from "./claude-code.ts";
 import { listCodexSessions, readCodexSession } from "./codex.ts";
@@ -208,10 +208,12 @@ async function readTranscript(roots: HistoryRoots, agent: HistoryAgent, sessionI
   return readOpenCodeSession(roots.opencode, sessionId);
 }
 
+/** What git printed, or null if it failed. Goes through the runner's own guarded git call. */
 function git(cwd: string, args: string[]): Promise<string | null> {
-  return new Promise(done => {
-    execFile("git", args, { cwd, timeout: 15_000, windowsHide: true }, (err, stdout) => done(err ? null : stdout.toString().trim()));
-  });
+  return runGit(args, { cwd, timeout: 15_000 }).then(
+    r => r.stdout.trim(),
+    () => null,
+  );
 }
 
 /** The repository a folder is in, and its current branch; or why it can't hold a thread. */

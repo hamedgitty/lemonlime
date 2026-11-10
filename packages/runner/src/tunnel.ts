@@ -9,9 +9,11 @@ const MAX_HEAD_BYTES = 32 * 1024;
  * point a browser at 127.0.0.1 (DNS rebinding, or a fetch/WebSocket from that page), so
  * the Host must be this port on loopback, and any Origin must be too.
  *
- * A page that keeps its address to itself sends `Origin: null` with its own form posts,
- * so plain requests like that pass. A WebSocket always names the page that opened it, so
- * `null` there means a page that isn't ours (a sandboxed frame on another site).
+ * `Origin: null` names nobody: a page that keeps its address to itself sends it with its
+ * own form posts, and so does a sandboxed frame or a `data:` page on any other site. It is
+ * taken only when the browser also says the request came from this same address
+ * (`Sec-Fetch-Site: same-origin`, which browsers send to loopback and a page can't set
+ * itself). A WebSocket always names the page that opened it, so `null` there is never ours.
  */
 export function allowedRequest(head: string, localPort: number): { ok: true } | { ok: false; why: string } {
   if (!/^[A-Z]+ \S+ HTTP\/1\.[01]\r\n/.test(head)) return { ok: false, why: "not an HTTP request" };
@@ -23,7 +25,9 @@ export function allowedRequest(head: string, localPort: number): { ok: true } | 
   const mine = [`127.0.0.1:${localPort}`, `localhost:${localPort}`, `[::1]:${localPort}`];
   if (!mine.includes((headers.get("host") ?? "").toLowerCase())) return { ok: false, why: "wrong Host" };
   const origin = (headers.get("origin") ?? "").toLowerCase();
-  const fromOurs = origin === "null" ? (headers.get("upgrade") ?? "").toLowerCase() !== "websocket" : !origin || mine.some(h => origin === `http://${h}`);
+  const sameAddress = (headers.get("sec-fetch-site") ?? "").toLowerCase() === "same-origin";
+  const socket = (headers.get("upgrade") ?? "").toLowerCase() === "websocket";
+  const fromOurs = origin === "null" ? sameAddress && !socket : !origin || mine.some(h => origin === `http://${h}`);
   if (!fromOurs) return { ok: false, why: "request from another site" };
   return { ok: true };
 }

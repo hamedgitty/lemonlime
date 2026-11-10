@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,6 +17,10 @@ import { keysFromSecret, MAX_RUNNER_TOKEN_SECONDS, type ThreadKeys } from "./key
  * local socket to check tokens and to sign its own short-lived runner tokens. The keeper
  * never signs a token for the user's apps, so even an agent that talks to it can't act as
  * the user, and as root its memory and starting environment are out of the agent's reach.
+ *
+ * The runner is told where the socket is in LEMONLIME_KEEPER and drops that before it
+ * starts anything. The agent still runs as the runner's user, so it can find the socket if
+ * it goes looking; what it can ask for there is all the keeper ever gives out.
  */
 export async function keeper(argv: string[]): Promise<void> {
   const split = argv.indexOf("--");
@@ -36,12 +41,7 @@ export async function keeper(argv: string[]): Promise<void> {
   if (user && process.getuid?.() !== 0) throw new Error("--agent-user needs the keeper to start as root");
 
   const keys = await keysFromSecret(threadId.data, secret);
-  const dir = mkdtempSync(join(tmpdir(), "lemonlime-keeper-"));
-  const socket = join(dir, "keeper.sock");
-  const server = await serveKeys(socket, keys);
-  // The agent's user can reach the socket (the runner runs as it) but list nothing else here.
-  chmodSync(dir, 0o711);
-  chmodSync(socket, 0o666);
+  const { dir, socket, server } = await openKeeperSocket(keys, user?.gid);
 
   const env: NodeJS.ProcessEnv = { ...process.env, LEMONLIME_KEEPER: socket };
   if (user) Object.assign(env, { HOME: user.home, USER: user.name, LOGNAME: user.name });
@@ -58,6 +58,31 @@ export async function keeper(argv: string[]): Promise<void> {
     rmSync(dir, { recursive: true, force: true });
     process.exit(code ?? (signal ? 1 : 0));
   });
+}
+
+/**
+ * Start answering on a socket with a name nobody can guess, in a folder of its own that
+ * only the keeper's user can enter. With `group` (the agent user's own group, when the
+ * keeper is root) members of that group can enter the folder and use the socket too, but
+ * not list the folder; everyone else on the machine is kept out of both.
+ */
+export async function openKeeperSocket(keys: ThreadKeys, group?: number): Promise<{ dir: string; socket: string; server: Server }> {
+  // Files take the group of whoever makes them, so the keeper wears the agent's group
+  // while it makes these two. That needs no more than the right to change groups, which
+  // the keeper already has to have to start the runner as the agent's user.
+  const own = process.getegid?.();
+  if (group !== undefined) process.setegid?.(group);
+  try {
+    const dir = mkdtempSync(join(tmpdir(), "lemonlime-keeper-"));
+    chmodSync(dir, group === undefined ? 0o700 : 0o710);
+    // Kept short: a socket's whole path has to fit in about a hundred characters.
+    const socket = join(dir, randomBytes(16).toString("base64url"));
+    const server = await serveKeys(socket, keys);
+    chmodSync(socket, group === undefined ? 0o600 : 0o660);
+    return { dir, socket, server };
+  } finally {
+    if (group !== undefined && own !== undefined) process.setegid?.(own);
+  }
 }
 
 /** Answer the runner's requests on a local socket: one line of JSON each way. */

@@ -1,7 +1,8 @@
-import { cpSync, existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentKind } from "@lemonlime/protocol";
+import { copyFolderInside } from "./copy-inside.ts";
 import type { GitWorkspace } from "./git.ts";
 
 /**
@@ -22,8 +23,17 @@ export function skillsDirFor(kind: AgentKind): string {
 export function listSkills(dir: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
-    .filter(name => !name.startsWith(".") && statSync(join(dir, name)).isDirectory() && existsSync(join(dir, name, "SKILL.md")))
+    .filter(name => !name.startsWith(".") && isFolder(join(dir, name)) && existsSync(join(dir, name, "SKILL.md")))
     .sort();
+}
+
+/** A folder, or a link to one. A link that leads nowhere is not. */
+function isFolder(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -51,7 +61,10 @@ export async function installSkills(opts: {
   for (const source of sources) {
     for (const name of listSkills(source)) {
       if (source === bundledDir && disabled.has(name)) continue;
-      cpSync(join(source, name), join(opts.workdir, target, name), { recursive: true, force: true });
+      if (!copyFolderInside(join(source, name), opts.workdir, `${target}/${name}`)) {
+        process.stderr.write(`lemonlime-runner: left out the skill ${name}: ${target}/${name} leads outside the thread's folder\n`);
+        continue;
+      }
       await opts.git?.excludePath(`${target}/${name}/`);
       installed.push(name);
     }

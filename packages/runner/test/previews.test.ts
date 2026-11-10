@@ -42,6 +42,8 @@ async function boot() {
     status: "idle",
     sandboxSize: "small",
     latestSeq: 0,
+    mine: true,
+    shared: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -147,9 +149,27 @@ describe("previews", () => {
     expect(allowedRequest(`GET / HTTP/1.1\r\nHost: 127.0.0.1:${tunnel.port}\r\nOrigin: http://127.0.0.1:${tunnel.port}\r\n\r\n`, tunnel.port)).toEqual({
       ok: true,
     });
-    // A page that hides its address may post a form; a socket from a nameless page is refused.
-    const mine = `Host: 127.0.0.1:${tunnel.port}\r\nOrigin: null\r\n`;
-    expect(allowedRequest(`POST /form HTTP/1.1\r\n${mine}\r\n`, tunnel.port)).toEqual({ ok: true });
-    expect(allowedRequest(`GET /live HTTP/1.1\r\n${mine}Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n`, tunnel.port)).toMatchObject({ ok: false });
+  });
+
+  it("takes a request that names no page only when the browser says it came from the preview itself", () => {
+    const nameless = "Host: 127.0.0.1:4173\r\nOrigin: null\r\n";
+    // The preview's own page, set to keep its address to itself, posting its own form.
+    expect(allowedRequest(`POST /form HTTP/1.1\r\n${nameless}Sec-Fetch-Site: same-origin\r\n\r\n`, 4173)).toEqual({ ok: true });
+    // A sandboxed frame or a data: page on another site posts with the same nameless Origin.
+    expect(allowedRequest(`POST /form HTTP/1.1\r\n${nameless}Sec-Fetch-Site: cross-site\r\n\r\n`, 4173)).toEqual({
+      ok: false,
+      why: "request from another site",
+    });
+    // Another app on this computer, on a different port.
+    expect(allowedRequest(`POST /form HTTP/1.1\r\n${nameless}Sec-Fetch-Site: same-site\r\n\r\n`, 4173)).toMatchObject({ ok: false });
+    // Nothing to say where it came from.
+    expect(allowedRequest(`POST /form HTTP/1.1\r\n${nameless}\r\n`, 4173)).toMatchObject({ ok: false });
+    expect(allowedRequest(`GET / HTTP/1.1\r\n${nameless}\r\n`, 4173)).toMatchObject({ ok: false });
+    // A socket always names its page, so a nameless one is refused whatever else it says.
+    expect(
+      allowedRequest(`GET /live HTTP/1.1\r\n${nameless}Sec-Fetch-Site: same-origin\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`, 4173),
+    ).toMatchObject({ ok: false });
+    // A command-line tool sends no Origin at all.
+    expect(allowedRequest("POST /form HTTP/1.1\r\nHost: 127.0.0.1:4173\r\n\r\n", 4173)).toEqual({ ok: true });
   });
 });

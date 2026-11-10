@@ -1,5 +1,5 @@
 import { SANDBOX_RESOURCES, type SandboxSize } from "@lemonlime/protocol";
-import { defaultFetch, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
+import { defaultFetch, errorDetail, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
 import {
   keeperLaunch,
   launchCommand,
@@ -127,8 +127,15 @@ export class DaytonaProvider implements SandboxProvider {
   }
 
   async pause(id: string): Promise<void> {
-    const sandbox = await this.fetchSandbox(id).catch(() => null);
-    if (!sandbox) return;
+    let sandbox: DaytonaSandbox;
+    try {
+      sandbox = await this.fetchSandbox(id);
+    } catch (err) {
+      // Nothing to pause only when Daytona says the sandbox is gone. Any other failure means
+      // it may still be running, and the caller has to know the pause didn't happen.
+      if (isStatus(err, 404)) return;
+      throw err;
+    }
     if (mapDaytonaState(sandbox.state ?? "") !== "running") return;
     await this.api("POST", `/sandbox/${enc(id)}/stop`);
     await this.waitFor(id, ["stopped", "destroyed", "archived"], this.opts.stopTimeoutMs ?? 60_000, "stop");
@@ -205,7 +212,7 @@ export class DaytonaProvider implements SandboxProvider {
       last = (sandbox.state ?? "").toLowerCase();
       if (targets.includes(last)) return sandbox;
       if (FAILED_STATES.has(last)) {
-        throw new Error(`Daytona sandbox ${id} failed to ${action} (state ${last}${sandbox.errorReason ? `: ${sandbox.errorReason}` : ""})`);
+        throw new Error(`Daytona sandbox ${id} failed to ${action} (state ${last}${sandbox.errorReason ? `: ${errorDetail(sandbox.errorReason)}` : ""})`);
       }
       if (Date.now() + interval > deadline) {
         throw new Error(`Daytona sandbox ${id} did not ${action} within ${Math.round(timeoutMs / 1000)}s (last state ${last || "unknown"})`);

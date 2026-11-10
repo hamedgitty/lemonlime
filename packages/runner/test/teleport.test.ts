@@ -31,6 +31,8 @@ function thread(id: string): Thread {
     status: "idle",
     sandboxSize: "small",
     latestSeq: 0,
+    mine: true,
+    shared: false,
     createdAt: now,
     updatedAt: now,
   };

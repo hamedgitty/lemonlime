@@ -93,6 +93,8 @@ describe("reading a file from the working folder", () => {
       status: "idle",
       sandboxSize: "small",
       latestSeq: 0,
+      mine: true,
+      shared: false,
       createdAt: now,
       updatedAt: now,
     };

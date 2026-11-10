@@ -27,6 +27,8 @@ async function serve(relay: Relay | undefined) {
     status: "idle",
     sandboxSize: "small",
     latestSeq: 0,
+    mine: true,
+    shared: false,
     createdAt: now,
     updatedAt: now,
   };

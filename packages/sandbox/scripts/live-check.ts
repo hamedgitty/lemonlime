@@ -6,7 +6,7 @@
  *
  * Creates a small sandbox from the image, waits for the runner's /healthz, pauses it,
  * resumes it, checks /healthz again and destroys it. The sandbox is destroyed even when
- * a step fails. It starts the runner with no repository or control plane, so nothing
+ * a step fails or the check is stopped. It starts the runner with no repository or control plane, so nothing
  * outside the sandbox is touched; it costs a minute or two of the provider's time.
  */
 import { randomBytes } from "node:crypto";
@@ -35,9 +35,41 @@ async function healthy(info: SandboxInfo): Promise<void> {
 }
 
 let id: string | null = null;
+let creating: Promise<SandboxInfo> | null = null;
+let destroyed: Promise<void> | null = null;
+
+/** Destroy the sandbox, once, however the check ends. */
+function destroy(): Promise<void> {
+  const sandbox = id;
+  if (!sandbox) return Promise.resolve();
+  destroyed ??= provider
+    .destroy(sandbox)
+    .then(async () => step(`destroyed ${sandbox}, now ${(await provider.get(sandbox).catch(() => null))?.state ?? "gone"}`))
+    .catch(err => console.error(`Couldn't destroy ${sandbox}; delete it by hand: ${err}`));
+  return destroyed;
+}
+
+// Stopping the check (Ctrl-C, a CI timeout) must not leave a sandbox running. One that is
+// still being created is waited for, so there is an id to destroy.
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => {
+    console.error(`\nStopped by ${signal}.`);
+    void (creating ?? Promise.resolve(null))
+      .then(
+        created => {
+          id ??= created?.id ?? null;
+        },
+        () => undefined,
+      )
+      .then(destroy)
+      .finally(() => process.exit(1));
+  });
+}
+
 try {
   step(`creating a small ${provider.name} sandbox for ${threadId}`);
-  const created = await provider.create({ threadId, size: "small", runner, labels: { "lemonlime.live-check": "1" } });
+  creating = provider.create({ threadId, size: "small", runner, labels: { "lemonlime.live-check": "1" } });
+  const created = await creating;
   id = created.id;
   step(`created ${id}, state ${created.state}`);
   await healthy(created);
@@ -51,8 +83,5 @@ try {
   console.error(`\nFailed: ${err instanceof Error ? err.message : String(err)}`);
   process.exitCode = 1;
 } finally {
-  if (id) {
-    await provider.destroy(id).catch(err => console.error(`Couldn't destroy ${id}; delete it by hand: ${err}`));
-    step(`destroyed ${id}, now ${(await provider.get(id).catch(() => null))?.state ?? "gone"}`);
-  }
+  await destroy();
 }

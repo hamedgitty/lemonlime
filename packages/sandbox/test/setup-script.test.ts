@@ -34,6 +34,23 @@ describe("setup scripts", () => {
     expect(readFileSync(join(home, ".lemonlime", "setup.log"), "utf8")).toBe("exit 0\ninstalling tools\n");
   });
 
+  it("don't see the thread secret or the keeper's address, which the runner still gets", () => {
+    const home = mkdtempSync(join(tmpdir(), "lemonlime-setup-"));
+    dirs.push(home);
+    const cmd = launchCommand({
+      command: `echo "runner has $LEMONLIME_THREAD_SECRET $LEMONLIME_KEEPER"`,
+      port: 7420,
+      env: {},
+      setupScript: 'echo "script has [$LEMONLIME_THREAD_SECRET] [$LEMONLIME_KEEPER] [$OTHER]"',
+    });
+    const out = execFileSync("sh", ["-c", cmd], {
+      env: { PATH: process.env.PATH, HOME: home, LEMONLIME_THREAD_SECRET: "the-secret", LEMONLIME_KEEPER: "/run/keeper.sock", OTHER: "kept" },
+      cwd: home,
+    }).toString();
+    expect(out.trim()).toBe("runner has the-secret /run/keeper.sock");
+    expect(readFileSync(join(home, ".lemonlime", "setup.log"), "utf8")).toBe("exit 0\nscript has [] [] [kept]\n");
+  });
+
   it("record a failing script's exit code, and still start the runner", () => {
     const home = mkdtempSync(join(tmpdir(), "lemonlime-setup-"));
     dirs.push(home);

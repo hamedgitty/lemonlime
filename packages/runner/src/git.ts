@@ -10,13 +10,9 @@ const AGENT_IDENTITY = ["-c", "user.name=LemonLime Agent", "-c", "user.email=age
 const MAX_DIFF_BYTES = 200_000;
 
 /**
- * Put in front of every git call the runner makes. The agent can edit the repository's
- * config, so the runner's own git calls don't run a program the config names where git
- * lets us say no: no fsmonitor daemon, no hooks, no bare repositories found by walking up
- * from a folder, and no remote whose address is a command to run.
- *
- * Settings that people rely on are left alone: credential helpers, the ssh command,
- * commit signing, and content filters (large-file storage is one).
+ * Put in front of every git call the runner makes, whatever the repository's config says:
+ * no fsmonitor daemon, no hooks, no bare repositories found by walking up from a folder,
+ * and no remote whose address is a command to run.
  */
 export const SAFE_GIT_CONFIG = [
   "-c",
@@ -39,17 +35,278 @@ export interface GitRunOptions {
   timeout?: number;
   maxBuffer?: number;
   env?: Record<string, string>;
+  /** Sent to git's standard input, which is then closed. */
+  input?: string;
+  /** The runner's own `credential.helper`, used in place of any the repository names. */
+  credentialHelper?: string;
 }
 
-/** Run git with the safe config, a time limit and no terminal prompts. Arguments are never shell-parsed. */
-export function runGit(args: string[], o: GitRunOptions) {
-  return run("git", [...SAFE_GIT_CONFIG, ...args], {
+/*
+ * The repository's own config (`.git/config`, a worktree's config, and any file those
+ * include) can be edited by the agent, and many of its settings name a program that git
+ * runs. The user's own config (global and system) is theirs and is trusted.
+ *
+ * Git has no switch that ignores the repository's config, and a setting can only be
+ * overridden one key at a time. So before a git call the runner asks git for every setting
+ * together with where it came from, and for each risky one the repository sets it passes
+ * `-c` with the user's own value, or a harmless one when the user has none. Asking git,
+ * not reading the file, means included files and worktree config are seen the way git
+ * sees them. Settings that can't be overridden this way are handled on their own:
+ *
+ * - credential helpers are a list, so the list is emptied and the user's own helpers (or
+ *   the runner's, for a cloud thread) are put back;
+ * - address rewrites (`url.*.insteadOf`) can only be added to, so the runner refuses to
+ *   talk to a remote while the repository has one;
+ * - for a remote's upload and receive programs git keeps the first value it reads, so
+ *   fetch and push name git's own on the command line, which comes before any config;
+ * - external diff tools have no safe empty value, so diffs always get the SAFE_DIFF flags;
+ * - hooks and the fsmonitor are off for every call (SAFE_GIT_CONFIG), and the runner's own
+ *   commits and merges pass `--no-verify`;
+ * - aliases need nothing: git never lets one replace a built-in command, and the runner
+ *   only calls built-in commands.
+ *
+ * Large-file storage keeps working: its standard filter lines are let through.
+ *
+ * What this can't close: the config could change between the listing and the call.
+ */
+
+/**
+ * Settings that name a program, or decide whether one runs, with what to use when the
+ * user's own config has none. Signing is here so that commits are signed when the user's
+ * config asks for it, with their key and their program, and not because the repository's does.
+ */
+const PROGRAM_SETTINGS: Record<string, () => string> = {
+  "core.sshcommand": () => (process.env.GIT_SSH ? `'${process.env.GIT_SSH.replaceAll("'", "'\\''")}'` : "ssh"),
+  "core.askpass": () => "",
+  "core.editor": () => ":",
+  "sequence.editor": () => ":",
+  "core.pager": () => "cat",
+  "core.alternaterefscommand": () => "",
+  "gpg.program": () => "gpg",
+  "gpg.openpgp.program": () => "gpg",
+  "gpg.ssh.program": () => "ssh-keygen",
+  "gpg.x509.program": () => "gpgsm",
+  "gpg.ssh.defaultkeycommand": () => "",
+  "gpg.format": () => "openpgp",
+  "commit.gpgsign": () => "false",
+  "tag.gpgsign": () => "false",
+  "push.gpgsign": () => "false",
+  "user.signingkey": () => "",
+};
+/** The same, for settings with a name in the middle (`merge.<name>.driver`). */
+const PROGRAM_PATTERNS: [RegExp, string][] = [
+  [/^pager\..+$/i, "false"],
+  // A merge driver that always fails leaves the file as a conflict, which the runner reports.
+  [/^merge\..+\.driver$/i, "false"],
+];
+/** The program git starts on the other end of a fetch or a push. Git uses the first one set. */
+const REMOTE_PROGRAM = /^remote\..+\.(uploadpack|receivepack)$/i;
+const FILTER_PROGRAM = /^filter\.(.+)\.(clean|smudge|process)$/i;
+const CREDENTIAL_HELPER = /^credential\.(.+\.)?helper$/i;
+const ADDRESS_REWRITE = /^url\..+\.(insteadof|pushinsteadof)$/i;
+/**
+ * Settings that say how far to trust the server on the other end. They name no program,
+ * but with them the repository's own config could switch off the check that a push goes
+ * to the real server. So they are the user's to set, with git's default otherwise. Each
+ * can also be set for one address (`http.<address>.sslVerify`).
+ */
+const SERVER_TRUST: [RegExp, string, string][] = [
+  [/^http\.(.+\.)?sslverify$/i, "http.sslverify", "true"],
+  // Git's default: follow a redirect only on the first request to a remote.
+  [/^http\.(.+\.)?followredirects$/i, "http.followredirects", "initial"],
+];
+/** The certificates git accepts when it checks a server. */
+const TRUSTED_CERTIFICATES = /^http\.(.+\.)?(sslcainfo|sslcapath)$/i;
+/** The filter lines large-file storage writes into a repository's config. */
+const LFS_FILTERS: Record<string, string[]> = {
+  clean: ["git-lfs clean -- %f", "git-lfs clean %f"],
+  smudge: ["git-lfs smudge -- %f", "git-lfs smudge %f", "git-lfs smudge --skip -- %f", "git-lfs smudge --skip %f"],
+  process: ["git-lfs filter-process", "git-lfs filter-process --skip"],
+};
+/** Commands that only read refs and objects, so no setting can make them run a program. */
+const READS_ONLY = new Set(["rev-parse", "symbolic-ref", "merge-base", "rev-list", "hash-object", "update-ref"]);
+/** Commands that print diffs. */
+const PRINTS_DIFFS = new Set(["diff", "show", "log"]);
+/** Commands that talk to a remote. */
+const TALKS_TO_REMOTE = new Set(["fetch", "push", "pull", "clone", "ls-remote", "submodule"]);
+const REMOTE_ACTIONS_THAT_TALK = new Set(["set-head", "update", "show", "prune"]);
+
+interface ConfigEntry {
+  /** Where git read it from: system, global, local, worktree or command. */
+  scope: string;
+  key: string;
+  value: string;
+}
+
+/** The git command in a list of arguments, past any options in front of it. */
+function commandIn(args: string[]): { name: string; at: number } {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "-c" || a === "-C") i++;
+    else if (!a.startsWith("-")) return { name: a, at: i };
+  }
+  return { name: "", at: -1 };
+}
+
+const gitEnv = (extra?: Record<string, string>) => ({ ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: ":", GIT_PAGER: "cat", ...extra });
+
+/** Every setting git would use in `cwd`, with where each came from. Empty when git can't say. */
+async function readConfig(cwd: string): Promise<ConfigEntry[]> {
+  const list = async (args: string[]) =>
+    (
+      await run("git", ["--no-pager", ...SAFE_GIT_CONFIG, "config", ...args], {
+        cwd,
+        timeout: 15_000,
+        maxBuffer: 16 * 1024 * 1024,
+        killSignal: "SIGKILL",
+        env: gitEnv(),
+        windowsHide: true,
+      })
+    ).stdout
+      .split("\0")
+      .slice(0, -1);
+  const entry = (scope: string, line: string): ConfigEntry => {
+    const cut = line.indexOf("\n");
+    // A key written with no value means "true".
+    return cut < 0 ? { scope, key: line, value: "true" } : { scope, key: line.slice(0, cut), value: line.slice(cut + 1) };
+  };
+  try {
+    const fields = await list(["--list", "--show-scope", "-z"]);
+    const entries: ConfigEntry[] = [];
+    for (let i = 0; i + 1 < fields.length; i += 2) entries.push(entry(fields[i]!, fields[i + 1]!));
+    return entries;
+  } catch {
+    // A git too old to say where settings come from: read the repository's own, and take
+    // the user's as unknown.
+    try {
+      return (await list(["--local", "--list", "-z"])).map(line => entry("local", line));
+    } catch {
+      return [];
+    }
+  }
+}
+
+/** What a git call needs so the repository's own config can't make it run a program. */
+interface Guard {
+  /** `-c` options, in front of the command. */
+  config: string[];
+  /** Options of the command itself, right after its name. */
+  flags: string[];
+}
+
+/** A refusal that reads the same whether the caller shows the error or what git printed. */
+function refusal(message: string): Error {
+  return Object.assign(new Error(message), { stderr: message });
+}
+
+/**
+ * Works out the guard for one call (see the note above). Throws for a call that would talk
+ * to a remote in a way the repository's config has changed and that can't be undone.
+ */
+async function repoConfigGuard(args: string[], o: GitRunOptions): Promise<Guard> {
+  const command = commandIn(args);
+  const own = o.credentialHelper ? ["-c", "credential.helper=", "-c", `credential.helper=${o.credentialHelper}`] : [];
+  if (READS_ONLY.has(command.name) || process.env.LEMONLIME_TRUST_REPO_GIT_CONFIG === "1") return { config: own, flags: [] };
+
+  const entries = await readConfig(o.cwd);
+  const theirs = entries.filter(e => e.scope === "local" || e.scope === "worktree");
+  // Anything else git read is the user's: their global and system config, and whatever a
+  // git build adds of its own.
+  const users = entries.filter(e => e.scope !== "local" && e.scope !== "worktree" && e.scope !== "command");
+  const usersValue = (key: string) => users.findLast(e => e.key === key)?.value;
+  const set = new Map<string, string>();
+  const flags: string[] = [];
+
+  for (const { key, value } of theirs) {
+    const lower = key.toLowerCase();
+    const program = PROGRAM_SETTINGS[lower];
+    if (program) {
+      // gpg.program is an older name for gpg.openpgp.program, so either stands in for the other.
+      const twin = lower === "gpg.program" ? "gpg.openpgp.program" : lower === "gpg.openpgp.program" ? "gpg.program" : null;
+      set.set(key, usersValue(key) ?? (twin ? usersValue(twin) : undefined) ?? program());
+      continue;
+    }
+    const pattern = PROGRAM_PATTERNS.find(([re]) => re.test(key));
+    if (pattern) {
+      set.set(key, usersValue(key) ?? pattern[1]);
+      continue;
+    }
+    const filter = FILTER_PROGRAM.exec(key);
+    if (filter) {
+      if (filter[1] === "lfs" && LFS_FILTERS[filter[2]!.toLowerCase()]?.includes(value)) continue;
+      const mine = usersValue(key);
+      set.set(key, mine ?? "");
+      // With its program gone, a filter marked as required would make git stop.
+      if (mine === undefined) set.set(`filter.${filter[1]}.required`, "false");
+      continue;
+    }
+    const trust = SERVER_TRUST.find(([re]) => re.test(key));
+    if (trust) {
+      set.set(key, usersValue(key) ?? usersValue(trust[1]) ?? trust[2]);
+      continue;
+    }
+    const certificates = TRUSTED_CERTIFICATES.exec(key);
+    if (certificates) {
+      const mine = usersValue(key) ?? usersValue(`http.${certificates[2]!.toLowerCase()}`);
+      if (mine !== undefined) set.set(key, mine);
+      // There is no value that means "the usual ones", so without one of the user's own nothing is sent.
+      else if (talksToRemote(args, command)) {
+        throw refusal(
+          `This repository's own git settings name the certificates to trust (${key}), so nothing was fetched or pushed. Move that setting to your own git config with "git config --global", or remove it from the repository.`,
+        );
+      }
+      continue;
+    }
+    if (lower === "core.gitproxy") set.set("protocol.git.allow", "never");
+    // Only the repository's own config can give a submodule a command to run as its update.
+    else if (/^submodule\..+\.update$/i.test(key) && value.startsWith("!")) set.set(key, "checkout");
+    else if (ADDRESS_REWRITE.test(key) && talksToRemote(args, command)) {
+      throw refusal(
+        `This repository's own git settings send addresses somewhere else (${key}), so nothing was fetched or pushed. Move that setting to your own git config with "git config --global", or remove it from the repository.`,
+      );
+    } else if (REMOTE_PROGRAM.test(key) && usersValue(key) === undefined && talksToRemote(args, command)) {
+      if (command.name === "push") flags.push("--receive-pack=git-receive-pack");
+      else if (command.name === "fetch" || command.name === "pull" || command.name === "ls-remote") flags.push("--upload-pack=git-upload-pack");
+      else {
+        throw refusal(
+          `This repository's own git settings name a program to run for a remote (${key}), so nothing was fetched. Move that setting to your own git config with "git config --global", or remove it from the repository.`,
+        );
+      }
+    }
+  }
+
+  const config = [...set].flatMap(([key, value]) => ["-c", `${key}=${value}`]);
+  if (own.length) config.push(...own);
+  // An empty helper empties the list git has built so far; the user's own go back in order.
+  else if (theirs.some(e => CREDENTIAL_HELPER.test(e.key)))
+    config.push("-c", "credential.helper=", ...users.filter(e => CREDENTIAL_HELPER.test(e.key)).flatMap(e => ["-c", `${e.key}=${e.value}`]));
+  return { config, flags: [...new Set(flags)] };
+}
+
+function talksToRemote(args: string[], command: { name: string; at: number }): boolean {
+  if (TALKS_TO_REMOTE.has(command.name)) return true;
+  return command.name === "remote" && REMOTE_ACTIONS_THAT_TALK.has(args[command.at + 1] ?? "");
+}
+
+/**
+ * Run git with the safe config, nothing the repository's own config could make it run, a
+ * time limit and no terminal prompts. Arguments are never shell-parsed.
+ */
+export async function runGit(args: string[], o: GitRunOptions): Promise<{ stdout: string; stderr: string }> {
+  const guard = await repoConfigGuard(args, o);
+  const command = commandIn(args);
+  const flags = [...guard.flags, ...(PRINTS_DIFFS.has(command.name) ? SAFE_DIFF.filter(f => !args.includes(f)) : [])];
+  const guarded = flags.length ? [...args.slice(0, command.at + 1), ...flags, ...args.slice(command.at + 1)] : args;
+  const pending = run("git", ["--no-pager", ...SAFE_GIT_CONFIG, ...guard.config, ...guarded], {
     cwd: o.cwd,
     maxBuffer: o.maxBuffer ?? 32 * 1024 * 1024,
     timeout: o.timeout ?? GIT_TIMEOUT_MS,
     killSignal: "SIGKILL",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...o.env },
+    env: gitEnv(o.env),
+    windowsHide: true,
   });
+  if (o.input !== undefined) pending.child.stdin?.end(o.input);
+  return pending;
 }
 
 /**
@@ -91,6 +348,7 @@ export class GitWorkspace {
     try {
       const { stdout } = await runGit(args, {
         cwd: this.dir,
+        ...(this.credentialHelper ? { credentialHelper: this.credentialHelper } : {}),
         ...(opts.timeout ? { timeout: opts.timeout } : {}),
         ...(opts.env ? { env: opts.env } : {}),
         ...(opts.maxBuffer ? { maxBuffer: opts.maxBuffer } : {}),
@@ -144,6 +402,7 @@ export class GitWorkspace {
       // After a rewind the branch moved back, so it's replaced; only ever the thread's own branch.
       await runGit(["push", "-q", "-u", ...(opts.force ? ["--force-with-lease"] : []), remote, `HEAD:refs/heads/${remoteBranch}`], {
         cwd: this.dir,
+        ...(this.credentialHelper ? { credentialHelper: this.credentialHelper } : {}),
         maxBuffer: 4 * 1024 * 1024,
         timeout: 120_000,
       });
@@ -397,9 +656,7 @@ export class GitWorkspace {
   /** Object id of the empty tree for this repo's hash format (sha1 or sha256). */
   private async emptyTree(): Promise<string> {
     // Hash empty input as a tree. Works on every OS (no /dev/null) and both hash formats.
-    const pending = runGit(["hash-object", "-t", "tree", "--stdin"], { cwd: this.dir });
-    pending.child.stdin?.end();
-    const { stdout } = await pending;
+    const { stdout } = await runGit(["hash-object", "-t", "tree", "--stdin"], { cwd: this.dir, input: "" });
     return stdout.trim();
   }
 }

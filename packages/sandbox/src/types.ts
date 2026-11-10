@@ -37,7 +37,11 @@ export function launchCommand(runner: RunnerLaunch): string {
     'if [ ! -e "$d/setup.log" ]; then',
     '  mkdir -p "$d"',
     `  printf '%s\\n' ${quote(runner.setupScript)} > "$d/setup.sh"`,
-    `  if command -v timeout >/dev/null 2>&1; then timeout ${SETUP_TIMEOUT_SECONDS} sh "$d/setup.sh" > "$d/setup.out" 2>&1 < /dev/null; else sh "$d/setup.sh" > "$d/setup.out" 2>&1 < /dev/null; fi`,
+    // The script, and anything it leaves running, gets neither the thread secret nor the keeper's address.
+    "  (",
+    "    unset LEMONLIME_THREAD_SECRET LEMONLIME_KEEPER",
+    `    if command -v timeout >/dev/null 2>&1; then timeout ${SETUP_TIMEOUT_SECONDS} sh "$d/setup.sh" > "$d/setup.out" 2>&1 < /dev/null; else sh "$d/setup.sh" > "$d/setup.out" 2>&1 < /dev/null; fi`,
+    "  )",
     "  code=$?",
     '  { echo "exit $code"; tail -c 65536 "$d/setup.out"; } > "$d/setup.log.tmp"',
     '  mv "$d/setup.log.tmp" "$d/setup.log"',

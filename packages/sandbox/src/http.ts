@@ -71,17 +71,38 @@ export async function requestJson<T>(fetchFn: FetchLike, provider: string, req: 
   }
 }
 
-/** Pulls a readable message out of an error body without echoing huge pages. */
-function errorDetail(text: string): string {
+/** The longest piece of a provider's answer that goes into an error message. */
+const DETAIL_MAX_CHARS = 200;
+
+/** An id such as a sandbox's: long, but not a credential, and useful in an error. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A short, safe piece of a provider's error answer for an error message people will read.
+ * Providers sometimes echo the request back, and a request can carry keys and the runner's
+ * environment, so anything that looks like a credential is left out: `Bearer` and `Basic`
+ * values, values after names such as "token" or "password", strings that start the way
+ * common keys do, and long unbroken strings with digits in them (keys, tokens, signatures).
+ * What is left is one line, cut to a couple of hundred characters.
+ */
+export function errorDetail(text: string): string {
+  let detail = text;
   try {
     const body = JSON.parse(text) as { message?: unknown; error?: unknown };
     const msg = body.message ?? body.error;
-    if (typeof msg === "string") return msg;
-    if (Array.isArray(msg)) return msg.join("; ");
+    if (typeof msg === "string") detail = msg;
+    else if (Array.isArray(msg)) detail = msg.join("; ");
   } catch {
     // not JSON
   }
-  return text.trim().slice(0, 300);
+  const cleaned = detail
+    .replace(/\b(bearer|basic)\s+[^\s"',;}]+/gi, "$1 [hidden]")
+    .replace(/(secret|token|password|passwd|api[_-]?key|authorization|credential)s?(\\?["']?\s*[:=]\s*\\?["']?)[^\s"',;}\\]+/gi, "$1$2[hidden]")
+    .replace(/\b(?:sk-|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{8,}/g, "[hidden]")
+    .replace(/[A-Za-z0-9+/_=-]{32,}/g, run => (/\d/.test(run) && !UUID.test(run) ? "[hidden]" : run))
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length > DETAIL_MAX_CHARS ? `${cleaned.slice(0, DETAIL_MAX_CHARS)}…` : cleaned;
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));

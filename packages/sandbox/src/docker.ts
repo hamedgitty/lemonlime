@@ -30,9 +30,14 @@ export interface DockerProviderOptions {
   /**
    * Run the agent as this user, apart from the thread secret: the container starts as root,
    * a keeper (`lemonlime-runner keeper`) keeps the secret and starts everything else as
-   * this user. The image's `agent` user is the usual choice.
+   * this user. Left out, the image's `agent` user is used when the image can do this, and
+   * an image that can't starts the runner as the image's own user with the secret in its
+   * environment, after one warning. A user named here must work in the image: creating a
+   * sandbox fails when it doesn't. `false` turns the separate user off.
    */
-  agentUser?: string;
+  agentUser?: string | false;
+  /** Where warnings go. Defaults to `console.warn`. */
+  warn?: (message: string) => void;
   /**
    * Reach runners through a reverse proxy instead of published ports: each runner's URL
    * becomes `<publicUrl>/<container name>`, and no port is opened on the host. The proxy
@@ -41,6 +46,20 @@ export interface DockerProviderOptions {
    */
   publicUrl?: string;
 }
+
+/** The user the stock sandbox image runs the agent as. */
+const DEFAULT_AGENT_USER = "agent";
+
+/** What trying the keeper in an image found: it works, or why it doesn't. */
+type KeeperCheck = { ok: true } | { ok: false; why: string; noUser: boolean };
+
+/**
+ * What each image answered, by docker binary, image id and user, so an image is tried once
+ * and a rebuilt one (a new id under the same tag) is tried again.
+ */
+const keeperChecks = new Map<string, KeeperCheck>();
+/** Images already warned about, so the warning is logged once and not for every thread. */
+const warned = new Set<string>();
 
 /** Container name for a thread's sandbox. Also the path segment behind a proxy. */
 export function containerName(threadId: string): string {
@@ -68,8 +87,98 @@ export class DockerProvider implements SandboxProvider {
     return stdout.trim();
   }
 
+  /**
+   * The user the keeper starts the agent as in a new sandbox, or null to start the runner
+   * as the image's own user with the thread secret in its environment.
+   */
+  private async agentUserFor(): Promise<string | null> {
+    if (this.opts.agentUser === false) return null;
+    const named = this.opts.agentUser;
+    const user = named ?? DEFAULT_AGENT_USER;
+    const check = await this.checkKeeper(user);
+    if (check.ok) return user;
+    if (named) {
+      throw new Error(
+        check.noUser
+          ? `The sandbox image ${this.opts.image} has no user called "${named}". Set LEMONLIME_DOCKER_AGENT_USER to a user the image has (the stock image has "agent"), or to "none" to run the agent as the image's own user.`
+          : `The sandbox image ${this.opts.image} can't run the agent as "${named}": ${check.why}. Rebuild the image from docker/sandbox.Dockerfile, or set LEMONLIME_DOCKER_AGENT_USER=none to run the agent as the image's own user.`,
+      );
+    }
+    const key = `${this.docker}\n${this.opts.image}`;
+    if (!warned.has(key)) {
+      warned.add(key);
+      (this.opts.warn ?? console.warn)(
+        `The sandbox image ${this.opts.image} can't run the agent as a separate "${DEFAULT_AGENT_USER}" user (${check.why}), so the thread secret is in the runner's environment, where the agent can read it. Rebuild the image from docker/sandbox.Dockerfile to keep the secret away from the agent, or set LEMONLIME_DOCKER_AGENT_USER=none to stop this warning.`,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * Try the keeper in the image, once per image: a throwaway container with no network
+   * starts the keeper as root with a made-up secret and has it run `true` as `user`. That
+   * finds a missing user, a runner without a keeper and a keeper that can't switch user,
+   * the same way, before a thread depends on it. Docker's own failures (no daemon, no such
+   * image) are thrown, as they would be when starting the sandbox.
+   */
+  private async checkKeeper(user: string): Promise<KeeperCheck> {
+    const imageId = () => this.exec(["image", "inspect", "-f", "{{.Id}}", this.opts.image]).catch(() => "");
+    const key = (id: string) => `${this.docker}\n${id}\n${user}`;
+    const known = await imageId();
+    const cached = known ? keeperChecks.get(key(known)) : undefined;
+    if (cached) return cached;
+    let check: KeeperCheck;
+    try {
+      await this.exec([
+        "run",
+        "--rm",
+        "--network",
+        "none",
+        "--user",
+        "root",
+        "--security-opt",
+        "no-new-privileges",
+        "--cap-drop",
+        "ALL",
+        ...KEEPER_CAPS,
+        "-e",
+        "LEMONLIME_THREAD_SECRET=keeper-check-not-a-secret",
+        this.opts.image,
+        "lemonlime-runner",
+        "keeper",
+        "--thread",
+        "keeper-check",
+        "--agent-user",
+        user,
+        "--",
+        "true",
+      ]);
+      check = { ok: true };
+    } catch (err) {
+      const failure = err as { code?: unknown; stderr?: unknown };
+      // 125 is docker itself failing; no exit code at all means docker never ran.
+      if (typeof failure.code !== "number" || failure.code === 125) throw err;
+      const lines = String(failure.stderr ?? "")
+        .split("\n")
+        .map(l => l.trim())
+        .filter(Boolean);
+      const noUser = lines.find(l => /no user called/i.test(l));
+      const why = noUser
+        ? `it has no user called "${user}"`
+        : failure.code === 127 || failure.code === 126
+          ? "it has no lemonlime-runner command"
+          : "its runner is too old to keep the thread secret apart";
+      check = { ok: false, why, noUser: Boolean(noUser) };
+    }
+    // The image may have been pulled by the try above, so its id is looked up again.
+    const id = known || (await imageId());
+    if (id) keeperChecks.set(key(id), check);
+    return check;
+  }
+
   async create(o: CreateSandboxOptions): Promise<SandboxInfo> {
     const res = SANDBOX_RESOURCES[o.size];
+    const agentUser = await this.agentUserFor();
     const labels = { "lemonlime.thread": o.threadId, ...o.labels };
     const args = [
       "run",
@@ -92,7 +201,7 @@ export class DockerProvider implements SandboxProvider {
       "1024",
       // With a separate agent user, root keeps only what the keeper needs: switching to that
       // user and stopping its processes.
-      ...(this.opts.agentUser ? ["--user", "root", "--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL"] : []),
+      ...(agentUser ? ["--user", "root", ...KEEPER_CAPS] : []),
       // A small init as process 1 reaps what the agent's processes leave behind, so finished
       // ones don't pile up toward the process limit.
       "--init",
@@ -105,7 +214,7 @@ export class DockerProvider implements SandboxProvider {
       // appear in the host's process list.
       ...Object.keys(o.runner.env).flatMap(k => ["-e", k]),
       this.opts.image,
-      ...(this.opts.agentUser ? ["lemonlime-runner", "keeper", "--thread", o.threadId, "--agent-user", this.opts.agentUser, "--"] : []),
+      ...(agentUser ? ["lemonlime-runner", "keeper", "--thread", o.threadId, "--agent-user", agentUser, "--"] : []),
       "sh",
       "-c",
       launchCommand(o.runner),
@@ -176,6 +285,9 @@ export class DockerProvider implements SandboxProvider {
     return { id: id.slice(0, 12), provider: this.name, state, runnerUrl };
   }
 }
+
+/** What root keeps for the keeper: switching to the agent's user and stopping its processes. */
+const KEEPER_CAPS = ["--cap-add", "SETUID", "--cap-add", "SETGID", "--cap-add", "KILL"];
 
 export function mapDockerState(status: string): SandboxState {
   switch (status.trim()) {

@@ -1,5 +1,5 @@
 import type { SandboxSize } from "@lemonlime/protocol";
-import { defaultFetch, isStatus, requestJson, trimSlash, type FetchLike } from "./http.ts";
+import { defaultFetch, errorDetail, isStatus, requestJson, sleep, trimSlash, type FetchLike } from "./http.ts";
 import {
   keeperLaunch,
   launchCommand,
@@ -30,6 +30,8 @@ export interface E2BProviderOptions {
   domain?: string;
   /** How long to wait for envd to confirm the runner started. Default 1 minute. */
   commandStartTimeoutMs?: number;
+  /** How long a resumed sandbox's runner gets to answer before it is started again. Default 6 seconds. */
+  resumeProbeMs?: number;
   /** Custom fetch, mainly for tests. */
   fetch?: FetchLike;
 }
@@ -55,7 +57,10 @@ const DEFAULT_DOMAIN = "e2b.app";
 const ENVD_PORT = 49983;
 const RUNNER_PORT_LABEL = "lemonlime.runner-port";
 
-/** Runs each sandbox on E2B. Pause keeps memory and files, so the runner keeps going after resume. */
+/**
+ * Runs each sandbox on E2B. Pause keeps memory and files, so the runner normally keeps going
+ * after resume; when it doesn't answer, resume starts it again.
+ */
 export class E2BProvider implements SandboxProvider {
   readonly name = "e2b";
   private readonly ports = new Map<string, number>();
@@ -77,7 +82,8 @@ export class E2BProvider implements SandboxProvider {
     const sandbox = await this.api<E2BSandbox>("POST", "/v2/sandboxes", {
       templateID: this.opts.templates[o.size],
       metadata: { "lemonlime.thread": o.threadId, [RUNNER_PORT_LABEL]: String(o.runner.port), ...o.labels },
-      envVars: o.runner.env,
+      // The runner's environment (the thread secret, model keys) goes to the runner's own
+      // process when it is started below, not to the whole sandbox.
       timeout: this.timeoutSeconds,
       // Without this, the sandbox's process service (envd) takes commands from anyone who
       // knows its address; with it, only callers holding the access token returned here.
@@ -131,9 +137,40 @@ export class E2BProvider implements SandboxProvider {
 
   async resume(id: string, runner: RunnerLaunch): Promise<SandboxInfo> {
     // Connecting resumes a paused sandbox (or refreshes a running one's timeout).
-    // Memory is restored, so the runner is still running.
     const sandbox = await this.api<E2BSandbox>("POST", `/v2/sandboxes/${enc(id)}/connect`, { timeout: this.timeoutSeconds });
-    return { id, provider: this.name, state: "running", runnerUrl: this.runnerUrl(id, runner.port, sandbox.domain) };
+    const runnerUrl = this.runnerUrl(id, runner.port, sandbox.domain);
+    // Memory is restored, so the runner is usually still there. One that stopped while the
+    // sandbox ran, or didn't survive the pause, is started again the way create starts it.
+    if (!(await this.runnerAnswers(runnerUrl))) {
+      const command = this.opts.agentUser ? keeperLaunch(await this.threadOf(id), this.opts.agentUser, runner) : launchCommand(runner);
+      await this.startCommand(sandbox, command, runner.env, this.opts.agentUser ? "root" : undefined);
+    }
+    return { id, provider: this.name, state: "running", runnerUrl };
+  }
+
+  /** Whether the runner answers its health check, trying for a few seconds while the sandbox's network comes back. */
+  private async runnerAnswers(runnerUrl: string): Promise<boolean> {
+    const deadline = Date.now() + (this.opts.resumeProbeMs ?? 6000);
+    for (;;) {
+      const left = deadline - Date.now();
+      try {
+        const res = await this.fetch(`${runnerUrl}/healthz`, { method: "GET", signal: AbortSignal.timeout(Math.max(1, Math.min(2000, left))) });
+        await res.body?.cancel().catch(() => undefined);
+        if (res.ok) return true;
+      } catch {
+        // not reachable yet
+      }
+      if (deadline - Date.now() <= 500) return false;
+      await sleep(500);
+    }
+  }
+
+  /** The thread a sandbox belongs to, from the metadata it was created with. */
+  private async threadOf(id: string): Promise<string> {
+    const info = await this.api<E2BSandboxDetail>("GET", `/sandboxes/${enc(id)}`);
+    const thread = info.metadata?.["lemonlime.thread"];
+    if (!thread) throw new Error(`E2B sandbox ${id} has no thread label, so its keeper can't start`);
+    return thread;
   }
 
   async destroy(id: string): Promise<void> {
@@ -178,14 +215,15 @@ export class E2BProvider implements SandboxProvider {
       const res = await this.fetch(url, { method: "POST", headers, body: envelope(message), signal: controller.signal });
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => "");
-        throw new Error(`E2B could not start the runner: envd answered ${res.status}${text ? `: ${text.slice(0, 300)}` : ""}`);
+        const detail = errorDetail(text);
+        throw new Error(`E2B could not start the runner: envd answered ${res.status}${detail ? `: ${detail}` : ""}`);
       }
       const reader = res.body.getReader();
       try {
         for await (const frame of readEnvelopes(reader)) {
           if (frame.flags & END_STREAM) {
             const end = frame.json as { error?: { code?: string; message?: string } };
-            const why = end.error ? `${end.error.code ?? "error"}: ${end.error.message ?? ""}` : "stream ended";
+            const why = end.error ? `${end.error.code ?? "error"}: ${errorDetail(end.error.message ?? "")}` : "stream ended";
             throw new Error(`E2B could not start the runner: ${why}`);
           }
           const pid = (frame.json as { event?: { start?: { pid?: number } } }).event?.start?.pid;

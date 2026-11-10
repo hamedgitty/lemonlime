@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parsePullRequestRef, pullRequestLocalBranch, type PullRequestLookup } from "@lemonlime/protocol";
 import {
   draftPullRequest,
@@ -29,7 +29,10 @@ function tempDir(): string {
   dirs.push(d);
   return d;
 }
-afterEach(() => dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true }));
+});
 
 const git = (dir: string, ...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "protocol.file.allow=always", ...args], { cwd: dir, stdio: "pipe" })
@@ -351,10 +354,13 @@ describe("pull requests", () => {
     git(dev, "checkout", "-q", "-b", "main-fix");
     commitFile(dev, "f.txt", "from the fork\n", "Fork fix");
     git(dev, "push", "-q", "origin", "main-fix");
-    // GitHub addresses, pointed at the local repositories.
+    // GitHub addresses, pointed at the local repositories by the user's own git config.
     git(repo, "remote", "set-url", "origin", "https://github.com/acme/app.git");
-    git(repo, "config", `url.${origin}.insteadOf`, "https://github.com/acme/app.git");
-    git(repo, "config", `url.${fork}.insteadOf`, "https://github.com/alice/app.git");
+    const usersConfig = join(tempDir(), "gitconfig");
+    writeFileSync(usersConfig, "");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", usersConfig);
+    git(repo, "config", "--global", `url.${origin}.insteadOf`, "https://github.com/acme/app.git");
+    git(repo, "config", "--global", `url.${fork}.insteadOf`, "https://github.com/alice/app.git");
 
     const pr = await preparePullRequestBranch(repo, lookup({ fromFork: true, headRepo: "alice/app", headBranch: "main-fix", localBranch: "pr/5-main-fix" }));
     expect(pr.pushTarget).toEqual({ remote: "alice", branch: "main-fix" });

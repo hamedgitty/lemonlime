@@ -36,6 +36,8 @@ describe("secret redaction", () => {
       status: "provisioning",
       sandboxSize: "small",
       latestSeq: 0,
+      mine: true,
+      shared: false,
       createdAt: now,
       updatedAt: now,
     };

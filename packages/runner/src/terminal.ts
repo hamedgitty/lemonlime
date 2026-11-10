@@ -31,12 +31,14 @@ export async function loadPty(env: NodeJS.ProcessEnv = process.env): Promise<Spa
   }
 }
 
+const SHELL_ENV_LEFT_OUT = new Set(["LEMONLIME_THREAD_SECRET", "LEMONLIME_KEEPER", "LEMONLIME_AGENT_KEY", "LEMONLIME_APPROVAL_TOKEN", "LEMONLIME_AGENT_FILES"]);
+
 /** Environment for the shell: the runner's own, without anything that would let it act as the runner. */
 export function shellEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) continue;
-    if (k === "LEMONLIME_THREAD_SECRET" || k === "LEMONLIME_AGENT_KEY" || k === "LEMONLIME_APPROVAL_TOKEN" || k === "LEMONLIME_AGENT_FILES") continue;
+    if (SHELL_ENV_LEFT_OUT.has(k)) continue;
     out[k] = v;
   }
   out.TERM = "xterm-256color";

@@ -13,7 +13,7 @@ import {
   launchCommand,
 } from "../src/index.ts";
 import { envelope } from "../src/e2b.ts";
-import { requestJson } from "../src/http.ts";
+import { errorDetail, requestJson } from "../src/http.ts";
 
 interface Call {
   method: string;
@@ -116,6 +116,35 @@ describe("requests to a provider", () => {
       throw new Error("no route to host");
     };
     await expect(requestJson(broken, "E2B", { method: "GET", url: "https://api.example/x", headers: {} })).rejects.toThrow("no route to host");
+  });
+
+  it("leave keys and tokens out of the error a person reads", async () => {
+    const echoed =
+      'invalid request {"env":{"LEMONLIME_THREAD_SECRET":"hunter2hunter2","ANTHROPIC_API_KEY":"sk-ant-abc123456"}} ' +
+      "sent with Authorization: Bearer abc.def.ghi and key 0123456789abcdef0123456789abcdef01234567";
+    const echo = async () => json({ message: echoed }, 400);
+    const err = await requestJson(echo, "Daytona", { method: "POST", url: "https://api.example/sandbox", headers: {} }).then(
+      () => new Error("the request went through"),
+      (e: unknown) => e as Error,
+    );
+    expect(err.message).toContain("Daytona POST /sandbox failed with 400: invalid request");
+    for (const secret of ["hunter2hunter2", "sk-ant-abc123456", "abc.def.ghi", "0123456789abcdef0123456789abcdef01234567"]) {
+      expect(err.message).not.toContain(secret);
+    }
+  });
+
+  it("keep what helps: the reason, and the id of the sandbox it is about", () => {
+    expect(errorDetail(JSON.stringify({ message: "sandbox 3f2b8c1e-1a2b-4c3d-9e8f-0123456789ab not found" }))).toBe(
+      "sandbox 3f2b8c1e-1a2b-4c3d-9e8f-0123456789ab not found",
+    );
+    expect(errorDetail("snapshot lemonlime-sandbox-small is missing")).toBe("snapshot lemonlime-sandbox-small is missing");
+  });
+
+  it("keep only the start of a long answer, on one line", () => {
+    const detail = errorDetail(`<html>\n<body>\n${"bad gateway ".repeat(200)}</body></html>`);
+    expect(detail.length).toBeLessThanOrEqual(201);
+    expect(detail).not.toContain("\n");
+    expect(detail.startsWith("<html> <body> bad gateway")).toBe(true);
   });
 });
 
@@ -306,6 +335,13 @@ describe("DaytonaProvider", () => {
     expect(calls[1]!.body).toBeUndefined();
   });
 
+  it("says so when it can't tell whether there is a sandbox to pause", async () => {
+    const { fetch, calls } = scriptedFetch([json({ message: "boom" }, 500)]);
+    await expect(make(fetch).pause("sb1")).rejects.toThrow("Daytona GET /api/sandbox/sb1 failed with 500: boom");
+    // It never got as far as stopping anything.
+    expect(calls).toHaveLength(1);
+  });
+
   it("resumes by starting, waiting and restarting the runner", async () => {
     const tb = "https://proxy.example/toolbox";
     const { fetch, calls } = scriptedFetch([
@@ -365,10 +401,12 @@ describe("E2BProvider", () => {
     expect(calls[0]!.body).toEqual({
       templateID: "tpl-small",
       metadata: { "lemonlime.thread": "t1", "lemonlime.runner-port": "7420", "lemonlime.workspace": "w" },
-      envVars: { LEMONLIME_THREAD_SECRET: "s" },
       timeout: 3600,
       secure: true,
     });
+
+    // The thread secret goes to the runner's own process, not to everything in the sandbox.
+    expect(JSON.stringify(calls[0]!.body)).not.toContain("LEMONLIME_THREAD_SECRET");
 
     expect(calls[1]!.method).toBe("POST");
     expect(calls[1]!.url).toBe("https://49983-ib1.e2b.app/process.Process/Start");
@@ -465,12 +503,64 @@ describe("E2BProvider", () => {
     expect(calls[0]).toMatchObject({ method: "POST", url: `${API}/sandboxes/ib1/pause`, body: {}, headers: { "x-api-key": "ek" } });
   });
 
-  it("resumes by connecting, without restarting the runner", async () => {
-    const { fetch, calls } = scriptedFetch([json({ sandboxID: "ib1", envdVersion: "0.5.0", domain: "e2b.app" }, 201)]);
+  it("resumes by connecting, and leaves a runner that answers alone", async () => {
+    const { fetch, calls } = scriptedFetch([
+      json({ sandboxID: "ib1", envdVersion: "0.5.0", envdAccessToken: "envd-tok", domain: "e2b.app" }, 201),
+      json({ ok: true, threadId: "t1" }),
+    ]);
     const info = await make(fetch).resume("ib1", runner);
     expect(info).toEqual({ id: "ib1", provider: "e2b", state: "running", runnerUrl: "https://7420-ib1.e2b.app" });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ method: "POST", url: `${API}/v2/sandboxes/ib1/connect`, body: { timeout: 3600 } });
+    expect(calls.map(c => `${c.method} ${c.url}`)).toEqual([`POST ${API}/v2/sandboxes/ib1/connect`, "GET https://7420-ib1.e2b.app/healthz"]);
+    expect(calls[0]).toMatchObject({ body: { timeout: 3600 } });
+  });
+
+  it("starts the runner again after a resume when it doesn't answer", async () => {
+    const { fetch, calls } = scriptedFetch([
+      json({ sandboxID: "ib1", envdVersion: "0.5.4", envdAccessToken: "envd-tok", domain: null }, 201),
+      empty(502),
+      () => connectStream([{ message: { event: { start: { pid: 43 } } } }]),
+    ]);
+    const p = new E2BProvider({ apiKey: "ek", templates: { small: "tpl-small", large: "tpl-large" }, fetch, resumeProbeMs: 1 });
+    const info = await p.resume("ib1", runner);
+    expect(info).toEqual({ id: "ib1", provider: "e2b", state: "running", runnerUrl: "https://7420-ib1.e2b.app" });
+    expect(calls.map(c => `${c.method} ${c.url}`)).toEqual([
+      `POST ${API}/v2/sandboxes/ib1/connect`,
+      "GET https://7420-ib1.e2b.app/healthz",
+      "POST https://49983-ib1.e2b.app/process.Process/Start",
+    ]);
+    // Started the way create starts it: the same command, its environment, the sandbox's access token.
+    expect(calls[2]!.headers["x-access-token"]).toBe("envd-tok");
+    expect(calls[2]!.body).toEqual({
+      flags: 0,
+      message: {
+        process: { cmd: "/bin/bash", args: ["-l", "-c", runner.command], envs: { LEMONLIME_THREAD_SECRET: "s" } },
+        stdin: false,
+      },
+    });
+  });
+
+  it("keeps trying a resumed runner for a little while before starting it again", async () => {
+    const unreachable = () => {
+      throw new Error("connect ECONNREFUSED");
+    };
+    const { fetch, calls } = scriptedFetch([
+      json({ sandboxID: "ib1", envdVersion: "0.5.4", envdAccessToken: "envd-tok", domain: null }, 201),
+      unreachable,
+      json({ ok: true }),
+    ]);
+    const p = new E2BProvider({ apiKey: "ek", templates: { small: "tpl-small", large: "tpl-large" }, fetch, resumeProbeMs: 3000 });
+    await p.resume("ib1", runner);
+    expect(calls.map(c => c.url)).toEqual([`${API}/v2/sandboxes/ib1/connect`, "https://7420-ib1.e2b.app/healthz", "https://7420-ib1.e2b.app/healthz"]);
+  });
+
+  it("says so when a resumed runner can't be started again", async () => {
+    const { fetch } = scriptedFetch([
+      json({ sandboxID: "ib1", envdVersion: "0.5.4", envdAccessToken: "envd-tok", domain: null }, 201),
+      empty(502),
+      new Response("sandbox not reachable", { status: 502 }),
+    ]);
+    const p = new E2BProvider({ apiKey: "ek", templates: { small: "tpl-small", large: "tpl-large" }, fetch, resumeProbeMs: 1 });
+    await expect(p.resume("ib1", runner)).rejects.toThrow("E2B could not start the runner: envd answered 502: sandbox not reachable");
   });
 
   it("destroys, ignoring a missing sandbox", async () => {
@@ -533,5 +623,19 @@ describe("running the agent as its own user (keeper)", () => {
     expect(calls[1]!.headers.authorization).toBe(`Basic ${btoa("root:")}`);
     expect(calls[1]!.headers["x-access-token"]).toBe("envd-tok");
     expect(JSON.stringify(calls[1]!.body)).toContain("lemonlime-runner keeper --thread thread-k1 --agent-user agent");
+  });
+
+  it("E2B: starts the keeper again, for the sandbox's own thread, when a resumed runner doesn't answer", async () => {
+    const { fetch, calls } = scriptedFetch([
+      json({ sandboxID: "ib9", envdVersion: "0.5.4", envdAccessToken: "envd-tok", domain: null }, 201),
+      empty(502),
+      json({ sandboxID: "ib9", state: "running", metadata: { "lemonlime.thread": "thread-k1" } }),
+      () => connectStream([{ message: { event: { start: { pid: 10 } } } }]),
+    ]);
+    const p = new E2BProvider({ apiKey: "ek", templates: { small: "s", large: "l" }, fetch, agentUser: "agent", resumeProbeMs: 1 });
+    await p.resume("ib9", runner);
+    expect(calls[2]).toMatchObject({ method: "GET", url: "https://api.e2b.app/sandboxes/ib9" });
+    expect(calls[3]!.headers.authorization).toBe(`Basic ${btoa("root:")}`);
+    expect(JSON.stringify(calls[3]!.body)).toContain("lemonlime-runner keeper --thread thread-k1 --agent-user agent");
   });
 });

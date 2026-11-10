@@ -48,6 +48,12 @@ export interface ServerOptions {
   relay?: Relay;
   /** Look for ports the thread's programs start listening on, while it's busy (see port-watch.ts). */
   watchPorts?: boolean;
+  /**
+   * Running in a cloud sandbox (default: LEMONLIME_SANDBOX is 1). There a connection from
+   * the machine itself may be the provider passing on a stranger's request, so it gets no
+   * more of `/healthz` than anyone else.
+   */
+  sandbox?: boolean;
 }
 
 export interface RunningServer {
@@ -147,16 +153,75 @@ const TUNNEL_EARLY_BYTES = 1024 * 1024;
 const TERMINAL_CLOSED_CLOSE = 4410;
 
 /**
- * What a phone (a `phone` token, through the control plane's phone bridge) may not do on a
- * thread that runs on the user's computer: answer the agent's requests for the computer,
- * or sign the agent in. Nor may it give the agent full access (see handleConnection).
+ * Everything a phone (a `phone` token, through the control plane's phone bridge) may send
+ * on a thread that runs on the user's computer: talk to the agent, stop it, answer what it
+ * asks, and change how it runs. Anything not listed is refused, so a message type added
+ * later stays off phones until it is put here on purpose. Left out today: answering the
+ * agent's requests for the computer, signing the agent in, going back in the thread (which
+ * can put files back), side chats and offering a port for preview. Nor may a phone give
+ * the agent full access (see handleConnection).
  * Phone tokens open only the thread's WebSocket: the terminal, previews, files, uploads and
  * downloads all still want a `client` token.
  */
-const PHONE_REFUSED = new Set<string>(["computer_result", "start_login", "login_input", "cancel_login"]);
+const PHONE_ALLOWED = new Set<string>([
+  "send_message",
+  "interrupt",
+  "approve",
+  "answer_question",
+  "edit_queue",
+  "set_options",
+  "limit_action",
+  "compact",
+  "continue_after_restart",
+  "ping",
+  "hello",
+]);
+
+/** Addresses that only ever mean "this machine". */
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const a = address.startsWith("::ffff:") ? address.slice(7) : address;
+  return a === "::1" || /^127(\.\d{1,3}){3}$/.test(a);
+}
+
+/** Whether `--host` keeps the runner to this machine. */
+function listensOnLoopback(host: string): boolean {
+  return host === "localhost" || isLoopbackAddress(host.replace(/^\[|\]$/g, ""));
+}
+
+/**
+ * Whether a request names this machine as the host it wants: `127.0.0.1`, `localhost` or
+ * `[::1]`, with or without a port. A web page elsewhere that points its own name at this
+ * machine still sends its own name, which is how such a page is told apart. A request
+ * with no Host at all is not from a browser, and is let through.
+ */
+function namesLoopbackHost(req: IncomingMessage): boolean {
+  const host = req.headers.host;
+  if (host === undefined) return true;
+  const name = host.trim().toLowerCase().replace(/:\d+$/, "");
+  return name === "127.0.0.1" || name === "localhost" || name === "[::1]";
+}
+
+/**
+ * Who gets the whole of `/healthz` (what the thread is doing, its agent and account): an
+ * app on the same machine as a runner that isn't in a sandbox, or anyone holding a token
+ * for the thread. Everyone else learns only that the runner is up.
+ */
+async function mayReadStatus(req: IncomingMessage, runner: ThreadRunner, opts: ServerOptions, inSandbox: boolean): Promise<boolean> {
+  if (!inSandbox && isLoopbackAddress(req.socket.remoteAddress)) return true;
+  const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
+  if (!token) return false;
+  const threadId = runner.thread.id;
+  const user = await verifyUser(token, opts, threadId);
+  if (user.ok && user.claims.threadId === threadId && (user.claims.scope === "client" || user.claims.scope === "runner")) return true;
+  const agent = await verifyAgent(token, opts, threadId);
+  return agent.ok && agent.claims.threadId === threadId && agent.claims.scope === "runner";
+}
 
 /** HTTP health endpoint + the thread's WebSocket. */
 export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<RunningServer> {
+  const onLoopback = listensOnLoopback(opts.host);
+  const inSandbox = opts.sandbox ?? process.env.LEMONLIME_SANDBOX === "1";
   const http: Server = createServer((req, res) => {
     const path = pathOf(req);
     if (path === null) {
@@ -165,7 +230,6 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
       return;
     }
     if (
-      path === "/capabilities" ||
       path === "/files" ||
       path === "/folder" ||
       path === "/file" ||
@@ -186,23 +250,50 @@ export function startServer(runner: ThreadRunner, opts: ServerOptions): Promise<
       });
       return;
     }
-    if (req.method === "GET" && (req.url === "/healthz" || req.url === "/")) {
-      const t = runner.thread;
-      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
-      res.end(
-        JSON.stringify({
-          ok: true,
-          threadId: t.id,
-          status: t.status,
-          latestSeq: t.latestSeq,
-          idleSince: runner.idle,
-          version: opts.version,
-          agentVersion: runner.agentVersion,
-          waitingApprovals: runner.waitingApprovals,
-          agent: t.agent.kind,
-          account: runner.currentAccount,
-          limit: runner.limitStopped,
+    // Everything from here on is answered without a token, so it is answered plainly: no
+    // header that lets a web page elsewhere read it, and, when the runner is kept to this
+    // machine, only for requests that name this machine as their host.
+    const plain = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+      res.end(JSON.stringify(body));
+    };
+    if (onLoopback && !namesLoopbackHost(req)) return plain(403, { ok: false, error: "forbidden" });
+    if (req.method === "GET" && path === "/capabilities") {
+      const agent = runner.thread.agent;
+      const now = runner.currentOptions;
+      return plain(
+        200,
+        capabilitiesFor(agent.kind, {
+          agentVersion: runner.agentVersion ?? null,
+          ...(now.model ? { model: now.model } : {}),
+          ...(now.reasoning ? { reasoning: now.reasoning } : {}),
+          permission: now.permission,
         }),
+      );
+    }
+    if (req.method === "GET" && (path === "/healthz" || path === "/")) {
+      const t = runner.thread;
+      // That the runner is up, for anyone who asks (a provider waiting for it to start).
+      const alive = { ok: true, threadId: t.id, version: opts.version };
+      void mayReadStatus(req, runner, opts, inSandbox).then(
+        full =>
+          plain(
+            200,
+            full
+              ? {
+                  ...alive,
+                  status: t.status,
+                  latestSeq: t.latestSeq,
+                  idleSince: runner.idle,
+                  agentVersion: runner.agentVersion,
+                  waitingApprovals: runner.waitingApprovals,
+                  agent: t.agent.kind,
+                  account: runner.currentAccount,
+                  limit: runner.limitStopped,
+                }
+              : alive,
+          ),
+        () => plain(200, alive),
       );
       return;
     }
@@ -263,7 +354,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
   };
   let unsubscribe: (() => void) | null = null;
   let authed = false;
-  /** Reached through the phone bridge (a `phone` token): fewer powers, see PHONE_REFUSED. */
+  /** Reached through the phone bridge (a `phone` token): fewer powers, see PHONE_ALLOWED. */
   let phone = false;
   let stopExpiry: () => void = () => {};
 
@@ -336,7 +427,7 @@ function handleConnection(ws: WebSocket, runner: ThreadRunner, opts: ServerOptio
       return;
     }
 
-    if (phone && PHONE_REFUSED.has(msg.type)) {
+    if (phone && !PHONE_ALLOWED.has(msg.type)) {
       send({ type: "error", code: "bad_request", message: "That can only be done on the computer itself." });
       return;
     }
@@ -584,6 +675,7 @@ function handleTerminal(ws: WebSocket, runner: ThreadRunner, opts: ServerOptions
   ws.on("error", () => ws.terminate());
 }
 
+/** Sent only on routes that want a token: reading an answer takes the token, not just a browser. */
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, PUT, OPTIONS",
@@ -614,8 +706,8 @@ function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
 }
 
 /**
- * `GET /capabilities`: what this thread's agent can be asked for. Attachments, with a
- * client token (`Authorization: Bearer`):
+ * The routes that want a token, which the user's apps may call from a web page on another
+ * origin. Attachments, with a client token (`Authorization: Bearer`):
  * `POST /attachments` {id, name, size} starts an upload; `PUT /attachments/<id>?offset=N`
  * sends the next piece (up to 4 MB); `GET /attachments/<id>` says how much has arrived,
  * to resume after a dropped connection. `GET /attachments/<id>/image` sends a sent image
@@ -727,20 +819,6 @@ async function handleHttpApi(req: IncomingMessage, res: ServerResponse, path: st
     if (port === req.socket.localPort || opts.ownPorts?.includes(port)) return reply(res, 400, { error: "That's the runner's own port." });
     runner.setPreview(port, parsed.remove === true ? null : String(parsed.name ?? ""));
     return reply(res, 200, { previews: runner.previews });
-  }
-  if (path === "/capabilities" && req.method === "GET") {
-    const agent = runner.thread.agent;
-    const now = runner.currentOptions;
-    return reply(
-      res,
-      200,
-      capabilitiesFor(agent.kind, {
-        agentVersion: runner.agentVersion ?? null,
-        ...(now.model ? { model: now.model } : {}),
-        ...(now.reasoning ? { reasoning: now.reasoning } : {}),
-        permission: now.permission,
-      }),
-    );
   }
   const token = (req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
   const auth = token ? await verifyUser(token, opts, runner.thread.id) : null;

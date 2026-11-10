@@ -8,10 +8,16 @@
 # The control plane starts the runner with a command like
 #   lemonlime-runner --thread <id> --agent <kind> --repo <url> --base <branch> \
 #     --host 0.0.0.0 --port 7420 --control-plane <url>
-# and LEMONLIME_THREAD_SECRET in the environment. With the provider's agent-user setting the
-# secret stays with a keeper running as root instead (see docs/runner.md, Tokens).
+# and LEMONLIME_THREAD_SECRET in the environment. When the provider has an agent user to run
+# as (the Docker provider uses this image's `agent` unless told otherwise), the secret stays
+# with a keeper running as root instead, and the runner and the agent run as that user
+# (see docs/sandboxes.md, Keeper mode).
+#
+# Base images are named by tag and by digest, so a rebuild gets the same base every time.
+# To move to a newer one, take the Digest line of
+#   docker buildx imagetools inspect node:22-bookworm-slim
 
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
 
 ARG PNPM_VERSION=11.28.2
 # Agent CLI versions LemonLime is tested with. Keep in step with TESTED_AGENTS in

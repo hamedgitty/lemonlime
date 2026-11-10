@@ -24,6 +24,8 @@ async function boot() {
     status: "idle",
     sandboxSize: "small",
     latestSeq: 0,
+    mine: true,
+    shared: false,
     createdAt: now,
     updatedAt: now,
   };
@@ -127,6 +129,53 @@ describe("phone tokens on the runner", () => {
     s.ws.send(JSON.stringify({ type: "set_options", permission: "plan" }));
     await new Promise(r => setTimeout(r, 200));
     expect(s.messages.filter(m => m.type === "error")).toHaveLength(4);
+  });
+
+  it("refuses whatever a phone isn't listed for: going back, side chats, offering a port", async () => {
+    const { port, runner } = await boot();
+    const s = open(port, "/ws", { type: "hello", token: await phoneToken(), resumeFrom: 0 });
+    await s.until("caught_up");
+    const refused = [
+      { type: "rewind", toSeq: 1, restoreFiles: true },
+      { type: "side_ask", text: "what does this do?" },
+      { type: "side_pin", sideId: "s1", pinned: true },
+      { type: "side_open", sideId: "s1" },
+      { type: "side_close", sideId: "s1" },
+      { type: "offer_preview", port: 5173 },
+      { type: "cancel_login" },
+    ];
+    for (const m of refused) s.ws.send(JSON.stringify(m));
+    await new Promise(r => setTimeout(r, 200));
+    const errors = s.messages.filter(m => m.type === "error");
+    expect(errors).toHaveLength(refused.length);
+    expect(errors.every(e => e.code === "bad_request" && e.message === "That can only be done on the computer itself.")).toBe(true);
+    expect(s.messages.some(m => m.type === "side_started" || m.type === "side_history")).toBe(false);
+    expect(runner.side.list()).toEqual([]);
+  });
+
+  it("lets a phone do what its page offers: talk to the agent, stop it, answer it, change how it runs", async () => {
+    const { port, runner } = await boot();
+    const s = open(port, "/ws", { type: "hello", token: await phoneToken(), resumeFrom: 0 });
+    await s.until("caught_up");
+    for (const m of [
+      { type: "send_message", text: "hello from the phone", clientMsgId: "m1" },
+      { type: "interrupt" },
+      { type: "approve", requestId: "r1", decision: "allow" },
+      { type: "answer_question", requestId: "q1", answers: null },
+      { type: "edit_queue", clientMsgId: "m9", action: "remove" },
+      { type: "set_options", permission: "plan" },
+      { type: "limit_action", action: "wait" },
+      { type: "compact" },
+      { type: "continue_after_restart" },
+      { type: "ping" },
+    ])
+      s.ws.send(JSON.stringify(m));
+    await s.until("ack");
+    await s.until("pong");
+    await new Promise(r => setTimeout(r, 200));
+    expect(s.messages.filter(m => m.message === "That can only be done on the computer itself.")).toEqual([]);
+    expect(s.messages.some(m => m.code === "unauthorized")).toBe(false);
+    expect(runner.currentOptions.permission).toBe("plan");
   });
 
   it("still lets a phone message the agent and ping", async () => {

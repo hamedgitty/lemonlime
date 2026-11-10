@@ -30,6 +30,7 @@ import { enforce } from "./rate-limit.ts";
 import { addPendingMessage, threadEnding } from "./history.ts";
 import { AUTOMATION_CREATOR_LEFT, memberRole } from "./members.ts";
 import { validateCloudLaunch } from "./runner-command.ts";
+import { listSecrets, SECRET_NAME } from "./secrets.ts";
 import { createThread, endRun, getThreadRow } from "./threads.ts";
 
 /** A five-field cron, or empty for an automation that only runs from its webhook. */
@@ -38,6 +39,12 @@ const ScheduleText = z
   .trim()
   .max(120)
   .refine(s => s === "" || s.length >= 9, "A schedule has five parts, e.g. 0 9 * * 1-5.");
+
+/**
+ * The workspace secrets an automation's runs get: null for every secret, or a list for
+ * only those (an empty list for none).
+ */
+const SecretNames = z.array(z.string().regex(SECRET_NAME)).max(100).nullable();
 
 export const AutomationInput = z.object({
   name: z.string().trim().min(1).max(120),
@@ -49,6 +56,7 @@ export const AutomationInput = z.object({
   prompt: z.string().trim().min(1).max(50_000),
   checkScript: z.string().trim().max(CHECK_SCRIPT_MAX_CHARS).default(""),
   enabled: z.boolean().default(true),
+  secretNames: SecretNames.default(null),
 });
 export type AutomationInput = z.infer<typeof AutomationInput>;
 
@@ -64,6 +72,7 @@ export const AutomationPatch = z
     prompt: z.string().trim().min(1).max(50_000),
     checkScript: z.string().trim().max(CHECK_SCRIPT_MAX_CHARS),
     enabled: z.boolean(),
+    secretNames: SecretNames,
   })
   .partial();
 export type AutomationPatch = z.infer<typeof AutomationPatch>;
@@ -110,13 +119,35 @@ export function publicAutomation(row: AutomationRow): PublicAutomation {
   return { ...rest, hasWebhook: Boolean(webhookTokenHash) };
 }
 
+/**
+ * The secrets chosen for an automation, checked when it is saved: each must be one the
+ * workspace has, so a mistyped name is caught here and not by a run that quietly lacks it.
+ */
+async function chosenSecrets(ctx: AppContext, workspaceId: string, names: readonly string[] | null | undefined): Promise<string[] | null> {
+  if (!names) return null;
+  const chosen = [...new Set(names)];
+  const known = new Set((await listSecrets(ctx, workspaceId)).map(s => s.name));
+  const unknown = chosen.filter(name => !known.has(name));
+  if (unknown.length) {
+    throw new HttpError(
+      400,
+      unknown.length === 1 ? `This workspace has no secret called ${unknown[0]}.` : `This workspace has no secrets called ${unknown.join(", ")}.`,
+    );
+  }
+  return chosen;
+}
+
 export async function createAutomation(
   ctx: AppContext,
   userId: string,
   workspaceId: string,
-  given: Omit<AutomationInput, "checkScript"> & { checkScript?: string },
+  given: Omit<AutomationInput, "checkScript" | "secretNames"> & { checkScript?: string; secretNames?: string[] | null },
 ): Promise<PublicAutomation> {
-  const input: AutomationInput = { ...given, checkScript: given.checkScript?.trim() ?? "" };
+  const input: AutomationInput = {
+    ...given,
+    checkScript: given.checkScript?.trim() ?? "",
+    secretNames: await chosenSecrets(ctx, workspaceId, given.secretNames),
+  };
   validateAutomation(input);
   const [row] = await ctx.db
     .insert(automations)
@@ -160,6 +191,8 @@ export async function updateAutomation(ctx: AppContext, userId: string, id: stri
   if (!parsed.success) throw new HttpError(400, `That change isn't valid: ${parsed.error.issues[0]?.message ?? "check what you entered"}`);
   const merged = parsed.data;
   validateAutomation(merged);
+  // Only a new choice of secrets is checked: one deleted since must not block other changes.
+  if (patch.secretNames !== undefined) merged.secretNames = await chosenSecrets(ctx, row.workspaceId, patch.secretNames);
   if (merged.enabled && !(await creatorStillHere(ctx, row))) throw new HttpError(409, `${AUTOMATION_CREATOR_LEFT} Set it up again to run it.`);
   // Turning it back on starts the count of failures afresh; any change clears why it stopped
   // itself once it's on again, and pausing by hand needs no reason.
@@ -420,13 +453,19 @@ async function startRun(
     return record("failed", { detail });
   }
   try {
-    const { thread } = await createThread(ctx, runAs, a.workspaceId, {
-      title: a.name,
-      agent: a.agent,
-      repo: a.repo,
-      mode: "cloud",
-      sandboxSize: a.sandboxSize,
-    });
+    const { thread } = await createThread(
+      ctx,
+      runAs,
+      a.workspaceId,
+      {
+        title: a.name,
+        agent: a.agent,
+        repo: a.repo,
+        mode: "cloud",
+        sandboxSize: a.sandboxSize,
+      },
+      { secretNames: a.secretNames },
+    );
     await addPendingMessage(ctx, thread.id, {
       clientMsgId: `automation-${a.id}-${opts.trigger === "webhook" ? `hook-${crypto.randomUUID()}` : opts.scheduledFor}`,
       text: promptWithContext(a.prompt, opts.context ?? []),

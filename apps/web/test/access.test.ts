@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { threads, workspaceMembers, workspaces } from "@lemonlime/db";
+import { eq } from "drizzle-orm";
+import { accessTokens, threads, workspaceMembers, workspaces } from "@lemonlime/db";
 import {
+  ACCESS_TOKEN_IDLE_MS,
   createAccessTokenRow,
+  deleteIdleAccessTokens,
   findThreadForUser,
   findUserByTokenHash,
   getThreadForUser,
@@ -135,5 +138,67 @@ describe("access token ownership", () => {
     expect(await findUserByTokenHash(db, "a".repeat(64))).toBe(alice.userId);
     expect(await revokeAccessToken(db, alice.userId, token.id)).toBe(true);
     expect(await findUserByTokenHash(db, "a".repeat(64))).toBeNull();
+  });
+});
+
+describe("access tokens left unused", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const HASH = "b".repeat(64);
+  const lastUsed = async (db: Awaited<ReturnType<typeof setup>>["db"]) =>
+    (await db.select().from(accessTokens).where(eq(accessTokens.tokenHash, HASH)).get())!.lastUsedAt;
+
+  it("stop working after 90 days without use, and keep working for as long as they are used", async () => {
+    const { db, alice } = await setup();
+    const made = Date.parse("2026-01-01T00:00:00.000Z");
+    await db.insert(accessTokens).values({ userId: alice.userId, name: "laptop", tokenHash: HASH, createdAt: new Date(made).toISOString() });
+
+    // Used every couple of months, it never runs out.
+    let now = made;
+    for (let i = 0; i < 4; i++) {
+      now += 60 * DAY;
+      expect(await findUserByTokenHash(db, HASH, now)).toBe(alice.userId);
+    }
+    // Left alone for 90 days, it is refused, and stays refused.
+    expect(await findUserByTokenHash(db, HASH, now + ACCESS_TOKEN_IDLE_MS)).toBe(alice.userId);
+    const late = now + ACCESS_TOKEN_IDLE_MS + ACCESS_TOKEN_IDLE_MS + 1000;
+    expect(await findUserByTokenHash(db, HASH, late)).toBeNull();
+    expect(await findUserByTokenHash(db, HASH, late + 1000)).toBeNull();
+  });
+
+  it("count from the day they were made when they were never used", async () => {
+    const { db, alice } = await setup();
+    const made = Date.parse("2026-01-01T00:00:00.000Z");
+    await db.insert(accessTokens).values({ userId: alice.userId, name: "spare", tokenHash: HASH, createdAt: new Date(made).toISOString() });
+    expect(await findUserByTokenHash(db, HASH, made + ACCESS_TOKEN_IDLE_MS + 1000)).toBeNull();
+    // Being refused is not a use.
+    expect(await lastUsed(db)).toBeNull();
+    expect(await findUserByTokenHash(db, HASH, made + 89 * DAY)).toBe(alice.userId);
+  });
+
+  it("have their use written down at most once an hour", async () => {
+    const { db, alice } = await setup();
+    const made = Date.parse("2026-01-01T00:00:00.000Z");
+    await db.insert(accessTokens).values({ userId: alice.userId, name: "laptop", tokenHash: HASH, createdAt: new Date(made).toISOString() });
+    const at = (ms: number) => new Date(made + ms).toISOString();
+
+    await findUserByTokenHash(db, HASH, made + 1000);
+    expect(await lastUsed(db)).toBe(at(1000));
+    await findUserByTokenHash(db, HASH, made + 30 * 60_000);
+    expect(await lastUsed(db)).toBe(at(1000));
+    await findUserByTokenHash(db, HASH, made + 61 * 60_000);
+    expect(await lastUsed(db)).toBe(at(61 * 60_000));
+  });
+
+  it("are deleted by the clean-up once they can no longer work", async () => {
+    const { db, alice } = await setup();
+    const now = Date.parse("2026-06-01T00:00:00.000Z");
+    const long = new Date(now - ACCESS_TOKEN_IDLE_MS - DAY).toISOString();
+    await db.insert(accessTokens).values([
+      { userId: alice.userId, name: "never used", tokenHash: "n".repeat(64), createdAt: long },
+      { userId: alice.userId, name: "still used", tokenHash: HASH, createdAt: long, lastUsedAt: new Date(now - DAY).toISOString() },
+    ]);
+    expect(await deleteIdleAccessTokens(db, now)).toBe(1);
+    expect((await listAccessTokens(db, alice.userId)).map(t => t.name)).toEqual(["still used"]);
+    expect(await findUserByTokenHash(db, HASH, now)).toBe(alice.userId);
   });
 });

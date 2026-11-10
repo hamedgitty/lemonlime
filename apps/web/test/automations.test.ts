@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { automationRuns, automations, pendingMessages, threads, workspaceMembers } from "@lemonlime/db";
 import {
+  AutomationInput as AutomationInputSchema,
   AutomationPatch,
   createAutomation,
   deleteAutomation,
@@ -19,6 +20,8 @@ import {
 } from "../src/lib/automations.ts";
 import { appendHistory, listPendingMessages } from "../src/lib/history.ts";
 import { removeMember } from "../src/lib/members.ts";
+import { deleteSecret, setSecret } from "../src/lib/secrets.ts";
+import { getThreadRowForUser, queueMessage, threadResponse } from "../src/lib/threads.ts";
 import { addTeam, addUser, createTestApp } from "./helpers.ts";
 
 const input: AutomationInput = {
@@ -31,6 +34,7 @@ const input: AutomationInput = {
   prompt: "Update dependencies and open a pull request.",
   checkScript: "",
   enabled: true,
+  secretNames: null,
 };
 const status = (p: Promise<unknown>) =>
   p.then(
@@ -141,6 +145,25 @@ describe("who can change an automation", () => {
     expect(await listAutomations(ctx, teamId)).toEqual([]);
   });
 
+  it("starts its threads as whoever set it up, so they alone direct them until they share one", async () => {
+    const { ctx, db, alice, bob, carol, a } = await teamOfThree();
+    expect((await runDueAutomations(ctx, Date.parse(a.nextRunAt!) + 1000)).started).toEqual([a.id]);
+    const [thread] = await db.select().from(threads);
+    expect(thread).toMatchObject({ createdBy: bob.userId, shared: false });
+    const seenBy = async (userId: string) => threadResponse(ctx, await getThreadRowForUser(ctx, userId, thread!.id), userId);
+
+    const bobs = await seenBy(bob.userId);
+    expect(bobs.thread.mine).toBe(true);
+    expect(bobs.endpoint).not.toBeNull();
+    // The owner could change the automation, but its runs still act with Bob's agent sign-in.
+    for (const other of [alice, carol]) {
+      const seen = await seenBy(other.userId);
+      expect(seen.thread.mine).toBe(false);
+      expect(seen.endpoint).toBeNull();
+      expect(await status(queueMessage(ctx, other.userId, thread!.id, { clientMsgId: "m1", text: "do something else" }))).toBe(403);
+    }
+  });
+
   it("switches a person's automations off when they leave the workspace", async () => {
     const { ctx, db, alice, bob, teamId, a } = await teamOfThree();
     const mine = await createAutomation(ctx, alice.userId, teamId, input);
@@ -167,6 +190,76 @@ describe("who can change an automation", () => {
       recentRuns: [{ status: "failed", detail: expect.stringContaining("no longer in this workspace") }],
     });
     expect(await status(triggerWebhook(ctx, a.id, token, ""))).toBe(409); // paused now
+  });
+});
+
+describe("the secrets an automation's runs are given", () => {
+  async function withSecrets() {
+    const app = await createTestApp();
+    const alice = await addUser(app.db, "alice@example.com");
+    for (const name of ["NPM_TOKEN", "DEPLOY_KEY", "SENTRY_TOKEN"])
+      await setSecret(app.ctx, alice.userId, alice.workspaceId, name, `${name.toLowerCase()}-value`);
+    /** Run the automation now and say which workspace secrets its sandbox was started with. */
+    const secretsOfNextRun = async (a: { id: string }) => {
+      const [row] = await app.db.select().from(automations).where(eq(automations.id, a.id));
+      expect((await runDueAutomations(app.ctx, Date.parse(row!.nextRunAt!) + 1000)).started).toEqual([a.id]);
+      const env = app.sandbox.created.at(-1)!.runner.env;
+      return Object.keys(env)
+        .filter(name => ["NPM_TOKEN", "DEPLOY_KEY", "SENTRY_TOKEN"].includes(name))
+        .sort();
+    };
+    return { ...app, alice, secretsOfNextRun };
+  }
+
+  it("are all of the workspace's unless the automation names some", async () => {
+    const { ctx, alice, secretsOfNextRun } = await withSecrets();
+    // An app that has never heard of the choice sends nothing, and gets every secret as before.
+    const { secretNames: _unset, ...older } = input;
+    expect(AutomationInputSchema.parse(older).secretNames).toBeNull();
+    const a = await createAutomation(ctx, alice.userId, alice.workspaceId, older);
+    expect(a.secretNames).toBeNull();
+    expect(await secretsOfNextRun(a)).toEqual(["DEPLOY_KEY", "NPM_TOKEN", "SENTRY_TOKEN"]);
+  });
+
+  it("are only the ones it names, and none when it names none", async () => {
+    const { ctx, sandbox, alice, secretsOfNextRun } = await withSecrets();
+    const a = await createAutomation(ctx, alice.userId, alice.workspaceId, { ...input, secretNames: ["NPM_TOKEN", "NPM_TOKEN"] });
+    expect(a.secretNames).toEqual(["NPM_TOKEN"]);
+    expect(await secretsOfNextRun(a)).toEqual(["NPM_TOKEN"]);
+    // Only what it was given is marked for hiding in its output.
+    expect(sandbox.created.at(-1)!.runner.env.LEMONLIME_REDACT_ENV).toBe("NPM_TOKEN");
+
+    expect((await updateAutomation(ctx, alice.userId, a.id, { secretNames: [] })).secretNames).toEqual([]);
+    expect(await secretsOfNextRun(a)).toEqual([]);
+    expect((await updateAutomation(ctx, alice.userId, a.id, { secretNames: ["DEPLOY_KEY", "SENTRY_TOKEN"] })).secretNames).toEqual([
+      "DEPLOY_KEY",
+      "SENTRY_TOKEN",
+    ]);
+    expect(await secretsOfNextRun(a)).toEqual(["DEPLOY_KEY", "SENTRY_TOKEN"]);
+    expect((await updateAutomation(ctx, alice.userId, a.id, { secretNames: null })).secretNames).toBeNull();
+    expect(await secretsOfNextRun(a)).toEqual(["DEPLOY_KEY", "NPM_TOKEN", "SENTRY_TOKEN"]);
+  });
+
+  it("must exist when the automation is saved", async () => {
+    const { ctx, alice } = await withSecrets();
+    const saving = (secretNames: string[]) =>
+      createAutomation(ctx, alice.userId, alice.workspaceId, { ...input, secretNames }).catch(e => `${e.status}: ${e.message}`);
+    expect(await saving(["NPM_TOKEN", "NPM_TOKN"])).toBe("400: This workspace has no secret called NPM_TOKN.");
+    expect(await saving(["OLD_KEY", "OTHER_KEY"])).toBe("400: This workspace has no secrets called OLD_KEY, OTHER_KEY.");
+    expect(AutomationInputSchema.safeParse({ ...input, secretNames: ["not a name"] }).success).toBe(false);
+    expect(AutomationPatch.safeParse({ secretNames: "NPM_TOKEN" }).success).toBe(false);
+
+    const a = await createAutomation(ctx, alice.userId, alice.workspaceId, { ...input, secretNames: ["NPM_TOKEN"] });
+    expect(await status(updateAutomation(ctx, alice.userId, a.id, { secretNames: ["NOPE"] }))).toBe(400);
+    expect((await listAutomations(ctx, alice.workspaceId))[0]!.secretNames).toEqual(["NPM_TOKEN"]);
+  });
+
+  it("are quietly left out of a run once deleted, without blocking other changes", async () => {
+    const { ctx, alice, secretsOfNextRun } = await withSecrets();
+    const a = await createAutomation(ctx, alice.userId, alice.workspaceId, { ...input, secretNames: ["NPM_TOKEN", "DEPLOY_KEY"] });
+    await deleteSecret(ctx, alice.userId, alice.workspaceId, "DEPLOY_KEY");
+    expect(await secretsOfNextRun(a)).toEqual(["NPM_TOKEN"]);
+    expect(await updateAutomation(ctx, alice.userId, a.id, { name: "Renamed" })).toMatchObject({ name: "Renamed", secretNames: ["NPM_TOKEN", "DEPLOY_KEY"] });
   });
 });
 

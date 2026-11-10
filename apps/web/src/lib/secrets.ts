@@ -120,13 +120,17 @@ export async function deleteSecret(ctx: AppContext, userId: string, workspaceId:
 }
 
 /**
- * Every secret of a workspace, decrypted, for a new sandbox's environment. A secret that
- * can't be decrypted (the key changed) is left out rather than failing the sandbox.
+ * A workspace's secrets, decrypted, for a new sandbox's environment: every one, or only
+ * those named in `only` when it is a list (names the workspace doesn't have are skipped).
+ * A secret that can't be decrypted (the key changed) is left out rather than failing the
+ * sandbox.
  */
-export async function secretsForSandbox(ctx: AppContext, workspaceId: string): Promise<Record<string, string>> {
+export async function secretsForSandbox(ctx: AppContext, workspaceId: string, only?: readonly string[] | null): Promise<Record<string, string>> {
   const rows = await ctx.db.select().from(secrets).where(eq(secrets.workspaceId, workspaceId));
+  const wanted = only ? new Set(only) : null;
   const out: Record<string, string> = {};
   for (const r of rows) {
+    if (wanted && !wanted.has(r.name)) continue;
     try {
       out[r.name] = await decryptSecret(ctx, workspaceId, r.name, r.ciphertext);
     } catch {

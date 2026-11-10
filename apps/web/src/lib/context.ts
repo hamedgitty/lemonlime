@@ -5,6 +5,7 @@ import { createSandboxProvider, type SandboxProvider } from "@lemonlime/sandbox"
 import pluginExport from "@lemonlime/deployment-plugin";
 import { createEmailSender, emailBrand, type EmailSender, type SendEmailBinding } from "./email.ts";
 import { fileHistoryStore, r2HistoryStore, type HistoryStore } from "./history.ts";
+import { leftAsPlaceholder, placeholderError } from "./placeholder-secret.ts";
 
 /**
  * Everything a request (or the scheduled sweep) needs, built from the platform's
@@ -50,10 +51,16 @@ export function stringVars(env: Record<string, unknown>): Record<string, string 
   return out;
 }
 
-export function makeConfig(vars: Record<string, string | undefined>): AppConfig {
+export function makeConfig(vars: Record<string, string | undefined>, production = true): AppConfig {
   const required = (name: string): string => {
     const value = vars[name];
     if (!value) throw new Error(`${name} is not set. See .env.example and docs/self-hosting.md.`);
+    return value;
+  };
+  // A secret left as the placeholder only works while developing: a real deployment refuses it.
+  const secret = (name: string): string => {
+    const value = required(name);
+    if (production && leftAsPlaceholder(value)) throw placeholderError(name);
     return value;
   };
   return {
@@ -61,8 +68,8 @@ export function makeConfig(vars: Record<string, string | undefined>): AppConfig 
     // Where runners send heartbeats. Defaults to the public URL; set it when sandboxes
     // reach the control plane on an internal address (e.g. http://web:3000 in docker compose).
     runnerControlPlaneUrl: () => (vars.LEMONLIME_RUNNER_CONTROL_PLANE_URL || required("LEMONLIME_PUBLIC_URL")).replace(/\/+$/, ""),
-    tokenSecret: () => required("LEMONLIME_TOKEN_SECRET"),
-    cronSecret: () => required("LEMONLIME_CRON_SECRET"),
+    tokenSecret: () => secret("LEMONLIME_TOKEN_SECRET"),
+    cronSecret: () => secret("LEMONLIME_CRON_SECRET"),
     emailBrand: () => emailBrand(required("LEMONLIME_PUBLIC_URL").replace(/\/+$/, ""), vars.LEMONLIME_SUPPORT_EMAIL),
   };
 }
@@ -109,7 +116,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
         services: pluginServices(
           opts.db,
           () => email,
-          () => makeConfig(vars).emailBrand(),
+          () => makeConfig(vars, production).emailBrand(),
         ),
       }),
     email,
@@ -120,7 +127,7 @@ export function createAppContext(opts: CreateAppContextOptions): AppContext {
         return provider;
       }),
     history: opts.history !== undefined ? opts.history : defaultHistory(opts.runtime, opts.env, vars),
-    config: makeConfig(vars),
+    config: makeConfig(vars, production),
   };
 }
 

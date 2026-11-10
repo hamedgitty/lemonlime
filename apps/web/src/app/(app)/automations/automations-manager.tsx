@@ -35,6 +35,8 @@ export interface AutomationInfo {
   repo: { url: string; baseBranch: string };
   prompt: string;
   checkScript?: string;
+  /** The workspace secrets its runs get: a list for only those, null or absent for all of them. */
+  secretNames?: string[] | null;
   enabled: boolean;
   /** Why it turned itself off; null when on or paused by hand. */
   pausedReason?: string | null;
@@ -71,8 +73,15 @@ const RUN_TONE: Record<NonNullable<Run["outcome"]>, string> = {
   failed: "text-red-800",
 };
 
-/** Create, pause, delete and look back at automations. Times show in each automation's own time zone. */
-export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
+/** Which of the workspace's secrets an automation's runs get, when that isn't all of them. */
+const secretsLine = (names: string[] | null | undefined) =>
+  !names ? null : names.length ? `Runs get only these secrets: ${names.join(", ")}` : "Runs get no secrets";
+
+/**
+ * Create, pause, delete and look back at automations. Times show in each automation's own
+ * time zone. `secretNames` are the names of the workspace's secrets, to choose from.
+ */
+export function AutomationsManager({ initial, secretNames = [] }: { initial: AutomationInfo[]; secretNames?: string[] }) {
   const [list, setList] = useState(initial);
   const [error, setError] = useState<string | null>(null);
   const zone = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
@@ -86,6 +95,8 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
     baseBranch: "main",
     prompt: "",
     checkScript: "",
+    /** The secrets its runs get: null for all of them, or only the ones listed. */
+    secrets: null as string[] | null,
   });
   /** A webhook URL just made, shown this once. */
   const [newHook, setNewHook] = useState<{ id: string; url: string } | null>(null);
@@ -121,6 +132,7 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
         repo: { url: form.repoUrl.trim(), baseBranch: form.baseBranch.trim() || "main" },
         prompt: form.prompt,
         checkScript: form.checkScript,
+        secretNames: form.secrets,
       },
     });
     setBusy(false);
@@ -198,6 +210,7 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
                         ? `Paused automatically. ${a.pausedReason}`
                         : "Paused"}
                   </p>
+                  {secretsLine(a.secretNames) && <p className="mt-1 text-sm break-words text-muted">{secretsLine(a.secretNames)}</p>}
                 </div>
                 {a.canManage !== false && (
                   <>
@@ -414,6 +427,37 @@ export function AutomationsManager({ initial }: { initial: AutomationInfo[] }) {
             A shell command run in the sandbox before the agent starts. If it prints nothing or fails, the run is skipped; what it prints is given to the agent.
           </p>
         </div>
+        {secretNames.length > 0 && (
+          <fieldset>
+            <legend className="label">Secrets</legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" className="size-4" checked={form.secrets === null} onChange={e => set({ secrets: e.target.checked ? null : [] })} />
+              All secrets
+            </label>
+            {form.secrets !== null && (
+              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2">
+                {secretNames.map(name => (
+                  <label key={name} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="size-4"
+                      checked={form.secrets?.includes(name) ?? false}
+                      onChange={e => set({ secrets: secretNames.filter(n => (n === name ? e.target.checked : form.secrets?.includes(n))) })}
+                    />
+                    <span className="font-mono">{name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="mt-1.5 text-sm text-muted">
+              {form.secrets === null
+                ? "Its runs get every secret in this workspace, including ones added later."
+                : form.secrets.length
+                  ? "Its runs get only the secrets ticked."
+                  : "Its runs get no secrets. Tick the ones they need."}
+            </p>
+          </fieldset>
+        )}
         <button type="submit" className="btn-primary h-10" disabled={busy || !preview.ok}>
           {busy ? "Saving..." : "Create automation"}
         </button>

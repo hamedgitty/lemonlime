@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ThreadEvent } from "@lemonlime/protocol";
-import { addEvent, buildTimeline, diffLines } from "../src/lib/timeline.ts";
+import { addEvent, buildTimeline, diffLines, isLongReport, startsTurn } from "../src/lib/timeline.ts";
 
 const T = "thread-aaaaaa";
 let seq = 0;
@@ -161,5 +161,41 @@ describe("usage limits in the dashboard", () => {
     items = buildTimeline([hit, waiting, moved, ev({ type: "status_change", from: "idle", to: "running" })]);
     expect(items[0]).toMatchObject({ kind: "limit", open: false, waiting: false });
     expect(items[1]).toMatchObject({ kind: "switch", event: { to: { agent: "claude-code" } } });
+  });
+});
+
+describe("messages nobody typed", () => {
+  it("shows a subagent's report and the runner's own messages apart from what people wrote", () => {
+    seq = 0;
+    const items = buildTimeline([
+      ev({ type: "user_message", text: "Fix the build", clientMsgId: "m1" }),
+      ev({ type: "user_message", text: "The tests pass now.", from: "subagent" }),
+      ev({ type: "user_message", text: "Carry on from where you stopped.", from: "runner" }),
+    ]);
+    expect(items).toMatchObject([
+      { kind: "user", text: "Fix the build" },
+      { kind: "auto", from: "subagent", text: "The tests pass now." },
+      { kind: "auto", from: "runner", text: "Carry on from where you stopped." },
+    ]);
+    expect(items.map(startsTurn)).toEqual([true, true, true]);
+  });
+
+  it("keeps showing messages from a runner that doesn't say who sent them as a person's", () => {
+    seq = 0;
+    const items = buildTimeline([ev({ type: "user_message", text: "A report, from an older runner" })]);
+    expect(items).toMatchObject([{ kind: "user", text: "A report, from an older runner" }]);
+    expect(items[0]).not.toHaveProperty("from");
+  });
+
+  it("closes an open plan like any other message that follows it", () => {
+    seq = 0;
+    const items = buildTimeline([ev({ type: "plan_proposal", plan: "1. Do it" }), ev({ type: "user_message", text: "Done.", from: "subagent" })]);
+    expect(items).toMatchObject([{ kind: "plan", open: false }, { kind: "auto" }]);
+  });
+
+  it("folds a long report and shows a short one whole", () => {
+    expect(isLongReport("All good.")).toBe(false);
+    expect(isLongReport("x".repeat(601))).toBe(true);
+    expect(isLongReport(Array.from({ length: 9 }, (_, i) => `line ${i}`).join("\n"))).toBe(true);
   });
 });

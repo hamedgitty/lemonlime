@@ -1,15 +1,18 @@
 import { requireUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
-import { z } from "zod";
 import { json, parseBody, requireSameSite, route } from "@/lib/http.ts";
 import { deleteThreadForever } from "@/lib/account.ts";
-import { deleteThread, getThreadRowForUser, renameThread, threadResponse } from "@/lib/threads.ts";
+import { deleteThread, getThreadRowForUser, ThreadChange, threadResponse, updateThread } from "@/lib/threads.ts";
 
 export const dynamic = "force-dynamic";
 
 type Context = { params: Promise<{ id: string }> };
 
-/** The thread, plus a fresh runner endpoint and client token while its sandbox runs. */
+/**
+ * The thread, for any member of its workspace. Those who may take part in it (the person
+ * who started it, or everyone once it is shared) also get a fresh runner endpoint and
+ * client token while its sandbox runs.
+ */
 export const GET = route<Context>(async (request, { params }) => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
@@ -17,14 +20,12 @@ export const GET = route<Context>(async (request, { params }) => {
   return json(await threadResponse(ctx, row, user.userId));
 });
 
-const RenameBody = z.object({ title: z.string().min(1).max(200) });
-
-/** Rename the thread. */
+/** Rename the thread, or (its starter only) let the rest of the workspace take part in it. */
 export const PATCH = route<Context>(async (request, { params }) => {
   const ctx = await getAppContext();
   const user = await requireUser(ctx, request);
-  const body = await parseBody(request, RenameBody);
-  return json(await renameThread(ctx, user.userId, (await params).id, body.title));
+  const body = await parseBody(request, ThreadChange);
+  return json(await updateThread(ctx, user.userId, (await params).id, body));
 });
 
 /**

@@ -1,4 +1,5 @@
-import { and, eq, isNotNull, isNull, lt, ne } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, like, lt, ne } from "drizzle-orm";
+import { z } from "zod";
 import {
   RUNNER_STATUSES,
   Thread,
@@ -13,7 +14,7 @@ import {
 import type { RunningSandbox } from "@lemonlime/plugins";
 import { runnerWsUrl } from "@lemonlime/sandbox";
 import { sandboxRuns, systemStatus, threads, workspaceSettings, type ThreadRow } from "@lemonlime/db";
-import { getThreadForUser, listThreadsForUser } from "./access.ts";
+import { canTakePartIn, getThreadForUser, getThreadToTakePart, listThreadsForUser, requireTakingPart, sharedWithWorkspace, startedBy } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { HttpError, PolicyDeniedError } from "./errors.ts";
 import { addPendingMessageIfRoom, countPendingMessages } from "./history.ts";
@@ -36,7 +37,8 @@ export type ThreadResponse = ThreadWithEndpoint & { initialPrompt: string | null
 const iso = (value: string): string => new Date(value).toISOString();
 const isoOrNull = (value: string | null): string | null => (value ? iso(value) : null);
 
-export function rowToThread(row: ThreadRow): Thread {
+/** The thread as one person sees it: whether it is theirs, and whether its starter has shared it. */
+export function rowToThread(row: ThreadRow, viewerId: string): Thread {
   return Thread.parse({
     id: row.id,
     title: row.title,
@@ -49,6 +51,8 @@ export function rowToThread(row: ThreadRow): Thread {
     latestSeq: row.latestSeq,
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
+    mine: startedBy(row, viewerId),
+    shared: sharedWithWorkspace(row),
   });
 }
 
@@ -112,9 +116,14 @@ export function getThreadRowForUser(ctx: AppContext, userId: string, id: string)
   return getThreadForUser(ctx.db, userId, id);
 }
 
+/** The thread, for a member who may take part in it (403 for one who may only read it). */
+export function getThreadRowToTakePart(ctx: AppContext, userId: string, id: string): Promise<ThreadRow> {
+  return getThreadToTakePart(ctx.db, userId, id);
+}
+
 /** Threads in a workspace the user belongs to (403 otherwise). */
 export async function listThreads(ctx: AppContext, userId: string, workspaceId: string, limit = 200): Promise<Thread[]> {
-  return (await listThreadsForUser(ctx.db, userId, workspaceId, limit)).map(rowToThread);
+  return (await listThreadsForUser(ctx.db, userId, workspaceId, limit)).map(row => rowToThread(row, userId));
 }
 
 const LIVE_STATUSES = new Set<Thread["status"]>(["provisioning", "idle", "running"]);
@@ -128,15 +137,25 @@ const isWaking = (row: ThreadRow): boolean => row.status === "provisioning" && !
 /** How long one resume may take. After this another request may try again (the first one probably died). */
 const RESUME_TAKES_AT_MOST_MS = 2 * 60 * 1000;
 
-/** A fresh WebSocket endpoint and client token, when the thread's cloud runner is reachable. */
+/**
+ * A fresh WebSocket endpoint and client token, when the thread's cloud runner is reachable.
+ * The token opens the agent, the sandbox's terminal and its files, so it is only made for
+ * someone who may take part in the thread. Everyone else gets none and reads stored history.
+ */
 export async function endpointFor(ctx: AppContext, row: ThreadRow, userId: string): Promise<RunnerEndpoint | null> {
+  if (!canTakePartIn(row, userId)) return null;
   if (row.mode !== "cloud" || !row.runnerUrl || !row.runningSince || !LIVE_STATUSES.has(row.status)) return null;
   const { token, expiresAt } = await issueClientToken({ masterSecret: ctx.config.tokenSecret(), threadId: row.id, userId });
   return { url: runnerWsUrl(row.runnerUrl), token, expiresAt };
 }
 
 export async function threadResponse(ctx: AppContext, row: ThreadRow, userId: string): Promise<ThreadResponse> {
-  return { thread: rowToThread(row), endpoint: await endpointFor(ctx, row, userId), initialPrompt: row.initialPrompt, pullRequestUrl: row.pullRequestUrl };
+  return {
+    thread: rowToThread(row, userId),
+    endpoint: await endpointFor(ctx, row, userId),
+    initialPrompt: row.initialPrompt,
+    pullRequestUrl: row.pullRequestUrl,
+  };
 }
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
@@ -144,8 +163,13 @@ export async function threadResponse(ctx: AppContext, row: ThreadRow, userId: st
 /**
  * How to start a thread's runner. Secrets are only added for a new sandbox: providers keep
  * a sandbox's environment across pauses, and changing a secret applies to new threads.
+ * `secretNames` narrows the workspace secrets to the ones named (an automation's choice).
  */
-async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | "repo" | "workspaceId" | "createdBy">, opts: { withSecrets?: boolean } = {}) {
+async function launchFor(
+  ctx: AppContext,
+  row: Pick<ThreadRow, "id" | "agent" | "repo" | "workspaceId" | "createdBy">,
+  opts: { withSecrets?: boolean; secretNames?: readonly string[] | null } = {},
+) {
   const relay = relayEnabled(ctx.vars);
   const launch = buildRunnerLaunch({
     relay,
@@ -158,7 +182,10 @@ async function launchFor(ctx: AppContext, row: Pick<ThreadRow, "id" | "agent" | 
     ...(opts.withSecrets
       ? {
           // Workspace secrets, plus the creator's saved sign-in for this agent (if any).
-          secrets: { ...(await secretsForSandbox(ctx, row.workspaceId)), ...(await credentialsForSandbox(ctx, row.createdBy, row.agent.kind)).env },
+          secrets: {
+            ...(await secretsForSandbox(ctx, row.workspaceId, opts.secretNames)),
+            ...(await credentialsForSandbox(ctx, row.createdBy, row.agent.kind)).env,
+          },
         }
       : {}),
   });
@@ -202,9 +229,16 @@ async function notify(what: string, fn: () => Promise<void>): Promise<void> {
 /**
  * Create a thread in a workspace the caller has already been checked against
  * (`resolveWorkspace`). Cloud threads get a sandbox (after the usage policy
- * agrees); local ones are metadata only.
+ * agrees); local ones are metadata only. The sandbox gets every workspace secret, or
+ * only the ones in `opts.secretNames` when that is a list.
  */
-export async function createThread(ctx: AppContext, userId: string, workspaceId: string, req: CreateThreadRequest): Promise<ThreadResponse> {
+export async function createThread(
+  ctx: AppContext,
+  userId: string,
+  workspaceId: string,
+  req: CreateThreadRequest,
+  opts: { secretNames?: readonly string[] | null } = {},
+): Promise<ThreadResponse> {
   const id = newThreadId();
   const base = {
     id,
@@ -249,7 +283,7 @@ export async function createThread(ctx: AppContext, userId: string, workspaceId:
     info = await provider.create({
       threadId: id,
       size: req.sandboxSize,
-      runner: await launchFor(ctx, inserted!, { withSecrets: true }),
+      runner: await launchFor(ctx, inserted!, { withSecrets: true, secretNames: opts.secretNames }),
       labels: { "lemonlime.workspace": workspaceId, "lemonlime.runner-port": String(RUNNER_PORT) },
     });
   } catch (err) {
@@ -312,9 +346,87 @@ function defaultTitle(req: CreateThreadRequest): string {
   return `${req.agent.kind} on ${repo}`;
 }
 
+// ─── Sandboxes the provider would not stop ──────────────────────────────────
+
+/** `system_status` rows that each name one sandbox the provider still has to pause or remove. */
+const LEFTOVER_PREFIX = "sandbox.leftover:";
+type Leftover = { threadId: string; action: "pause" | "destroy" };
+
+/** Most leftover sandboxes one sweep asks the provider about again. */
+const LEFTOVER_BATCH = 25;
+
+/** Note a sandbox the provider failed to pause or remove, for the sweep to ask again. */
+async function rememberLeftover(ctx: AppContext, sandboxId: string, leftover: Leftover): Promise<void> {
+  const value = JSON.stringify(leftover);
+  const now = new Date().toISOString();
+  await ctx.db
+    .insert(systemStatus)
+    .values({ key: `${LEFTOVER_PREFIX}${sandboxId}`, value, updatedAt: now })
+    .onConflictDoUpdate({ target: systemStatus.key, set: { value, updatedAt: now } });
+}
+
+async function forgetLeftover(ctx: AppContext, sandboxId: string): Promise<void> {
+  await ctx.db.delete(systemStatus).where(eq(systemStatus.key, `${LEFTOVER_PREFIX}${sandboxId}`));
+}
+
+export interface LeftoverSweep {
+  /** Sandboxes the provider has stopped at last. */
+  stopped: string[];
+  /** Still not stopped; asked again by the next sweep. */
+  errors: Array<{ sandboxId: string; error: string }>;
+}
+
+/**
+ * Ask the provider again about sandboxes it failed to pause or remove when their thread
+ * was paused or closed. A sandbox to pause is left alone if its thread has been woken or
+ * closed since (closing asks for the removal itself).
+ */
+export async function retryLeftoverSandboxes(ctx: AppContext): Promise<LeftoverSweep> {
+  const out: LeftoverSweep = { stopped: [], errors: [] };
+  // Longest-waiting first; one that fails goes to the back, so a stuck few never starve the rest.
+  const rows = await ctx.db
+    .select()
+    .from(systemStatus)
+    .where(like(systemStatus.key, `${LEFTOVER_PREFIX}%`))
+    .orderBy(asc(systemStatus.updatedAt))
+    .limit(LEFTOVER_BATCH);
+  for (const { key, value } of rows) {
+    const sandboxId = key.slice(LEFTOVER_PREFIX.length);
+    try {
+      const leftover = JSON.parse(value) as Leftover;
+      if (leftover.action === "destroy") {
+        await ctx.sandbox().destroy(sandboxId);
+        out.stopped.push(sandboxId);
+      } else {
+        const thread = await getRow(ctx, leftover.threadId);
+        if (thread && thread.sandboxId === sandboxId && !thread.runningSince && !isWaking(thread)) {
+          await ctx.sandbox().pause(sandboxId);
+          out.stopped.push(sandboxId);
+        }
+      }
+      await forgetLeftover(ctx, sandboxId);
+    } catch (err) {
+      // The provider's own words stay in the log: they can name hosts or accounts.
+      console.error(`[lemonlime] sandbox ${sandboxId} still could not be stopped:`, err);
+      out.errors.push({ sandboxId, error: "The sandbox provider could not stop it." });
+      await ctx.db
+        .update(systemStatus)
+        .set({ updatedAt: new Date().toISOString() })
+        .where(eq(systemStatus.key, key))
+        .catch(() => {});
+    }
+  }
+  return out;
+}
+
 /**
  * End the thread's current run: pause or destroy the sandbox, then record the run
  * exactly once (the conditional update on `running_since` makes this idempotent).
+ *
+ * A provider that fails doesn't stop the thread being paused or closed here: the sandbox
+ * is noted first, and the sweep keeps asking the provider until it is stopped
+ * (`retryLeftoverSandboxes`). Only if that note can't be written does this throw, with the
+ * thread left as it was, so the sandbox is never both running and forgotten.
  */
 export async function endRun(
   ctx: AppContext,
@@ -323,9 +435,17 @@ export async function endRun(
   opts: { destroy?: boolean; status?: Thread["status"] } = {},
 ): Promise<ThreadRow> {
   if (row.sandboxId) {
-    const provider = ctx.sandbox();
-    if (opts.destroy) await provider.destroy(row.sandboxId);
-    else await provider.pause(row.sandboxId);
+    const action = opts.destroy ? "destroy" : "pause";
+    try {
+      const provider = ctx.sandbox();
+      if (opts.destroy) await provider.destroy(row.sandboxId);
+      else await provider.pause(row.sandboxId);
+      // A removed sandbox needs no more asking, whatever was noted about it before.
+      if (opts.destroy) await forgetLeftover(ctx, row.sandboxId).catch(() => {});
+    } catch (err) {
+      console.error(`[lemonlime] could not ${action} sandbox ${row.sandboxId} of thread ${row.id}; the sweep will try again:`, err);
+      await rememberLeftover(ctx, row.sandboxId, { threadId: row.id, action });
+    }
   }
 
   const status = opts.status ?? (opts.destroy ? "stopped" : "paused");
@@ -377,8 +497,10 @@ export async function endRun(
   return claimed;
 }
 
+/** Pause a cloud thread's sandbox. Anyone who may take part in the thread can, and so can a workspace owner. */
 export async function pauseThread(ctx: AppContext, userId: string, id: string): Promise<ThreadResponse> {
   const row = await getThreadRowForUser(ctx, userId, id);
+  if ((await memberRole(ctx.db, userId, row.workspaceId)) !== "owner") await requireTakingPart(ctx.db, row, userId);
   if (row.mode !== "cloud") throw new HttpError(409, "Local threads run on your computer and cannot be paused here.");
   if (!row.runningSince) return threadResponse(ctx, row, userId);
   return threadResponse(ctx, await endRun(ctx, row, "user"), userId);
@@ -392,7 +514,7 @@ export async function pauseThread(ctx: AppContext, userId: string, id: string): 
  * error says why.
  */
 export async function queueMessage(ctx: AppContext, userId: string, id: string, msg: { clientMsgId: string; text: string }): Promise<ThreadResponse> {
-  const row = await getThreadRowForUser(ctx, userId, id);
+  const row = await getThreadRowToTakePart(ctx, userId, id);
   if (row.mode !== "cloud") throw new HttpError(409, "Local threads take messages through the desktop app.");
   if (row.status === "stopped" || !row.sandboxId) throw new HttpError(409, "This thread's sandbox no longer exists.");
   await enforce(ctx.db, `messages:${userId}`, LIMITS.messagesPerUser, "messages");
@@ -410,7 +532,7 @@ export async function queueMessage(ctx: AppContext, userId: string, id: string, 
  * get the thread as it is ("provisioning", no endpoint yet) and can ask again shortly.
  */
 export async function resumeThread(ctx: AppContext, userId: string, id: string): Promise<ThreadResponse> {
-  const row = await getThreadRowForUser(ctx, userId, id);
+  const row = await getThreadRowToTakePart(ctx, userId, id);
   if (row.mode !== "cloud") throw new HttpError(409, "Local threads run on your computer and cannot be resumed here.");
   if (row.runningSince) return threadResponse(ctx, row, userId); // already running
   if (!row.sandboxId || row.status === "stopped") throw new HttpError(409, "This thread's sandbox no longer exists.");
@@ -504,12 +626,39 @@ async function currentRow(ctx: AppContext, id: string): Promise<ThreadRow> {
   return row;
 }
 
-/** Give the thread a new title (members of its workspace only). */
-export async function renameThread(ctx: AppContext, userId: string, id: string, title: string): Promise<ThreadResponse> {
+export const ONLY_THE_STARTER_SHARES = "Only the person who started this thread can share it with the workspace.";
+
+/** What `PATCH /api/threads/:id` takes: a new title, whether the workspace may take part, or both. */
+export const ThreadChange = z
+  .object({ title: z.string().min(1).max(200).optional(), shared: z.boolean().optional() })
+  .refine(change => change.title !== undefined || change.shared !== undefined, "Send a title, shared, or both.");
+export type ThreadChange = z.infer<typeof ThreadChange>;
+
+/**
+ * Change a thread's title, or whether the rest of its workspace may take part in it.
+ * Renaming is for anyone who may take part. Sharing hands other members the agent, the
+ * sandbox and the starter's agent sign-in, so only the starter can switch it on or off.
+ */
+export async function updateThread(ctx: AppContext, userId: string, id: string, change: ThreadChange): Promise<ThreadResponse> {
   const row = await getThreadRowForUser(ctx, userId, id);
-  const clean = title.replace(/\s+/g, " ").trim().slice(0, 200);
-  if (!clean) throw new HttpError(400, "Give the thread a name.");
-  return threadResponse(ctx, await updateRow(ctx, row.id, { title: clean }), userId);
+  const patch: ThreadPatch = {};
+  if (change.shared !== undefined) {
+    if (!startedBy(row, userId)) throw new HttpError(403, ONLY_THE_STARTER_SHARES);
+    patch.shared = change.shared;
+  }
+  if (change.title !== undefined) {
+    await requireTakingPart(ctx.db, row, userId);
+    const clean = change.title.replace(/\s+/g, " ").trim().slice(0, 200);
+    if (!clean) throw new HttpError(400, "Give the thread a name.");
+    patch.title = clean;
+  }
+  if (!Object.keys(patch).length) return threadResponse(ctx, row, userId);
+  return threadResponse(ctx, await updateRow(ctx, row.id, patch), userId);
+}
+
+/** Give the thread a new title (anyone who may take part in it). */
+export function renameThread(ctx: AppContext, userId: string, id: string, title: string): Promise<ThreadResponse> {
+  return updateThread(ctx, userId, id, { title });
 }
 
 /** Close a thread and remove its sandbox. The person who started it or a workspace owner may. */

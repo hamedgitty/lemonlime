@@ -1,5 +1,6 @@
 import { LINK_PING, LINK_PONG, deriveBridgeKey } from "@lemonlime/protocol";
 import { BridgeHub, bridgePath, pendingPeer, type Peer } from "./phone-bridge.ts";
+import { leftAsPlaceholder, placeholderError } from "./placeholder-secret.ts";
 
 /**
  * The phone bridge on Cloudflare Workers: one Durable Object per computer (named by its
@@ -26,6 +27,13 @@ interface DurableObjectStateLike {
 declare const WebSocketPair: { new (): { 0: HibernatingSocket & WebSocket; 1: HibernatingSocket } };
 declare const WebSocketRequestResponsePair: (new (request: string, response: string) => unknown) | undefined;
 
+/** The key tickets are checked with. A token secret left as the placeholder is refused outside development, as it is everywhere else. */
+function bridgeKey(env: Record<string, unknown>): Promise<string> {
+  const secret = String(env.LEMONLIME_TOKEN_SECRET ?? "");
+  if (env.NODE_ENV !== "development" && leftAsPlaceholder(secret)) return Promise.reject(placeholderError("LEMONLIME_TOKEN_SECRET"));
+  return deriveBridgeKey(secret);
+}
+
 export class PhoneBridge {
   private readonly state: DurableObjectStateLike;
   private readonly hub: BridgeHub<HibernatingSocket>;
@@ -42,7 +50,7 @@ export class PhoneBridge {
         now: () => Date.now(),
         newId: () => crypto.randomUUID(),
       },
-      () => (key ??= deriveBridgeKey(String(env.LEMONLIME_TOKEN_SECRET ?? ""))),
+      () => (key ??= bridgeKey(env)),
     );
     if (typeof WebSocketRequestResponsePair === "function") state.setWebSocketAutoResponse?.(new WebSocketRequestResponsePair(LINK_PING, LINK_PONG));
   }

@@ -6,7 +6,7 @@ import { computerThreadResponse } from "@/lib/computers.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError } from "@/lib/errors.ts";
 import { bridgeControl } from "@/lib/phone-bridge.ts";
-import { ThreadView } from "../../../threads/[id]/thread-view.tsx";
+import { PairedThread } from "./paired-thread.tsx";
 
 type Props = { params: Promise<{ computerId: string; threadId: string }> };
 
@@ -26,5 +26,5 @@ export default async function ComputerThreadPage({ params }: Props) {
     throw err;
   }
   const { computer, ...initial } = data;
-  return <ThreadView initial={initial} computer={computer} />;
+  return <PairedThread initial={initial} computer={computer} />;
 }

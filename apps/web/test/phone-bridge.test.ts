@@ -6,6 +6,7 @@ import {
   BRIDGE_CLOSE,
   LINK_TICKET_SECONDS,
   MAX_PHONES_PER_THREAD,
+  NOT_PAIRED_REASON,
   PHONE_FRAME_MAX_BYTES,
   PHONE_IDLE_MS,
   PHONE_TICKET_SECONDS,
@@ -104,6 +105,38 @@ async function phone(base: string, t?: string, thread = THREAD): Promise<Peer> {
 
 const isType = (type: string) => (m: string) => JSON.parse(m).type === type;
 
+/** The hub on its own, with sockets that only record: a linked computer and a phone that has yet to say hello. */
+interface FakeSocket {
+  sent: string[];
+  closed: number | null;
+  send(d: string): void;
+  close(c: number): void;
+}
+
+async function bareHub() {
+  const peers = new Map<FakeSocket, HubPeer>();
+  const make = (): FakeSocket => ({
+    sent: [],
+    closed: null,
+    send(d) {
+      this.sent.push(d);
+    },
+    close(c) {
+      this.closed = c;
+    },
+  });
+  const hub = new BridgeHub<FakeSocket>(
+    { sockets: () => peers.keys(), peer: s => peers.get(s) ?? null, setPeer: (s, p) => peers.set(s, p), now: () => clock, newId: () => "s1" },
+    () => deriveBridgeKey(SECRET),
+  );
+  const l = make();
+  peers.set(l, pendingPeer({ kind: "link", computerId: COMPUTER }, clock));
+  await hub.message(l, JSON.stringify({ type: "auth", ticket: await ticket({ kind: "link" }) }));
+  const p = make();
+  peers.set(p, pendingPeer({ kind: "phone", computerId: COMPUTER, threadId: THREAD }, clock));
+  return { hub, peers, l, p };
+}
+
 describe("phone bridge (Node hub)", () => {
   it("answers only its own paths", () => {
     expect(bridgePath(`/api/phone/link/${COMPUTER}`)).toEqual({ kind: "link", computerId: COMPUTER });
@@ -141,6 +174,51 @@ describe("phone bridge (Node hub)", () => {
     const open = JSON.parse(await l.next(isType("open"))) as { session: string };
     p.ws.close();
     expect(JSON.parse(await l.next(isType("end")))).toEqual({ type: "end", session: open.session });
+  });
+
+  it("tells a phone that its computer turned it away for not being paired", async () => {
+    const { base } = await boot();
+    const l = await link(base);
+    const p = await phone(base);
+    const why = new Promise<string>(r => p.ws.on("close", (_code, reason) => r(reason.toString())));
+    const open = JSON.parse(await l.next(isType("open"))) as { session: string };
+    l.ws.send(JSON.stringify({ type: "end", session: open.session, code: BRIDGE_CLOSE.notPaired, reason: NOT_PAIRED_REASON }));
+    expect(await p.closed).toBe(BRIDGE_CLOSE.notPaired);
+    expect(await why).toBe(NOT_PAIRED_REASON);
+  });
+
+  it("carries a sealed session it can't read, both ways and in order", async () => {
+    const { base } = await boot();
+    const l = await link(base);
+    const sealHello = JSON.stringify({ type: "e2e_hello", v: 1, nonce: "AAAAAAAAAAAAAAAAAAAAAA" });
+    const sealed = (n: number) => JSON.stringify({ type: "e2e", n, c: "bm90IGZvciB0aGUgYnJpZGdl" });
+    // The phone doesn't wait for an answer: its ticket, its seal hello and a sealed frame leave together.
+    const hello = JSON.stringify({ type: "hello", token: await ticket({ kind: "phone" }) });
+    const p = connect(`${base}/api/phone/ws/${COMPUTER}/${THREAD}`);
+    p.ws.on("open", () => {
+      for (const frame of [hello, sealHello, sealed(0)]) p.ws.send(frame);
+    });
+    const open = JSON.parse(await l.next(isType("open"))) as { session: string };
+    const up: string[] = [];
+    for (let i = 0; i < 3; i++) up.push((JSON.parse(await l.next(isType("data"))) as { data: string }).data);
+    expect(up).toEqual(['{"type":"hello","resumeFrom":0}', sealHello, sealed(0)]);
+
+    for (const frame of [sealHello, sealed(0), sealed(1)]) l.ws.send(JSON.stringify({ type: "data", session: open.session, data: frame }));
+    expect([await p.next(), await p.next(), await p.next()]).toEqual([sealHello, sealed(0), sealed(1)]);
+  });
+
+  it("keeps a phone's frames in order while its ticket is still being checked (as on Workers, where frames aren't held back)", async () => {
+    const { hub, l, p } = await bareHub();
+    const sealHello = JSON.stringify({ type: "e2e_hello", v: 1, nonce: "AAAAAAAAAAAAAAAAAAAAAA" });
+    const before = l.sent.length;
+    // Both frames are handed over before the first has been dealt with.
+    await Promise.all([hub.message(p, JSON.stringify({ type: "hello", token: await ticket({ kind: "phone" }) })), hub.message(p, sealHello)]);
+    expect(p.closed).toBeNull();
+    expect(l.sent.slice(before).map(m => JSON.parse(m) as { type: string; data?: string })).toMatchObject([
+      { type: "open", session: "s1", threadId: THREAD },
+      { type: "data", session: "s1", data: '{"type":"hello","resumeFrom":0}' },
+      { type: "data", session: "s1", data: sealHello },
+    ]);
   });
 
   it.each([
@@ -186,27 +264,7 @@ describe("phone bridge (Node hub)", () => {
   });
 
   it("caps frames in the hub itself too (as on Workers, where nothing else does)", async () => {
-    type Fake = { sent: string[]; closed: number | null; send(d: string): void; close(c: number): void };
-    const peers = new Map<Fake, HubPeer>();
-    const make = (): Fake => ({
-      sent: [],
-      closed: null,
-      send(d) {
-        this.sent.push(d);
-      },
-      close(c) {
-        this.closed = c;
-      },
-    });
-    const hub = new BridgeHub<Fake>(
-      { sockets: () => peers.keys(), peer: s => peers.get(s) ?? null, setPeer: (s, p) => peers.set(s, p), now: () => clock, newId: () => "s1" },
-      () => deriveBridgeKey(SECRET),
-    );
-    const l = make();
-    peers.set(l, pendingPeer({ kind: "link", computerId: COMPUTER }, clock));
-    await hub.message(l, JSON.stringify({ type: "auth", ticket: await ticket({ kind: "link" }) }));
-    const p = make();
-    peers.set(p, pendingPeer({ kind: "phone", computerId: COMPUTER, threadId: THREAD }, clock));
+    const { hub, peers, l, p } = await bareHub();
     await hub.message(p, JSON.stringify({ type: "hello", token: await ticket({ kind: "phone" }) }));
     expect(peers.get(p)?.role).toBe("phone");
     await hub.message(p, "x".repeat(PHONE_FRAME_MAX_BYTES + 1));

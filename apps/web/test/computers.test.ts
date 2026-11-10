@@ -155,4 +155,30 @@ describe("computers and phone access", () => {
     expect(list[0]!.computer).toMatchObject({ id: COMPUTER, name: "Studio Mac", online: true });
     expect(list[0]!.threads.map(t => t.id)).toEqual(["thread-aaaaaa"]);
   });
+
+  it("tells the dashboard whether a computer only answers paired phones", async () => {
+    const { ctx, owner, bridge } = await setup();
+    const checkIn = (sealed?: boolean) =>
+      saveComputer(ctx, bridge.control, owner.userId, owner.workspaceId, COMPUTER, {
+        name: "Studio Mac",
+        platform: "mac",
+        phoneAccess: true,
+        ...(sealed === undefined ? {} : { sealed }),
+        threads: [snapshot("thread-aaaaaa")],
+      });
+    const seen = async () => ({
+      listed: (await listComputerThreads(ctx, owner.userId, owner.workspaceId))[0]!.computer.sealed,
+      opened: (await computerThreadResponse(ctx, bridge.control, owner.userId, COMPUTER, "thread-aaaaaa")).computer.sealed,
+    });
+
+    // A desktop app that doesn't say (one from before pairing) doesn't seal.
+    expect(await seen()).toEqual({ listed: false, opened: false });
+
+    expect((await checkIn(true)).sealed).toBe(true);
+    expect(await seen()).toEqual({ listed: true, opened: true });
+
+    // It is what the app said last: going back to an older app shows as not sealing again.
+    expect((await checkIn()).sealed).toBe(false);
+    expect(await seen()).toEqual({ listed: false, opened: false });
+  });
 });

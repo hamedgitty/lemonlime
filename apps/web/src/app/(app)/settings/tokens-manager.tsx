@@ -11,7 +11,8 @@ export interface AccessTokenInfo {
   lastUsedAt: string | null;
 }
 
-export function TokensManager({ initial }: { initial: AccessTokenInfo[] }) {
+/** `idleDays` is how long a token may go unused before it stops working. */
+export function TokensManager({ initial, idleDays }: { initial: AccessTokenInfo[]; idleDays: number }) {
   const [tokens, setTokens] = useState(initial);
   const [name, setName] = useState("");
   const [created, setCreated] = useState<{ name: string; token: string } | null>(null);
@@ -89,21 +90,24 @@ export function TokensManager({ initial }: { initial: AccessTokenInfo[] }) {
       {tokens.length === 0 ? (
         <p className="text-sm text-muted">No tokens yet.</p>
       ) : (
-        <ul className="divide-y divide-line rounded-xl border border-line">
-          {tokens.map(t => (
-            <li key={t.id} className="flex items-center gap-4 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{t.name}</p>
-                <p className="text-sm text-muted">
-                  Created {timeAgo(t.createdAt, now)}, {t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt, now)}` : "never used"}
-                </p>
-              </div>
-              <button type="button" className="btn-danger h-8" onClick={() => revoke(t)}>
-                Revoke
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div className="space-y-2">
+          <p className="text-sm text-muted">A token expires after {idleDays} days without use.</p>
+          <ul className="divide-y divide-line rounded-xl border border-line">
+            {tokens.map(t => (
+              <li key={t.id} className="flex items-center gap-4 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{t.name}</p>
+                  <p className="text-sm text-muted">
+                    Created {timeAgo(t.createdAt, now)}, {t.lastUsedAt ? `last used ${timeAgo(t.lastUsedAt, now)}` : "never used"}
+                  </p>
+                </div>
+                <button type="button" className="btn-danger h-8" onClick={() => revoke(t)}>
+                  Revoke
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

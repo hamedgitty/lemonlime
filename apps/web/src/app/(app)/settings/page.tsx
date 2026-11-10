@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { pageWorkspace } from "@/lib/current-workspace.ts";
 import { renderSlot } from "@lemonlime/plugins";
-import { listAccessTokens } from "@/lib/access.ts";
+import { ACCESS_TOKEN_IDLE_DAYS, listAccessTokens } from "@/lib/access.ts";
 import { requirePageUser } from "@/lib/auth.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { githubAppConfig, listInstallations } from "@/lib/github.ts";
@@ -110,7 +110,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           The desktop app uses a token to start and resume cloud threads for you. Paste it into the desktop app together with the control plane URL. Revoke a
           token any time to sign that app out.
         </p>
-        <TokensManager initial={tokens} />
+        <TokensManager initial={tokens} idleDays={ACCESS_TOKEN_IDLE_DAYS} />
       </section>
 
       <section aria-labelledby="data-heading" className="card p-6">

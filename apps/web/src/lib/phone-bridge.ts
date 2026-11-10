@@ -64,8 +64,16 @@ export function pendingPeer(path: NonNullable<ReturnType<typeof bridgePath>>, no
     : { role: "pending-phone", computerId: path.computerId, threadId: path.threadId, since: now };
 }
 
-/** Close codes a desktop app may pass on to a phone (the runner's, mostly). */
-const PASS_ON = new Set<number>([1000, 1011, BRIDGE_CLOSE.tokenExpired, BRIDGE_CLOSE.unauthorized, BRIDGE_CLOSE.offline, BRIDGE_CLOSE.idle, 4408]);
+/** Close codes a desktop app may pass on to a phone: the runner's, and its own for a phone that isn't paired with it. */
+const PASS_ON = new Set<number>([
+  1000,
+  1011,
+  BRIDGE_CLOSE.tokenExpired,
+  BRIDGE_CLOSE.unauthorized,
+  BRIDGE_CLOSE.offline,
+  BRIDGE_CLOSE.idle,
+  BRIDGE_CLOSE.notPaired,
+]);
 
 export class BridgeHub<S extends BridgeSocket> {
   private readonly host: BridgeHost<S>;

@@ -1,5 +1,6 @@
 import { and, isNotNull, lt, or } from "drizzle-orm";
-import { rateLimit, session, verification, workspaceInvites } from "@lemonlime/db";
+import { desktopApprovals, rateLimit, session, verification, workspaceInvites } from "@lemonlime/db";
+import { deleteIdleAccessTokens } from "./access.ts";
 import type { AppContext } from "./context.ts";
 
 /**
@@ -11,6 +12,8 @@ export const RETENTION = {
   rateLimitMs: 24 * 60 * 60 * 1000,
   /** Invitations, once accepted or expired. */
   inviteMs: 30 * 24 * 60 * 60 * 1000,
+  /** Notes of used desktop sign-in links: the app gives up on a link long before a day is out. */
+  desktopApprovalMs: 24 * 60 * 60 * 1000,
 } as const;
 
 export interface Pruned {
@@ -18,9 +21,14 @@ export interface Pruned {
   verifications: number;
   rateLimits: number;
   invites: number;
+  desktopApprovals: number;
+  accessTokens: number;
 }
 
-/** Delete expired sessions and sign-in codes, stale rate-limit counters and old invitations. */
+/**
+ * Delete expired sessions and sign-in codes, stale rate-limit counters, old invitations, old
+ * notes of used desktop sign-in links, and access tokens left unused too long to work.
+ */
 export async function pruneOldRecords(ctx: AppContext, now = Date.now()): Promise<Pruned> {
   const at = new Date(now);
   const sessions = await ctx.db.delete(session).where(lt(session.expiresAt, at)).returning({ id: session.id });
@@ -35,5 +43,16 @@ export async function pruneOldRecords(ctx: AppContext, now = Date.now()): Promis
     .delete(workspaceInvites)
     .where(or(lt(workspaceInvites.expiresAt, inviteCutoff), and(isNotNull(workspaceInvites.acceptedAt), lt(workspaceInvites.acceptedAt, inviteCutoff))))
     .returning({ id: workspaceInvites.id });
-  return { sessions: sessions.length, verifications: verifications.length, rateLimits: rateLimits.length, invites: invites.length };
+  const approvals = await ctx.db
+    .delete(desktopApprovals)
+    .where(lt(desktopApprovals.createdAt, new Date(now - RETENTION.desktopApprovalMs).toISOString()))
+    .returning({ stateHash: desktopApprovals.stateHash });
+  return {
+    sessions: sessions.length,
+    verifications: verifications.length,
+    rateLimits: rateLimits.length,
+    invites: invites.length,
+    desktopApprovals: approvals.length,
+    accessTokens: await deleteIdleAccessTokens(ctx.db, now),
+  };
 }

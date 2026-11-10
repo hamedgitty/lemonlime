@@ -1,25 +1,13 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { safeLink } from "@/lib/links.ts";
 
 export interface LoginUpdate {
   state: "starting" | "open_url" | "needs_input" | "done" | "failed";
   url?: string;
   code?: string;
   message?: string;
-}
-
-/**
- * The sign-in link to show, or null if it isn't a secure web link. The link comes from the
- * sandbox, so it is only offered when it can't be anything but an ordinary https page.
- */
-export function secureLink(url: string | undefined): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url).protocol === "https:" ? url : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -49,7 +37,8 @@ export function SignInPanel({
     setSent(true);
   };
   const state = update?.state;
-  const link = secureLink(update?.url);
+  // The link comes from the sandbox, so it is only offered when it is an ordinary web page.
+  const link = safeLink(update?.url);
   return (
     <section aria-labelledby="sign-in-heading" className="card my-6 p-5">
       <div className="flex items-start justify-between gap-4">

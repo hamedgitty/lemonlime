@@ -1,7 +1,7 @@
 import { bearerToken, safeEqual } from "@/lib/access-tokens.ts";
 import { getAppContext } from "@/lib/env.ts";
 import { HttpError, json, route } from "@/lib/http.ts";
-import { closeInactiveThreads, sweepRunningSandboxes } from "@/lib/threads.ts";
+import { closeInactiveThreads, retryLeftoverSandboxes, sweepRunningSandboxes } from "@/lib/threads.ts";
 import { runDueAutomations } from "@/lib/automations.ts";
 import { runPluginSchedule } from "@/lib/plugin-schedule.ts";
 import { pruneOldRecords } from "@/lib/retention.ts";
@@ -29,6 +29,8 @@ export const POST = route(async request => {
     // Relayed heartbeats first, so the sweep decides on fresh news.
     relay: async () => (relayEnabled(ctx.vars) ? relayRunnerCalls(ctx, dispatchRunnerCall) : null),
     sandboxes: () => sweepRunningSandboxes(ctx),
+    // Sandboxes the provider failed to pause or remove when asked: ask again.
+    leftovers: () => retryLeftoverSandboxes(ctx),
     automations: () => runDueAutomations(ctx),
     // Threads idle longer than their workspace keeps them: closed, sandboxes deleted.
     autoDelete: () => closeInactiveThreads(ctx),
@@ -36,6 +38,9 @@ export const POST = route(async request => {
     // Expired sessions, sign-in codes, rate-limit counters and old invitations.
     pruned: () => pruneOldRecords(ctx),
   });
-  const { relay, sandboxes, automations, autoDelete, pruned } = results;
-  return json({ ...sandboxes, automations, autoDelete, pruned, ...(relay ? { relay } : {}), ...(failed.length ? { failed } : {}) }, failed.length ? 500 : 200);
+  const { relay, sandboxes, leftovers, automations, autoDelete, pruned } = results;
+  return json(
+    { ...sandboxes, leftovers, automations, autoDelete, pruned, ...(relay ? { relay } : {}), ...(failed.length ? { failed } : {}) },
+    failed.length ? 500 : 200,
+  );
 });

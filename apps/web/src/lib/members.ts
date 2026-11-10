@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, isNull, sql } from "drizzle-orm";
-import { automations, user, workspaceInvites, workspaceMembers, workspaces, type Db, type WorkspaceRole } from "@lemonlime/db";
+import { automations, threads, user, workspaceInvites, workspaceMembers, workspaces, type Db, type WorkspaceRole } from "@lemonlime/db";
 import { userWorkspaceIds } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { inviteEmail } from "./email.ts";
@@ -222,7 +222,8 @@ export const AUTOMATION_CREATOR_LEFT = "The person who set this up is no longer 
 /**
  * Remove someone from a workspace. Owners can remove members; anyone can leave. A
  * workspace always keeps an owner, and nobody leaves their own personal workspace.
- * Automations they set up there are switched off: those run as them.
+ * Automations they set up there are switched off: those run as them. Threads they started
+ * stay readable but stop being shared, so nobody else directs them from then on.
  */
 export async function removeMember(ctx: AppContext, o: { userId: string; workspaceId: string; memberId: string }): Promise<void> {
   const myRole = await memberRole(ctx.db, o.userId, o.workspaceId);
@@ -246,6 +247,12 @@ export async function removeMember(ctx: AppContext, o: { userId: string; workspa
     .update(automations)
     .set({ enabled: false, nextRunAt: null, pausedReason: AUTOMATION_CREATOR_LEFT })
     .where(and(eq(automations.workspaceId, o.workspaceId), eq(automations.createdBy, o.memberId), eq(automations.enabled, true)));
+  // Threads they shared ran with their agent sign-in: the rest of the workspace can still
+  // read them, but no longer directs them. Their place in the thread list stays the same.
+  await ctx.db
+    .update(threads)
+    .set({ shared: false, updatedAt: sql`${threads.updatedAt}` })
+    .where(and(eq(threads.workspaceId, o.workspaceId), eq(threads.createdBy, o.memberId), eq(threads.shared, true)));
 }
 
 /** Withdraw an invitation that hasn't been accepted. Owners only. */

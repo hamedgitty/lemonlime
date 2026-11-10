@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, lt, sql } from "drizzle-orm";
 import { accessTokens, computers, threads, workspaceMembers, workspaces, type ComputerRow, type Db, type ThreadRow } from "@lemonlime/db";
 import { HttpError } from "./errors.ts";
 
@@ -8,11 +8,14 @@ import { HttpError } from "./errors.ts";
  * the workspace (threads) or owns the row (access tokens).
  *
  * Rules:
- * - A user sees and changes threads only in workspaces they are a member of.
- *   Threads in other workspaces are reported as "not found", never "forbidden",
- *   so ids do not leak.
+ * - A user sees threads only in workspaces they are a member of. Threads in other
+ *   workspaces are reported as "not found", never "forbidden", so ids do not leak.
+ * - Every member can read a thread. Only the person who started it can take part in it
+ *   (message the agent, reach its sandbox, rename it, wake it), unless they share it with
+ *   the workspace. A thread whose starter has left can only be read.
  * - Asking for a workspace you are not in is a 403.
- * - Access tokens belong to one user; only that user can list or revoke them.
+ * - Access tokens belong to one user; only that user can list or revoke them. A token that
+ *   goes unused for 90 days stops working.
  * - Computers (phone access to local threads) belong to one user: only that user sees or
  *   reaches them, and only while still a member of the workspace the computer is in.
  *
@@ -96,6 +99,45 @@ export async function getThreadForUser(db: Db, userId: string, threadId: string)
   return row;
 }
 
+export const ONLY_THE_STARTER = "Only the person who started this thread can do that, unless they share it with the workspace.";
+export const STARTER_HAS_LEFT = "The person who started this thread has left the workspace, so it can only be read.";
+
+/** Whether the thread is this user's own. A thread whose starter is gone is nobody's. */
+export function startedBy(row: Pick<ThreadRow, "createdBy">, userId: string): boolean {
+  return row.createdBy !== null && row.createdBy === userId;
+}
+
+/** Whether the starter has opened the thread to the rest of the workspace. Nobody can share a thread whose starter is gone. */
+export function sharedWithWorkspace(row: Pick<ThreadRow, "createdBy" | "shared">): boolean {
+  return row.createdBy !== null && row.shared;
+}
+
+/**
+ * Whether a workspace member may direct the thread's agent and reach its sandbox: the
+ * person who started it, or anyone in the workspace once the starter has shared it.
+ * Membership itself is checked where the row is loaded.
+ */
+export function canTakePartIn(row: Pick<ThreadRow, "createdBy" | "shared">, userId: string): boolean {
+  return startedBy(row, userId) || sharedWithWorkspace(row);
+}
+
+/**
+ * Throws 403 unless the user may take part in the thread. The message says whether the
+ * starter could still share it: someone no longer in the workspace cannot.
+ */
+export async function requireTakingPart(db: Db, row: Pick<ThreadRow, "createdBy" | "shared" | "workspaceId">, userId: string): Promise<void> {
+  if (canTakePartIn(row, userId)) return;
+  const starterIsHere = row.createdBy !== null && (await isWorkspaceMember(db, row.createdBy, row.workspaceId));
+  throw new HttpError(403, starterIsHere ? ONLY_THE_STARTER : STARTER_HAS_LEFT);
+}
+
+/** The thread, for someone about to change it or reach its sandbox: 404 unless they are in its workspace, 403 unless they may take part. */
+export async function getThreadToTakePart(db: Db, userId: string, threadId: string): Promise<ThreadRow> {
+  const row = await getThreadForUser(db, userId, threadId);
+  await requireTakingPart(db, row, userId);
+  return row;
+}
+
 /** Threads in a workspace, newest activity first. 403 unless the user is a member. */
 export async function listThreadsForUser(db: Db, userId: string, workspaceId: string, limit = 200): Promise<ThreadRow[]> {
   await requireWorkspaceMember(db, userId, workspaceId);
@@ -160,16 +202,33 @@ export async function revokeAccessToken(db: Db, userId: string, tokenId: string)
   return deleted.length > 0;
 }
 
-/** Who a token belongs to, by the SHA-256 of its raw value. Records use at most once a minute. */
+/** A token nobody has used for this many days stops working. One that was never used counts from the day it was made. */
+export const ACCESS_TOKEN_IDLE_DAYS = 90;
+export const ACCESS_TOKEN_IDLE_MS = ACCESS_TOKEN_IDLE_DAYS * 24 * 60 * 60 * 1000;
+
+/** How often a token's use is written down: far more often than the days above count in, without a write on every request. */
+const RECORD_TOKEN_USE_EVERY_MS = 60 * 60 * 1000;
+
+/** When a token was last used, or made if it never was. A date that can't be read counts as long ago. */
+function tokenLastActive(row: { createdAt: string; lastUsedAt: string | null }): number {
+  const at = Date.parse(row.lastUsedAt ?? row.createdAt);
+  return Number.isFinite(at) ? at : 0;
+}
+
+/**
+ * Who a token belongs to, by the SHA-256 of its raw value. Null for a token that doesn't
+ * exist or has gone unused for too long. Records use at most once an hour.
+ */
 export async function findUserByTokenHash(db: Db, tokenHash: string, nowMs: number = Date.now()): Promise<string | null> {
   const row = await db
-    .select({ id: accessTokens.id, userId: accessTokens.userId, lastUsedAt: accessTokens.lastUsedAt })
+    .select({ id: accessTokens.id, userId: accessTokens.userId, createdAt: accessTokens.createdAt, lastUsedAt: accessTokens.lastUsedAt })
     .from(accessTokens)
     .where(eq(accessTokens.tokenHash, tokenHash))
     .get();
   if (!row) return null;
-  const last = row.lastUsedAt ? Date.parse(row.lastUsedAt) : 0;
-  if (nowMs - last > 60_000) {
+  const idleMs = nowMs - tokenLastActive(row);
+  if (idleMs > ACCESS_TOKEN_IDLE_MS) return null;
+  if (!row.lastUsedAt || idleMs > RECORD_TOKEN_USE_EVERY_MS) {
     try {
       await db
         .update(accessTokens)
@@ -180,4 +239,14 @@ export async function findUserByTokenHash(db: Db, tokenHash: string, nowMs: numb
     }
   }
   return row.userId;
+}
+
+/** Delete tokens that have gone unused for too long to work any more. Returns how many. For the scheduled sweep. */
+export async function deleteIdleAccessTokens(db: Db, nowMs: number = Date.now()): Promise<number> {
+  const cutoff = new Date(nowMs - ACCESS_TOKEN_IDLE_MS).toISOString();
+  const deleted = await db
+    .delete(accessTokens)
+    .where(lt(sql`coalesce(${accessTokens.lastUsedAt}, ${accessTokens.createdAt})`, cutoff))
+    .returning({ id: accessTokens.id });
+  return deleted.length;
 }

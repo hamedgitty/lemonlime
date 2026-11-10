@@ -20,7 +20,8 @@ const workspacePackages = [
 /**
  * Sent with every response. Nothing may frame the dashboard (its approve and delete buttons
  * can't be clickjacked), browsers mustn't guess content types, and links don't leak paths.
- * Scripts aren't restricted here: Next.js inlines its own, so that needs per-request nonces.
+ * Which scripts may run isn't said here: that rule needs a new value for every request, so
+ * pages get it from src/proxy.ts, which repeats the rest of this policy.
  */
 const securityHeaders = [
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'" },
@@ -35,7 +36,11 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   transpilePackages: workspacePackages,
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      // The page a phone opens to pair with a computer says nothing at all about where a link was followed from.
+      { source: "/phone/:path*", headers: [{ key: "Referrer-Policy", value: "no-referrer" }] },
+    ];
   },
   // Sandbox SDKs and the local SQLite driver use native and dynamic requires;
   // on Node, load them from node_modules at runtime.

@@ -6,6 +6,7 @@ import { userWorkspaceIds } from "../src/lib/access.ts";
 import { generateAccessToken, hashAccessToken } from "../src/lib/access-tokens.ts";
 import { createAccessTokenRow, findUserByTokenHash } from "../src/lib/access.ts";
 import { createAuth } from "../src/lib/better-auth.ts";
+import { makeConfig } from "../src/lib/context.ts";
 import { HttpError } from "../src/lib/errors.ts";
 import {
   createThread,
@@ -241,6 +242,22 @@ describe("threads, scoped to a workspace", () => {
     expect(sandbox.calls).toEqual([]);
     expect(await listThreads(ctx, alice.userId, alice.workspaceId)).toEqual([]);
   });
+
+  it("passes on the policy's link only when it is safe to offer", async () => {
+    const refusal = async (actionUrl: string) => {
+      const { ctx } = await createTestApp({
+        policy: { canStartSandbox: async () => ({ allow: false, reason: "No.", actionUrl, actionLabel: "See why" }) },
+      });
+      const alice = await addUser(ctx.db, "alice@example.com");
+      return (await createThread(ctx, alice.userId, alice.workspaceId, cloudThread).catch(e => e)).body;
+    };
+    for (const good of ["https://example.com/why", "http://localhost:3000/settings", "mailto:help@example.com"]) {
+      expect(await refusal(good), good).toEqual({ error: "policy_denied", reason: "No.", actionUrl: good, actionLabel: "See why" });
+    }
+    for (const bad of ["javascript:alert(1)", "http://example.com/why", "data:text/html,hello", "file:///etc/hosts"]) {
+      expect(await refusal(bad), bad).toEqual({ error: "policy_denied", reason: "No." });
+    }
+  });
 });
 
 describe("threads in a shared workspace", () => {
@@ -277,9 +294,8 @@ describe("threads in a shared workspace", () => {
     const err = await deleteThread(ctx, carol.userId, id).catch(e => e);
     expect(err).toMatchObject({ status: 403, message: "Only the person who started this thread or a workspace owner can close it." });
     expect(sandbox.calls).toEqual([`create:${id}`]);
-    // Everyone in the workspace can still open, pause and resume it.
-    expect((await pauseThread(ctx, carol.userId, id)).thread.status).toBe("paused");
-    expect((await resumeThread(ctx, carol.userId, id)).endpoint).not.toBeNull();
+    // Everyone in the workspace can still open it.
+    expect((await getThreadRowForUser(ctx, carol.userId, id)).id).toBe(id);
 
     expect((await deleteThread(ctx, bob.userId, id)).thread.status).toBe("stopped");
     const second = await sharedThread(localThread);
@@ -428,17 +444,46 @@ describe("personal access tokens", () => {
 });
 
 describe("the secret that signs sessions", () => {
-  it("must be set as soon as the app is reachable from other computers", async () => {
+  it("must be set unless the app says it is only on this computer", async () => {
     const { ctx } = await createTestApp();
     const without = (publicUrl: string | undefined) => ({ ...ctx, vars: { ...ctx.vars, BETTER_AUTH_SECRET: undefined, LEMONLIME_PUBLIC_URL: publicUrl } });
-    for (const url of ["https://lemonlime.example.com", "http://192.168.1.20:3000", "not a url"]) {
-      expect(() => createAuth(without(url)), url).toThrow("BETTER_AUTH_SECRET is not set");
+    // An address that isn't set could be anywhere, so it counts as reachable too.
+    for (const url of ["https://lemonlime.example.com", "http://192.168.1.20:3000", "http://localhost.example.com", "not a url", "", undefined]) {
+      expect(() => createAuth(without(url)), String(url)).toThrow("BETTER_AUTH_SECRET is not set");
     }
     expect(() => createAuth({ ...without("http://localhost:3000"), production: true })).toThrow("BETTER_AUTH_SECRET is not set");
     // Trying things out on this computer works without one.
-    for (const url of ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000", "http://app.localhost:3000", undefined]) {
-      expect(() => createAuth(without(url)), String(url)).not.toThrow();
+    for (const url of ["http://localhost:3000", "http://127.0.0.1:3000", "http://[::1]:3000", "http://app.localhost:3000"]) {
+      expect(() => createAuth(without(url)), url).not.toThrow();
     }
+  });
+
+  it("doesn't count while it is still the placeholder from .env.example", async () => {
+    const { ctx } = await createTestApp();
+    const leftAsShipped = (publicUrl: string, production = false) => ({
+      ...ctx,
+      production,
+      vars: { ...ctx.vars, BETTER_AUTH_SECRET: "replace-with-a-long-random-string", LEMONLIME_PUBLIC_URL: publicUrl },
+    });
+    expect(() => createAuth(leftAsShipped("https://lemonlime.example.com"))).toThrow("BETTER_AUTH_SECRET is not set");
+    expect(() => createAuth(leftAsShipped("http://localhost:3000", true))).toThrow("BETTER_AUTH_SECRET is not set");
+    expect(() => createAuth(leftAsShipped("http://localhost:3000"))).not.toThrow();
+  });
+});
+
+describe("the secrets that sign tokens and guard the scheduled sweep", () => {
+  const leftAsShipped = { LEMONLIME_TOKEN_SECRET: "replace-with-a-long-random-string", LEMONLIME_CRON_SECRET: "replace-with-a-long-random-string" };
+
+  it("are refused by a real deployment while they are still the placeholder from .env.example", () => {
+    expect(() => makeConfig(leftAsShipped).tokenSecret()).toThrow("LEMONLIME_TOKEN_SECRET is still the placeholder");
+    expect(() => makeConfig(leftAsShipped).cronSecret()).toThrow("LEMONLIME_CRON_SECRET is still the placeholder");
+    expect(makeConfig({ LEMONLIME_TOKEN_SECRET: "a-real-secret-0123456789abcdef" }).tokenSecret()).toBe("a-real-secret-0123456789abcdef");
+    expect(() => makeConfig({}).tokenSecret()).toThrow("LEMONLIME_TOKEN_SECRET is not set");
+  });
+
+  it("work as shipped while developing", () => {
+    expect(makeConfig(leftAsShipped, false).tokenSecret()).toBe("replace-with-a-long-random-string");
+    expect(makeConfig(leftAsShipped, false).cronSecret()).toBe("replace-with-a-long-random-string");
   });
 });
 

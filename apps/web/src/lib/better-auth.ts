@@ -1,12 +1,15 @@
-import { betterAuth } from "better-auth";
+import { betterAuth, type AuthContext } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAuthMiddleware } from "better-auth/api";
+import { symmetricDecrypt } from "better-auth/crypto";
 import { emailOTP } from "better-auth/plugins";
 import { account, rateLimit, session, user, verification } from "@lemonlime/db";
 import { createPersonalWorkspace } from "./access.ts";
 import type { AppContext } from "./context.ts";
 import { signInCodeEmail } from "./email.ts";
-import { addressHeaders, callerAddress, hit, LIMITS } from "./rate-limit.ts";
+import { isThisComputer } from "./links.ts";
+import { leftAsPlaceholder } from "./placeholder-secret.ts";
+import { addressHeaders, callerAddress, hit, LIMITS, withCallerAddress } from "./rate-limit.ts";
 
 /** Sign-in codes are 6 digits and valid for 10 minutes. */
 export const SIGN_IN_CODE_LENGTH = 6;
@@ -25,28 +28,30 @@ export function githubEnabled(vars: AppContext["vars"]): boolean {
   return Boolean(vars.GITHUB_CLIENT_ID && vars.GITHUB_CLIENT_SECRET);
 }
 
-/** True for an address only this computer can reach (localhost, 127.0.0.1, [::1], *.localhost). */
-function isThisComputer(url: string): boolean {
+/** True when the app's own address is one only this computer can reach. */
+function onThisComputer(publicUrl: string): boolean {
   try {
-    const host = new URL(url).hostname;
-    return host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]";
+    return isThisComputer(new URL(publicUrl).hostname);
   } catch {
     return false;
   }
 }
 
 function authSecret(ctx: AppContext): string | undefined {
-  const secret = ctx.vars.BETTER_AUTH_SECRET;
+  // The placeholder from .env.example is as public as no secret at all, so it counts as none.
+  const secret = leftAsPlaceholder(ctx.vars.BETTER_AUTH_SECRET) ? undefined : ctx.vars.BETTER_AUTH_SECRET;
   // Without it Better Auth signs sessions with a built-in secret anyone can look up. That
-  // is fine for trying things out on this computer, and nowhere else.
-  const reachable = Boolean(ctx.vars.LEMONLIME_PUBLIC_URL) && !isThisComputer(ctx.vars.LEMONLIME_PUBLIC_URL!);
-  if (!secret && (ctx.production || reachable)) {
+  // is fine for trying things out on this computer, and nowhere else: so only outside
+  // production, and only when the app's own address says it is this computer.
+  const tryingOut = !ctx.production && onThisComputer(ctx.vars.LEMONLIME_PUBLIC_URL ?? "");
+  if (!secret && !tryingOut) {
     throw new Error("BETTER_AUTH_SECRET is not set. Generate one with: openssl rand -base64 32");
   }
   return secret || undefined;
 }
 
 const SEND_CODE_PATH = "/email-otp/send-verification-otp";
+const ENTER_CODE_PATH = "/sign-in/email-otp";
 /** Longer than any real email address. */
 const EMAIL_MAX = 254;
 
@@ -65,6 +70,24 @@ export async function allowSignInCode(ctx: AppContext, email: string, caller: st
 }
 
 /**
+ * Forgets a waiting sign-in code that can't be read back: one kept under a sign-in secret
+ * that has changed since, or kept some other way than encrypted. Asking again then makes a
+ * new code, and entering the old one is a wrong code rather than an error.
+ */
+async function forgetUnreadableCode(auth: Pick<AuthContext, "internalAdapter" | "secretConfig">, email: string): Promise<void> {
+  const identifier = `sign-in-otp-${email.toLowerCase()}`;
+  const waiting = await auth.internalAdapter.findVerificationValue(identifier);
+  if (!waiting) return;
+  // Kept as "<the code, encrypted>:<wrong tries so far>".
+  const kept = waiting.value.slice(0, waiting.value.lastIndexOf(":"));
+  try {
+    await symmetricDecrypt({ key: auth.secretConfig, data: kept });
+  } catch {
+    await auth.internalAdapter.deleteVerificationByIdentifier(identifier);
+  }
+}
+
+/**
  * Better Auth for this deployment: email one-time codes, plus GitHub when
  * GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET are set. Every new user gets a
  * personal workspace (with them as owner) as soon as their row is created.
@@ -72,7 +95,7 @@ export async function allowSignInCode(ctx: AppContext, email: string, caller: st
 export function createAuth(ctx: AppContext) {
   const baseURL = ctx.vars.LEMONLIME_PUBLIC_URL?.replace(/\/+$/, "") || undefined;
   const secret = authSecret(ctx);
-  return betterAuth({
+  const auth = betterAuth({
     appName: "LemonLime",
     ...(baseURL ? { baseURL } : {}),
     ...(secret ? { secret } : {}),
@@ -97,23 +120,28 @@ export function createAuth(ctx: AppContext) {
         "/sign-in/email-otp": { window: 60, max: 10 },
       },
     },
-    // Client IP for rate limiting. On Workers, Cloudflare sets cf-connecting-ip; on Node,
-    // put the app behind a proxy that sets x-forwarded-for.
+    // The caller's address, for rate limiting: the platform's header on Workers, the one
+    // written for each request below on Node.
     advanced: {
       ipAddress: { ipAddressHeaders: addressHeaders(ctx.runtime) },
     },
     hooks: {
-      // Runs before a new sign-in code is made. Over the limit, the request stops here: the
-      // code already sent keeps working, nothing is emailed, and the answer looks the same
-      // as when a code was sent, so it says nothing about the address.
+      // Runs before a sign-in code is made or sent again. Over the limit, the request stops
+      // here: the code already sent keeps working, nothing is emailed, and the answer looks
+      // the same as when a code was sent, so it says nothing about the address.
       before: createAuthMiddleware(async c => {
-        if (c.path !== SEND_CODE_PATH) return;
+        if (c.path !== SEND_CODE_PATH && c.path !== ENTER_CODE_PATH) return;
         const { email, type } = (c.body ?? {}) as { email?: unknown; type?: unknown };
-        if (typeof email !== "string" || type !== "sign-in") return;
-        const caller = callerAddress(ctx.runtime, c.request ?? c.headers ?? new Headers());
-        if (await allowSignInCode(ctx, email, caller)) return;
-        console.warn("Skipped a sign-in code: too many for this address in the last hour.");
-        return c.json({ success: true });
+        if (typeof email !== "string") return;
+        if (c.path === SEND_CODE_PATH) {
+          if (type !== "sign-in") return;
+          const caller = callerAddress(ctx, c.request ?? c.headers ?? new Headers());
+          if (!(await allowSignInCode(ctx, email, caller))) {
+            console.warn("Skipped a sign-in code: too many for this address in the last hour.");
+            return c.json({ success: true });
+          }
+        }
+        await forgetUnreadableCode(c.context, email);
       }),
     },
     socialProviders: githubEnabled(ctx.vars) ? { github: { clientId: ctx.vars.GITHUB_CLIENT_ID!, clientSecret: ctx.vars.GITHUB_CLIENT_SECRET! } } : {},
@@ -122,7 +150,12 @@ export function createAuth(ctx: AppContext) {
         otpLength: SIGN_IN_CODE_LENGTH,
         expiresIn: SIGN_IN_CODE_TTL_SECONDS,
         allowedAttempts: 5,
-        storeOTP: "hashed",
+        // Asking again while a code is still waiting sends that same code and gives it
+        // another ten minutes, so nobody can cancel the code in someone's inbox by asking
+        // for another. That needs the code kept in a form it can be read back from:
+        // encrypted with the sign-in secret, which the database alone doesn't give away.
+        storeOTP: "encrypted",
+        resendStrategy: "reuse",
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== "sign-in") return; // only sign-in codes are used
           // How many codes one address gets is limited before this point (see `hooks` above).
@@ -150,6 +183,9 @@ export function createAuth(ctx: AppContext) {
       },
     },
   });
+  const handle = auth.handler;
+  auth.handler = request => handle(withCallerAddress(ctx, request));
+  return auth;
 }
 
 export type Auth = ReturnType<typeof createAuth>;

@@ -53,7 +53,7 @@ export interface TestApp {
   history: ReturnType<typeof memoryHistoryStore>;
 }
 
-export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}): Promise<TestApp> {
+export async function createTestApp(opts: { policy?: Partial<UsagePolicy>; env?: Record<string, string> } = {}): Promise<TestApp> {
   const { db } = await createLocalDb(":memory:");
   const sandbox = new FakeSandboxProvider();
   const emails: EmailMessage[] = [];
@@ -68,7 +68,7 @@ export async function createTestApp(opts: { policy?: Partial<UsagePolicy> } = {}
   const plugin: ResolvedPlugin = { ...defaultPlugin, events: { ...defaultPlugin.events }, usagePolicy: { ...defaultPlugin.usagePolicy, ...opts.policy } };
   const ctx = createAppContext({
     runtime: "node",
-    env: { ...TEST_ENV },
+    env: { ...TEST_ENV, ...opts.env },
     db,
     production: false,
     plugin,

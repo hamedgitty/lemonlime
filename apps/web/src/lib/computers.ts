@@ -31,6 +31,11 @@ export interface ComputerSummary {
   name: string;
   platform: ComputerPlatform;
   phoneAccess: boolean;
+  /**
+   * The computer only answers phones paired with it, and seals everything it sends them.
+   * False for a desktop app from before pairing.
+   */
+  sealed: boolean;
   online: boolean;
   lastSeenAt: string | null;
 }
@@ -48,7 +53,15 @@ function seenRecently(row: ComputerRow, nowMs: number): boolean {
 }
 
 function summary(row: ComputerRow, online: boolean): ComputerSummary {
-  return { id: row.id, name: row.name, platform: row.platform, phoneAccess: row.phoneAccess, online, lastSeenAt: row.lastSeenAt };
+  return {
+    id: row.id,
+    name: row.name,
+    platform: row.platform,
+    phoneAccess: row.phoneAccess,
+    sealed: row.sealed,
+    online,
+    lastSeenAt: row.lastSeenAt,
+  };
 }
 
 /**
@@ -75,6 +88,8 @@ export async function saveComputer(
     platform: update.platform,
     workspaceId,
     phoneAccess: on,
+    // What the app said this time: an app that doesn't say so doesn't seal.
+    sealed: update.sealed === true,
     threads: on ? (update.threads ?? existing?.threads ?? []) : [],
     lastSeenAt: on ? now : null,
   };

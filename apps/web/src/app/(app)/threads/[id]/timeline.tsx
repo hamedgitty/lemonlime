@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { elapsedMs, formatDuration, shortPath, type EventOf } from "@lemonlime/protocol";
-import { diffLines, type DiffLineKind, type TimelineItem } from "@/lib/timeline.ts";
+import { diffLines, isLongReport, startsTurn, type DiffLineKind, type TimelineItem } from "@/lib/timeline.ts";
 import { PlanCard, QuestionRecord } from "./agent-loop.tsx";
 
 const MAX_OUTPUT_CHARS = 20_000;
@@ -47,7 +47,8 @@ export function Timeline({
   onContinueAfterRestart,
 }: {
   items: TimelineItem[];
-  onApprove?: ApproveFn;
+  /** Left out for someone who is only reading: they see what the agent asked, with no buttons. */
+  onApprove?: ApproveFn | undefined;
   onImplementPlan?: (() => void) | undefined;
   /** Ask the runner to try again once the usage limit resets (while connected). */
   onLimitWait?: (() => void) | undefined;
@@ -58,7 +59,7 @@ export function Timeline({
   let restartKey: string | null = null;
   for (let i = items.length - 1; i >= 0; i--) {
     const it = items[i]!;
-    if (it.kind === "user") break;
+    if (startsTurn(it)) break;
     if (it.kind === "error" && it.event.code === "turn_outcome_unknown") {
       restartKey = it.key;
       break;
@@ -111,15 +112,19 @@ function Approval({ item, onApprove }: { item: Extract<TimelineItem, { kind: "ap
       <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-cream px-3 py-2 font-mono text-[12.5px]">
         {request.summary}
       </pre>
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="button" className="btn-lemon h-8" disabled={sent !== null || !onApprove} onClick={() => answer("allow")}>
-          Allow
-        </button>
-        <button type="button" className="btn-ghost h-8" disabled={sent !== null || !onApprove} onClick={() => answer("deny")}>
-          Don&apos;t allow
-        </button>
-        <span className="text-[13.5px] text-muted">The agent waits for your answer.</span>
-      </div>
+      {onApprove ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button type="button" className="btn-lemon h-8" disabled={sent !== null} onClick={() => answer("allow")}>
+            Allow
+          </button>
+          <button type="button" className="btn-ghost h-8" disabled={sent !== null} onClick={() => answer("deny")}>
+            Don&apos;t allow
+          </button>
+          <span className="text-[13.5px] text-muted">The agent waits for your answer.</span>
+        </div>
+      ) : (
+        <p className="mt-3 text-[13.5px] text-muted">The agent is waiting for an answer from whoever is directing it.</p>
+      )}
     </div>
   );
 }
@@ -151,6 +156,8 @@ function Item({
           {item.queued ? <p className="mt-1 pr-1 text-[13.5px] text-muted">Queued, runs when the agent finishes</p> : null}
         </div>
       );
+    case "auto":
+      return item.from === "subagent" ? <SubagentReport text={item.text} at={item.at} /> : <RunnerLine text={item.text} at={item.at} />;
     case "agent":
       return (
         <div className="max-w-[95%] text-[0.9375rem] leading-relaxed">
@@ -205,6 +212,47 @@ function Item({
         </div>
       );
   }
+}
+
+/** What a subagent handed back to the agent: labelled, quieter than a person's message, and folded when long. */
+function SubagentReport({ text, at }: { text: string; at: string }) {
+  const label = (
+    <>
+      <span className="font-medium">Subagent report</span>
+      <span className="text-xs tabular-nums">{time(at)}</span>
+    </>
+  );
+  const body = "border-l-2 border-line pl-4 leading-relaxed whitespace-pre-wrap break-words text-muted";
+  if (!isLongReport(text)) {
+    return (
+      <div className="text-[13.5px]">
+        <p className="flex items-center gap-2 text-muted">{label}</p>
+        <p className={`mt-1.5 ${body}`}>{text}</p>
+      </div>
+    );
+  }
+  return (
+    <details className="group text-[13.5px]">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-2 text-muted hover:text-ink [&::-webkit-details-marker]:hidden">
+        <svg aria-hidden viewBox="0 0 16 16" className="h-3.5 w-3.5 shrink-0 transition-transform group-open:rotate-90" fill="currentColor">
+          <path d="M6 3.5 10.5 8 6 12.5 5 11.5 8.5 8 5 4.5z" />
+        </svg>
+        {label}
+      </summary>
+      <p className={`mt-1.5 ml-[7px] ${body}`}>{text}</p>
+    </details>
+  );
+}
+
+/** Something the runner sent to carry the thread on by itself: a small line, not a message from anyone. */
+function RunnerLine({ text, at }: { text: string; at: string }) {
+  const line = text.replace(/\s+/g, " ").trim();
+  return (
+    <p role="note" className="truncate px-1 text-[13.5px] text-muted" title={text}>
+      Sent by LemonLime at <span className="tabular-nums">{time(at)}</span>
+      {line ? `: ${line}` : ""}
+    </p>
+  );
 }
 
 /** The agent's reasoning, folded to one quiet line ("Thought for 12s"). */

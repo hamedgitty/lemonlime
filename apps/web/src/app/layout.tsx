@@ -29,6 +29,10 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export const viewport: Viewport = { themeColor: "#FFFBEA", colorScheme: "light" };
 
+// Every page is made for the request that asked for it, the not-found page too, so each
+// one's script tags carry that request's one-time value (src/proxy.ts).
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">

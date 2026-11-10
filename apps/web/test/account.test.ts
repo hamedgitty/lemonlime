@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { account, rateLimit, secrets, session, threads, user, verification, workspaceInvites, workspaceMembers, workspaces } from "@lemonlime/db";
+import {
+  accessTokens,
+  account,
+  desktopApprovals,
+  rateLimit,
+  secrets,
+  session,
+  threads,
+  user,
+  verification,
+  workspaceInvites,
+  workspaceMembers,
+  workspaces,
+} from "@lemonlime/db";
 import type { CreateThreadRequest, ThreadEvent } from "@lemonlime/protocol";
+import { ACCESS_TOKEN_IDLE_MS } from "../src/lib/access.ts";
 import { deleteAccount, deleteThreadForever, deleteWorkspace, deletionPreview, exportAccount } from "../src/lib/account.ts";
 import { appendHistory } from "../src/lib/history.ts";
 import { acceptInvite, inviteMember } from "../src/lib/members.ts";
@@ -175,7 +189,7 @@ describe("workspace secrets", () => {
 });
 
 describe("cleaning up old records", () => {
-  it("removes expired sessions and codes, stale counters and old invitations, and keeps the rest", async () => {
+  it("removes expired sessions and codes, stale counters, old invitations, used desktop links and long-unused tokens, and keeps the rest", async () => {
     const app = await createTestApp();
     const alice = await addUser(app.db, "alice@example.com");
     const now = Date.now();
@@ -200,7 +214,22 @@ describe("cleaning up old records", () => {
       { id: "i-live", workspaceId: alice.workspaceId, email: "y@example.com", tokenHash: "h2", role: "member", expiresAt: soon },
     ]);
 
-    expect(await pruneOldRecords(app.ctx, now)).toEqual({ sessions: 1, verifications: 1, rateLimits: 1, invites: 1 });
+    await app.db.insert(desktopApprovals).values([
+      { stateHash: "used-long-ago", createdAt: new Date(now - RETENTION.desktopApprovalMs - 1000).toISOString() },
+      { stateHash: "used-today", createdAt: new Date(now - 60_000).toISOString() },
+    ]);
+
+    const idle = new Date(now - ACCESS_TOKEN_IDLE_MS - 1000).toISOString();
+    await app.db.insert(accessTokens).values([
+      { id: "t-never-used", userId: alice.userId, name: "forgotten", tokenHash: "t1", createdAt: idle },
+      { id: "t-long-unused", userId: alice.userId, name: "old laptop", tokenHash: "t2", createdAt: idle, lastUsedAt: idle },
+      { id: "t-in-use", userId: alice.userId, name: "laptop", tokenHash: "t3", createdAt: idle, lastUsedAt: new Date(now - 60_000).toISOString() },
+      { id: "t-new", userId: alice.userId, name: "new laptop", tokenHash: "t4", createdAt: new Date(now - 60_000).toISOString() },
+    ]);
+
+    expect(await pruneOldRecords(app.ctx, now)).toEqual({ sessions: 1, verifications: 1, rateLimits: 1, invites: 1, desktopApprovals: 1, accessTokens: 2 });
+    expect((await app.db.select().from(desktopApprovals)).map(a => a.stateHash)).toEqual(["used-today"]);
+    expect((await app.db.select().from(accessTokens)).map(t => t.id).sort()).toEqual(["t-in-use", "t-new"]);
     expect((await app.db.select().from(session)).map(s => s.id)).toEqual(["live"]);
     expect((await app.db.select().from(verification)).map(v => v.id)).toEqual(["v-live"]);
     expect((await app.db.select().from(rateLimit)).map(r => r.id)).toEqual(["r-live"]);

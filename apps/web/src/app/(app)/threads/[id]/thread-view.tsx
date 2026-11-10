@@ -9,6 +9,7 @@ import { RunnerClient, type ConnectionState } from "@lemonlime/client";
 import {
   agentLoopState,
   AGENT_CAPABILITIES,
+  canTakePart,
   IMPLEMENT_PLAN_PROMPT,
   modeAfterPlan,
   type PolicyDenied,
@@ -25,6 +26,7 @@ import type { ThreadResponse } from "@/lib/threads.ts";
 import type { BridgedThreadResponse, ComputerSummary } from "@/lib/computers.ts";
 import { addEvent, buildTimeline, type PendingMessage } from "@/lib/timeline.ts";
 import { SignInPanel, type LoginUpdate } from "./sign-in-panel.tsx";
+import { ReaderNote, ShareSwitch, useSavedHistory } from "./taking-part.tsx";
 import { Timeline } from "./timeline.tsx";
 import { ContextMeter, OptionsControls, QuestionForm, TodoCard } from "./agent-loop.tsx";
 
@@ -48,11 +50,23 @@ export function ThreadView({
   initial,
   computer: initialComputer,
   canSignIn = false,
+  starter = null,
+  hasOtherMembers = false,
+  canClose = true,
+  socket,
 }: {
   initial: ThreadResponse;
   computer?: ComputerSummary;
   /** Whether this person started the thread: only they can sign its agent in. */
   canSignIn?: boolean;
+  /** Who started the thread, for members who can only read it. Null once that person has left the workspace. */
+  starter?: string | null;
+  /** Whether anyone else is in the workspace: sharing is only offered when there is. */
+  hasOtherMembers?: boolean;
+  /** Whether this person may pause, close or delete the thread without taking part: its starter and the workspace's owners. */
+  canClose?: boolean;
+  /** The WebSocket to connect with when it isn't the browser's own: a paired computer's is sealed end to end. */
+  socket?: typeof WebSocket;
 }) {
   const router = useRouter();
   const id = initial.thread.id;
@@ -85,9 +99,12 @@ export function ThreadView({
   const initialPromptHandled = useRef(!initial.initialPrompt);
 
   const isCloud = thread.mode === "cloud";
+  // A workspace member who didn't start the thread and wasn't let in reads the saved conversation.
+  const readOnly = isCloud && !bridged && !canTakePart(thread);
   const isRunning = thread.status === "running";
-  const canResume = isCloud && (thread.status === "paused" || thread.status === "failed") && !endpointUrl;
-  const canPause = isCloud && !!endpointUrl;
+  const canResume = isCloud && !readOnly && (thread.status === "paused" || thread.status === "failed") && !endpointUrl;
+  // An owner who is only reading can still pause a sandbox that is up.
+  const canPause = isCloud && (!!endpointUrl || (readOnly && canClose && (thread.status === "running" || thread.status === "idle")));
   const closed = thread.status === "stopped";
 
   const apply = useCallback((data: ThreadResponse) => {
@@ -112,6 +129,7 @@ export function ThreadView({
     }
     const client = new RunnerClient({
       url: endpointUrl,
+      WebSocketImpl: socket,
       resumeFrom: eventsRef.current.at(-1)?.seq ?? 0,
       token: async () => {
         const cached = tokenRef.current;
@@ -164,7 +182,7 @@ export function ThreadView({
       client.close();
       if (clientRef.current === client) clientRef.current = null;
     };
-  }, [endpointUrl, refresh, initial.initialPrompt, bridged]);
+  }, [endpointUrl, refresh, initial.initialPrompt, bridged, socket]);
 
   // The stored history, so a paused thread can be read without waking its sandbox. The
   // live connection then resumes after the last stored event.
@@ -186,6 +204,9 @@ export function ThreadView({
       cancelled = true;
     };
   }, [id, isCloud]);
+
+  // Someone reading along has no live connection: keep fetching what has been saved.
+  useSavedHistory(id, readOnly, closed, eventsRef, setEvents);
 
   // While not connected, poll so a resume from another device, an automatic pause or the
   // computer coming back online shows up.
@@ -374,18 +395,22 @@ export function ThreadView({
 
         {closed && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="mr-auto text-sm text-muted">This thread is closed. Its conversation is kept until you delete it.</span>
-            <button type="button" className="btn-danger h-8" onClick={deleteForever} disabled={busy !== null}>
-              {busy === "forget" ? "Deleting..." : "Delete forever"}
-            </button>
+            <span className="mr-auto text-sm text-muted">
+              {canClose ? "This thread is closed. Its conversation is kept until you delete it." : "This thread is closed."}
+            </span>
+            {canClose && (
+              <button type="button" className="btn-danger h-8" onClick={deleteForever} disabled={busy !== null}>
+                {busy === "forget" ? "Deleting..." : "Delete forever"}
+              </button>
+            )}
           </div>
         )}
 
-        {isCloud && !closed && (
+        {isCloud && !closed && (!readOnly || canClose || pullRequestUrl) && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <span className="mr-auto inline-flex items-center gap-2 text-sm text-muted" aria-live="polite">
-              <span aria-hidden className={`h-2 w-2 rounded-full ${connLabel.dot}`} />
-              {thread.status === "provisioning" && conn !== "live" ? "Starting sandbox" : connLabel.text}
+              {!readOnly && <span aria-hidden className={`h-2 w-2 rounded-full ${connLabel.dot}`} />}
+              {readOnly ? "" : thread.status === "provisioning" && conn !== "live" ? "Starting sandbox" : connLabel.text}
             </span>
             {isRunning && conn === "live" && (
               <button type="button" className="btn-ghost h-8" onClick={() => clientRef.current?.interrupt()}>
@@ -408,14 +433,16 @@ export function ThreadView({
                 <a href={pullRequestUrl} target="_blank" rel="noopener noreferrer" className="btn-ghost h-8">
                   View pull request
                 </a>
-              ) : (
+              ) : readOnly ? null : (
                 <button type="button" className="btn-ghost h-8" onClick={openPullRequest} disabled={busy !== null}>
                   {busy === "pr" ? "Opening..." : "Open pull request"}
                 </button>
               ))}
-            <button type="button" className="btn-danger h-8" onClick={closeThread} disabled={busy !== null}>
-              {busy === "close" ? "Closing..." : "Close thread"}
-            </button>
+            {canClose && (
+              <button type="button" className="btn-danger h-8" onClick={closeThread} disabled={busy !== null}>
+                {busy === "close" ? "Closing..." : "Close thread"}
+              </button>
+            )}
           </div>
         )}
 
@@ -449,6 +476,11 @@ export function ThreadView({
           </button>
         )}
 
+        {readOnly && <ReaderNote starter={starter} closed={closed} />}
+        {isCloud && !bridged && !closed && thread.mine && hasOtherMembers && (
+          <ShareSwitch threadId={id} shared={thread.shared} onChanged={apply} onError={setActionError} />
+        )}
+
         <div className="mt-4 space-y-2 empty:hidden">
           {denied && <DeniedNotice denied={denied} onDismiss={() => setDenied(null)} />}
           {actionError && <Banner tone="error">{actionError}</Banner>}
@@ -477,12 +509,12 @@ export function ThreadView({
           <section aria-label="Thread history" className="flex-1 py-6">
             {items.length === 0 ? (
               bridged && !endpointUrl ? null : (
-                <EmptyState status={thread.status} connected={conn === "live"} />
+                <EmptyState status={thread.status} connected={conn === "live"} reading={readOnly} />
               )
             ) : (
               <Timeline
                 items={items}
-                onApprove={(id, d) => clientRef.current?.approve(id, d)}
+                onApprove={readOnly ? undefined : (id, d) => clientRef.current?.approve(id, d)}
                 onImplementPlan={live ? implementPlan : undefined}
                 onLimitWait={live ? () => clientRef.current?.limitAction({ action: "wait" }) : undefined}
                 onContinueAfterRestart={live ? () => clientRef.current?.resumeCutTurn() : undefined}
@@ -491,7 +523,7 @@ export function ThreadView({
             <div ref={bottomRef} />
           </section>
 
-          {!closed && (!bridged || endpointUrl) && (
+          {!closed && !readOnly && (!bridged || endpointUrl) && (
             <form onSubmit={send} className="sticky bottom-0 -mx-5 border-t border-line bg-cream/95 px-5 pb-5 pt-3 backdrop-blur">
               {loop.question && (
                 <QuestionForm
@@ -594,16 +626,18 @@ function Banner({ tone, children }: { tone: "error" | "muted"; children: ReactNo
   );
 }
 
-function EmptyState({ status, connected }: { status: Thread["status"]; connected: boolean }) {
+function EmptyState({ status, connected, reading }: { status: Thread["status"]; connected: boolean; reading: boolean }) {
   const text =
-    status === "provisioning"
-      ? "The sandbox is starting. The agent's work shows up here as it happens."
-      : status === "paused"
-        ? "The sandbox is paused. Resume it to load the history and keep going."
-        : status === "stopped"
-          ? "This thread is closed."
-          : connected
-            ? "Nothing here yet. Send the agent a message to get started."
-            : "Connecting to the runner...";
+    reading && status !== "stopped"
+      ? "Nothing has been saved for this conversation yet."
+      : status === "provisioning"
+        ? "The sandbox is starting. The agent's work shows up here as it happens."
+        : status === "paused"
+          ? "The sandbox is paused. Resume it to load the history and keep going."
+          : status === "stopped"
+            ? "This thread is closed."
+            : connected
+              ? "Nothing here yet. Send the agent a message to get started."
+              : "Connecting to the runner...";
   return <p className="py-16 text-center text-sm text-muted">{text}</p>;
 }

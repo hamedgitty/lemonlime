@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { apiFetch } from "@/lib/api-client.ts";
+import { safeActionLink } from "@/lib/links.ts";
 import { timeAgo } from "@/components/status-pill.tsx";
 
 export interface MemberRow {
@@ -52,7 +53,9 @@ export function MembersManager({
     setBusy(false);
     if (!res.ok)
       return setError(
-        res.denied ? { message: res.denied.reason, actionUrl: res.denied.actionUrl, actionLabel: res.denied.actionLabel } : { message: res.message },
+        res.denied
+          ? { message: res.denied.reason, actionUrl: safeActionLink(res.denied.actionUrl) ?? undefined, actionLabel: res.denied.actionLabel }
+          : { message: res.message },
       );
     setInvites(list => [...list.filter(i => i.email !== res.data.invite.email), res.data.invite]);
     setSent(res.data.invite.email);

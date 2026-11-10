@@ -3,6 +3,11 @@ import { elapsedMs, rewindMessage, turnSpans, withoutRewound, type EventOf, type
 /** What the thread view renders, built from the raw event history. */
 export type TimelineItem =
   | { kind: "user"; key: string; text: string; at: string; pending?: boolean; queued?: boolean }
+  /**
+   * A message nobody typed: a subagent handing back its report, or the runner carrying the
+   * thread on by itself. It starts a turn like a person's message does.
+   */
+  | { kind: "auto"; key: string; text: string; at: string; from: "subagent" | "runner" }
   | { kind: "agent"; key: string; text: string; at: string; streaming: boolean }
   /** The agent's reasoning; it took from `startedAt` (the event before it) to `endedAt`. */
   | { kind: "reasoning"; key: string; text: string; at: string; streaming: boolean; startedAt: string; endedAt: string }
@@ -102,7 +107,8 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
       case "user_message":
         if (lastPlan) lastPlan.open = false;
         if (e.clientMsgId) echoed.add(e.clientMsgId);
-        items.push({ kind: "user", key: `e${e.seq}`, text: e.text, at: e.at });
+        if (e.from) items.push({ kind: "auto", key: `e${e.seq}`, text: e.text, at: e.at, from: e.from });
+        else items.push({ kind: "user", key: `e${e.seq}`, text: e.text, at: e.at });
         break;
       case "agent_message":
         if (e.partial) {
@@ -216,6 +222,20 @@ export function buildTimeline(all: readonly ThreadEvent[], pending: readonly Pen
     if (!echoed.has(p.clientMsgId) && !queued.has(p.clientMsgId)) items.push({ kind: "user", key: `p${p.clientMsgId}`, text: p.text, at: p.at, pending: true });
   }
   return items;
+}
+
+/** Whether a row begins a turn: a person's message, or one a subagent or the runner sent. */
+export function startsTurn(item: TimelineItem): boolean {
+  return item.kind === "user" || item.kind === "auto";
+}
+
+/** A report longer than this is folded until the reader opens it. */
+const LONG_REPORT_CHARS = 600;
+const LONG_REPORT_LINES = 8;
+
+/** Whether a subagent's report is long enough to show folded. */
+export function isLongReport(text: string): boolean {
+  return text.length > LONG_REPORT_CHARS || text.split("\n").length > LONG_REPORT_LINES;
 }
 
 /** Insert an event into a seq-sorted list, ignoring duplicates. */

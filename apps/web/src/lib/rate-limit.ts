@@ -1,7 +1,9 @@
 import { getIP } from "better-auth/api";
 import { sql } from "drizzle-orm";
 import { rateLimit, type Db } from "@lemonlime/db";
+import type { AppContext } from "./context.ts";
 import { HttpError } from "./errors.ts";
+import { socketAddress } from "./socket-address.ts";
 
 export interface Limit {
   /** Requests allowed per window. */
@@ -26,18 +28,80 @@ export const LIMITS = {
   phoneLinks: { max: 30, windowSeconds: 60 },
 } satisfies Record<string, Limit>;
 
-/** The header that carries the caller's address: the platform's on Workers, the proxy's on Node. */
+/** The header the Node build writes the caller's address into for the sign-in library, once it has been worked out here. */
+export const CALLER_HEADER = "x-lemonlime-caller-address";
+
+/** What callers that can't be told apart are counted as: one caller between them. */
+const UNKNOWN_CALLER = "unknown";
+
+/** The header the sign-in library reads the caller's address from: the platform's on Workers, the app's own on Node. */
 export function addressHeaders(runtime: "workers" | "node"): string[] {
-  return runtime === "workers" ? ["cf-connecting-ip"] : ["x-forwarded-for"];
+  return runtime === "workers" ? ["cf-connecting-ip"] : [CALLER_HEADER];
 }
 
 /**
- * Where a request came from, for counting. A header that lists several addresses could
- * have been started by the caller, so it isn't believed; callers that can't be told apart
- * share "unknown". IPv6 addresses count by network, so one network is one caller.
+ * How many reverse proxies stand in front of the app on Node (LEMONLIME_TRUSTED_PROXIES).
+ * None unless it says so: anyone can send X-Forwarded-For, so it is only believed when
+ * something in front of the app is known to write it.
  */
-export function callerAddress(runtime: "workers" | "node", request: Request | Headers): string {
-  return getIP(request, { advanced: { ipAddress: { ipAddressHeaders: addressHeaders(runtime) } } }) ?? "unknown";
+export function trustedProxies(vars: Record<string, string | undefined>): number {
+  const count = Number(vars.LEMONLIME_TRUSTED_PROXIES?.trim() || 0);
+  return Number.isInteger(count) && count > 0 ? count : 0;
+}
+
+/**
+ * The address the caller is reported to have, before it is checked. On Workers the
+ * platform says. On Node, each trusted proxy adds the address it heard from to the end of
+ * X-Forwarded-For, so with one proxy the last entry is the caller, with two the one before
+ * it, and anything further left could have been written by the caller. With no proxy to
+ * trust, it is where the connection came from, when the server wrote that down.
+ */
+function reportedAddress(ctx: Pick<AppContext, "runtime" | "vars">, headers: Headers): string | null {
+  if (ctx.runtime === "workers") return headers.get("cf-connecting-ip");
+  const proxies = trustedProxies(ctx.vars);
+  if (proxies === 0) return socketAddress(headers);
+  const chain = (headers.get("x-forwarded-for") ?? "")
+    .split(",")
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return chain[chain.length - proxies] ?? null;
+}
+
+const ONE_ADDRESS = "x-address";
+let saidCallersAreShared = false;
+
+/**
+ * Where a request came from, for counting. Callers that can't be told apart share one
+ * count. IPv6 addresses count by network, so one network is one caller.
+ */
+export function callerAddress(ctx: Pick<AppContext, "runtime" | "vars" | "production">, request: Request | Headers): string {
+  const reported = reportedAddress(ctx, request instanceof Headers ? request : request.headers);
+  if (!reported) {
+    if (ctx.runtime === "node" && ctx.production && !saidCallersAreShared) {
+      saidCallersAreShared = true;
+      console.warn(
+        "[lemonlime] Callers can't be told apart, so they share one allowance for sign-in codes and webhook calls. Start the app with server.ts, or set LEMONLIME_TRUSTED_PROXIES if it runs behind a reverse proxy.",
+      );
+    }
+    return UNKNOWN_CALLER;
+  }
+  // The sign-in library's own reading of one address, so both count a caller the same way.
+  return getIP(new Headers({ [ONE_ADDRESS]: reported }), { advanced: { ipAddress: { ipAddressHeaders: [ONE_ADDRESS] } } }) ?? UNKNOWN_CALLER;
+}
+
+/**
+ * The request as the sign-in library should see it. On Node the caller's address is
+ * written where the library reads it, replacing whatever the caller sent under that name;
+ * a caller that can't be told apart gets none, and the library counts those together.
+ * On Workers the platform's own header is read as it is.
+ */
+export function withCallerAddress(ctx: Pick<AppContext, "runtime" | "vars" | "production">, request: Request): Request {
+  if (ctx.runtime === "workers") return request;
+  const headers = new Headers(request.headers);
+  const address = callerAddress(ctx, headers);
+  if (address === UNKNOWN_CALLER) headers.delete(CALLER_HEADER);
+  else headers.set(CALLER_HEADER, address);
+  return new Request(request, { headers });
 }
 
 /**

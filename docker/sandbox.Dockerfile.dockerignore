@@ -4,6 +4,7 @@
 **/dist
 **/.lemonlime
 .git
-.env
-.env.*
+# Settings files can hold secrets, wherever they sit.
+**/.env
+**/.env.*
 apps/

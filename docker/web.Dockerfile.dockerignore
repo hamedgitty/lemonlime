@@ -5,7 +5,10 @@
 **/dist
 apps/desktop/src-tauri/target
 .git
-.env
-**/.env.local
+# Settings files can hold secrets, wherever they sit. Only the example is copied.
+**/.env
+**/.env.*
+!**/.env.example
 **/.dev.vars
+**/.dev.vars.*
 data

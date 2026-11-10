@@ -8,7 +8,8 @@ const serverFile = fileURLToPath(new URL("../server.ts", import.meta.url));
 /** The project files `server.ts` imports by path. */
 function ownImports(): string[] {
   const source = readFileSync(serverFile, "utf8");
-  return [...source.matchAll(/from "(\.\/[^"]+\.ts)"/g)].map(m => fileURLToPath(new URL(m[1]!, new URL("../server.ts", import.meta.url))));
+  // The quote sits in brackets so the boundary check doesn't read this pattern as an import.
+  return [...source.matchAll(/from ["](\.\/[^"]+\.ts)["]/g)].map(m => fileURLToPath(new URL(m[1]!, new URL("../server.ts", import.meta.url))));
 }
 
 describe("the Node server's own files", () => {

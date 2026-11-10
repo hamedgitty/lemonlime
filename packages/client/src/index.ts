@@ -1,4 +1,6 @@
 import {
+  BRIDGE_CLOSE,
+  NOT_PAIRED_REASON,
   parseServerMessage,
   type ClientMessage,
   type ClientLimitAction,
@@ -327,6 +329,13 @@ export class RunnerClient {
         this.timer = setTimeout(() => void this.open(), 0);
         return;
       }
+      // A computer that only answers paired phones turned this one away. Trying again
+      // gets the same answer until the phone is paired, so stop here and say so.
+      if (ev?.code === BRIDGE_CLOSE.notPaired && !this.closedByUser) {
+        this.closedByUser = true;
+        this.opts.onError?.(NOT_PAIRED_REASON, "not_paired");
+        return this.setState("closed");
+      }
       if (!this.closedByUser) this.scheduleReconnect();
       else this.setState("closed");
     };
@@ -353,3 +362,4 @@ function newId(): string {
 export { TerminalClient, terminalUrl, type TerminalClientOptions, type TerminalState } from "./terminal.ts";
 export { fetchAttachmentImage, runnerHttpBase, uploadAttachment, type UploadOptions } from "./attachments.ts";
 export { teleportThread, type RunnerAddress, type TeleportProgress } from "./teleport.ts";
+export { forgetPairing, loadPairingKey, savePairing, sealedWebSocket, type PairingStorage, type SealRefusal, type SealedSocketOptions } from "./phone.ts";

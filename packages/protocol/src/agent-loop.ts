@@ -29,7 +29,8 @@ export function agentLoopState(all: readonly ThreadEvent[]): AgentLoopState {
   for (const e of events) {
     switch (e.type) {
       case "user_message":
-        lastUser = e.seq;
+        // A subagent's report or the runner carrying on answers nothing for the person.
+        if (!e.from) lastUser = e.seq;
         break;
       case "todo_snapshot":
         todos = { items: e.items, seq: e.seq };
@@ -51,7 +52,7 @@ export function agentLoopState(all: readonly ThreadEvent[]): AgentLoopState {
         break;
     }
   }
-  // A finished list stays in view until the user sends their next message.
+  // A finished list stays in view until a person sends the next message.
   const done = todos !== null && todos.items.every(t => t.status === "completed");
   const showTodos = todos !== null && todos.items.length > 0 && !(done && lastUser > todos.seq);
   return {

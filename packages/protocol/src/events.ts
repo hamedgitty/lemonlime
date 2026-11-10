@@ -20,6 +20,12 @@ export const UserMessageEvent = z.object({
   commit: z.string().optional(),
   /** Files sent with the message, saved in the working folder at `path`. */
   attachments: z.array(z.object({ id: z.string(), name: z.string(), size: z.number(), path: z.string() })).optional(),
+  /**
+   * Set by the runner when no person wrote this message: a subagent handing back its
+   * report, or the runner itself carrying on after a restart or a usage limit. Apps show
+   * these apart from what people typed. Nothing a client sends can set it.
+   */
+  from: z.enum(["subagent", "runner"]).optional(),
 });
 
 export const AgentMessageEvent = z.object({

@@ -1,8 +1,11 @@
 import { withoutRewound, type ThreadEvent } from "./events.ts";
 
-/** One turn: from the user's message until the agent stopped working on it. */
+/**
+ * One turn: from the message that set the agent off until it stopped working on it. That
+ * message is a person's, or one a subagent or the runner sent (see `UserMessageEvent.from`).
+ */
 export interface TurnSpan {
-  /** Seq of the user message that started the turn. */
+  /** Seq of the message that started the turn. */
   userSeq: number;
   startAt: string;
   /** When the agent stopped (its last status change away from running); null while it works, or if it never said. */
@@ -13,7 +16,7 @@ export interface TurnSpan {
 
 /**
  * Every turn in a history, worked out from event times alone, so it reads the same after a
- * reload. A turn ends at the last status change away from `running` before the next user
+ * reload. A turn ends at the last status change away from `running` before the next
  * message; going back to `running` (a retry) carries the same turn on.
  */
 export function turnSpans(all: readonly ThreadEvent[]): TurnSpan[] {

@@ -39,6 +39,23 @@ describe("turn durations", () => {
     expect(span!.endSeq).toBe(5);
   });
 
+  it("times the work a subagent's report or the runner sets off as a turn of its own", () => {
+    const spans = turnSpans(
+      timed([
+        [0, { type: "user_message", text: "go" }],
+        [0, { type: "status_change", from: "idle", to: "running" }],
+        [10, { type: "status_change", from: "running", to: "idle" }],
+        [40, { type: "user_message", text: "Survey: done", from: "subagent" }],
+        [40, { type: "status_change", from: "idle", to: "running" }],
+        [55, { type: "status_change", from: "running", to: "idle" }],
+      ]),
+    );
+    expect(spans.map(s => [s.userSeq, elapsedMs(s.startAt, s.endAt!)])).toEqual([
+      [1, 10_000],
+      [4, 15_000],
+    ]);
+  });
+
   it("leaves out turns that were rewound", () => {
     const events = timed([
       [0, { type: "user_message", text: "one" }],

@@ -60,6 +60,35 @@ describe("background work", () => {
     expect(childrenSettled([])).toBe(true);
   });
 
+  it("keeps this turn's finished work listed when a subagent hands back its report", () => {
+    const events = history([
+      { type: "user_message", text: "go" },
+      { type: "status_change", from: "idle", to: "running" },
+      { type: "tool_call", callId: "t1", name: "Task", input: { description: "Read the docs" } },
+      {
+        type: "subagent_update",
+        subagents: [
+          { id: "sub-1", parentId: null, task: "Survey", status: "idle", startedAt: "2026-11-08T10:00:01.000Z" },
+          { id: "sub-2", parentId: null, task: "Dig", status: "working", startedAt: "2026-11-08T10:00:02.000Z" },
+        ],
+      },
+      { type: "user_message", text: "Survey: nothing to report", from: "subagent" },
+    ]);
+    const w = backgroundWork(events);
+    expect(w.children.map(c => [c.id, c.state])).toEqual([
+      ["sub-1", "done"],
+      ["sub-2", "running"],
+      ["t1", "running"],
+    ]);
+
+    // A person writing again is what starts the next turn.
+    const next = backgroundWork([
+      ...events,
+      ...history([{ type: "user_message", text: "thanks" }]).map(e => ({ ...e, seq: 50, at: "2026-11-08T10:05:00.000Z" })),
+    ]);
+    expect(next.children.map(c => c.id)).toEqual(["sub-2"]);
+  });
+
   it("lists commands left running in the background until they end", () => {
     const events = history([
       { type: "user_message", text: "serve it" },

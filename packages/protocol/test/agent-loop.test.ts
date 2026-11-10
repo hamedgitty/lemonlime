@@ -38,6 +38,23 @@ describe("the agent loop state the apps show", () => {
     expect(contextPercent(null)).toBeNull();
   });
 
+  it("leaves a plan and a finished list waiting when the next message isn't a person's", () => {
+    const events = history([
+      { type: "user_message", text: "plan it" },
+      { type: "todo_snapshot", items: [{ text: "A", status: "completed" }] },
+      { type: "plan_proposal", plan: "# Plan" },
+      { type: "user_message", text: "Here is what I found", from: "subagent" },
+      { type: "user_message", text: "Carry on from where you stopped", from: "runner" },
+    ]);
+    const waiting = agentLoopState(events);
+    expect(waiting.plan).toMatchObject({ plan: "# Plan", open: true });
+    expect(waiting.todos).toEqual([{ text: "A", status: "completed" }]);
+
+    const answered = agentLoopState([...events, ...history([{ type: "user_message", text: "go ahead" }]).map(e => ({ ...e, seq: 10 }))]);
+    expect(answered.plan?.open).toBe(false);
+    expect(answered.todos).toBeNull();
+  });
+
   it("parses the new client messages", () => {
     expect(parseClientMessage(JSON.stringify({ type: "set_options", model: null, permission: "plan" }))).toEqual({
       type: "set_options",

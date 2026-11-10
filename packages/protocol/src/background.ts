@@ -85,7 +85,9 @@ export function backgroundWork(all: readonly ThreadEvent[]): BackgroundWork {
   for (const e of events) {
     switch (e.type) {
       case "user_message":
-        lastUser = e.seq;
+        // A subagent handing back its report is part of the same piece of work, so the
+        // others it ran beside stay listed until a person writes again.
+        if (!e.from) lastUser = e.seq;
         break;
       case "status_change":
         running = e.to === "running";

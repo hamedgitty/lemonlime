@@ -71,10 +71,23 @@ export const Thread = z.object({
   sandboxSize: SandboxSize.default("small"),
   /** Highest event seq the control plane has seen (cloud) or the runner holds (local). */
   latestSeq: z.number().int().nonnegative().default(0),
+  /**
+   * Whether the person asking started this thread. In a workspace, only they can direct
+   * its agent and reach its sandbox, unless they share the thread; everyone else in the
+   * workspace reads along.
+   */
+  mine: z.boolean().default(true),
+  /** The person who started this thread lets the rest of the workspace take part in it. */
+  shared: z.boolean().default(false),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
 });
 export type Thread = z.infer<typeof Thread>;
+
+/** True when the person asking may send messages, answer the agent and open the sandbox. */
+export function canTakePart(thread: Pick<Thread, "mine" | "shared">): boolean {
+  return thread.mine || thread.shared;
+}
 
 /** What thread branches start with unless the user picks something else (local threads). */
 export const DEFAULT_BRANCH_PREFIX = "agent/";

@@ -179,6 +179,8 @@ export const threads = sqliteTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: "cascade" }),
     createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    /** The person who started it lets the rest of the workspace direct its agent and reach its sandbox. */
+    shared: integer("shared", { mode: "boolean" }).notNull().default(false),
     title: text("title").notNull().default(""),
     agent: text("agent", { mode: "json" }).$type<AgentConfig>().notNull(),
     repo: text("repo", { mode: "json" }).$type<RepoRef>().notNull(),
@@ -368,6 +370,8 @@ export const automations = sqliteTable(
     prompt: text("prompt").notNull(),
     /** Shell command run in the sandbox first; the run goes ahead only if it exits 0 and prints something. */
     checkScript: text("check_script").notNull().default(""),
+    /** The workspace secrets its runs are given, by name; null gives them every one. */
+    secretNames: text("secret_names", { mode: "json" }).$type<string[]>(),
     /** SHA-256 (hex) of the secret in its webhook URL; null when it has no webhook. */
     webhookTokenHash: text("webhook_token_hash"),
     enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
@@ -465,6 +469,13 @@ export const accessTokens = sqliteTable(
  * A computer running the desktop app, registered by its owner when they turn on phone
  * access (docs/phone-access.md). Only its owner can see or reach it.
  */
+/** Desktop sign-in links already used, so one link makes one token. Old rows are pruned. */
+export const desktopApprovals = sqliteTable("desktop_approvals", {
+  /** SHA-256 (hex) of the state the desktop app put in its link. */
+  stateHash: text("state_hash").primaryKey(),
+  createdAt: text("created_at").notNull().$defaultFn(nowIso),
+});
+
 export const computers = sqliteTable(
   "computers",
   {
@@ -480,6 +491,8 @@ export const computers = sqliteTable(
     name: text("name").notNull(),
     platform: text("platform").$type<ComputerPlatform>().notNull().default("other"),
     phoneAccess: integer("phone_access", { mode: "boolean" }).notNull().default(false),
+    /** The desktop app only talks to phones paired with it, over a channel sealed end to end. */
+    sealed: integer("sealed", { mode: "boolean" }).notNull().default(false),
     /** Goes up each time phone access is turned off; tickets from before stop working. */
     epoch: integer("epoch").notNull().default(0),
     /** The local threads it shares while phone access is on; emptied when it's turned off. */

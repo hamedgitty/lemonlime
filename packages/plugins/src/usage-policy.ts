@@ -58,7 +58,11 @@ export type PolicyDecision =
       allow: false;
       /** Short, user-facing explanation. */
       reason: string;
-      /** Optional link the UI can show, with its label. */
+      /**
+       * Optional link the UI can show, with its label. Here and below, a link is shown only
+       * when it is an https address (plain http is fine for one on this computer); anything
+       * else is left out, with its label.
+       */
       actionUrl?: string;
       actionLabel?: string;
     };
